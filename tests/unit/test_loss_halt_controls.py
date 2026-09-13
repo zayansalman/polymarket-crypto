@@ -4,7 +4,7 @@ Covers the four moving parts of issue #76:
   * the loop's auto-stop decision (`_loss_halt_stop_detail`),
   * the `/api/loss_halt/bypass` and `/api/loss_halt/reset` endpoints,
   * the one-shot stale-bypass migration, and
-  * the LOSS HALT panel (STATUS pill → bypass button, Reset button).
+  * the ribbon loss-halt control (typeable limit, Set, Reset, status).
 
 Each test runs against its own throwaway SQLite so the real journal is untouched.
 """
@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 import db as _db
 from polymarket_exec.execution.gate import GateConfig, RiskGate, get_loss_halt_bypass
-from polymarket_exec.ops.dashboard.panels import guardrails
+from polymarket_exec.ops.dashboard.panels import ribbon
 from polymarket_bot.paper import _loss_halt_stop_detail
 
 
@@ -256,42 +256,41 @@ class TestBypassMigration:
 
 def _render(**over) -> str:
     args = dict(
-        day_spend=0.0,
-        bankroll_cap=30.0,
-        submitted_count=0,
-        submitted_notional=0.0,
-        day_pnl=0.0,
+        mode="paper",
+        state="stopped",
+        session_start=None,
         live_pnl=0.0,
         paper_pnl=0.0,
+        day_pnl=0.0,
+        open_pos=[],
+        closed_session=[],
+        tick=None,
+        last_live_at=None,
         loss_halt_usd=10.0,
-        state="stopped",
-        bot_detail="",
-        session_start=None,
-        blocked=[],
-        mode="paper",
         bypass_loss_halt=False,
     )
     args.update(over)
-    return guardrails.render(**args)
+    return ribbon.render(**args)
 
 
-class TestGuardrailsPanel:
-    def test_status_is_a_bypass_button(self) -> None:
-        html = _render(mode="live", bypass_loss_halt=True)
-        assert "/api/loss_halt/bypass" in html
-        assert ">BYPASS<" in html
-        assert "enabled:false" in html  # clicking BYPASS re-enables the halt
+class TestRibbonLossHalt:
+    def test_limit_is_typeable_with_set_and_reset(self) -> None:
+        html = _render(loss_halt_usd=25.0)
+        assert "id='halt-usd'" in html and "type='number'" in html
+        assert "value='25'" in html
+        assert "setLossHalt()" in html and ">Set<" in html
+        assert "resetLossHalt()" in html and ">Reset<" in html
 
-    def test_status_ok_click_enables_bypass(self) -> None:
-        html = _render(mode="live", live_pnl=-5.0)
-        assert ">OK<" in html
-        assert "enabled:true" in html  # clicking OK disables the halt
+    def test_bypass_shown_when_enabled(self) -> None:
+        assert ">BYPASS<" in _render(mode="live", bypass_loss_halt=True)
+
+    def test_ok_within_limit(self) -> None:
+        assert ">OK<" in _render(mode="live", live_pnl=-5.0)
 
     def test_status_halted_when_live_leg_breached(self) -> None:
-        html = _render(mode="live", live_pnl=-12.0)
-        assert ">HALTED<" in html
+        assert ">HALTED<" in _render(mode="live", live_pnl=-12.0)
 
-    def test_paper_losses_do_not_halt_live_panel(self) -> None:
+    def test_paper_losses_do_not_halt_live(self) -> None:
         # Live leg fine (-5), paper leg deep (-30): live mode shows OK, not HALTED.
         html = _render(mode="live", live_pnl=-5.0, paper_pnl=-30.0)
         assert ">OK<" in html
@@ -299,25 +298,15 @@ class TestGuardrailsPanel:
 
     def test_headroom_uses_live_leg_in_live(self) -> None:
         html = _render(mode="live", live_pnl=-4.0, paper_pnl=-30.0)
-        assert "Headroom (live)" in html
-        assert "$6.00" in html  # 10 - 4, paper -30 ignored
+        assert "headroom <span class=''>$6.00</span>" in html  # 10 - 4, paper -30 ignored
 
-    def test_reset_button_present_and_enabled_when_stopped(self) -> None:
-        html = _render(mode="live", state="stopped")
-        assert "/api/loss_halt/reset" in html
-        assert "Reset halt" in html
-
-    def test_reset_disabled_when_running(self) -> None:
-        html = _render(mode="live", state="running")
-        assert "Stop the bot to reset" in html
-
-    def test_no_cannot_disable_text(self) -> None:
+    def test_no_dialogs_in_controls(self) -> None:
         html = _render(mode="live")
-        assert "cannot disable" not in html
+        assert "confirm(" not in html
 
 
 class TestGatePanelParity:
-    """The LOSS HALT panel verdict MUST match RiskGate enforcement for the same
+    """The ribbon loss-halt verdict MUST match RiskGate enforcement for the same
     inputs (#112). A divergence — a different comparison or peak derivation —
     would tell the operator they're OK while the loop has actually halted (or
     vice versa) on real money. This guards the two formulas against drift."""

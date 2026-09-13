@@ -101,7 +101,7 @@ question first.
 
 Confirmed via live Gamma API query: Polymarket runs a **daily "Up or Down on
 [date]" market per asset** (btc/eth/sol/xrp/doge/bnb at minimum), separate
-from the 5m/15m/4h family, resolving on a ~24h cadence. Checked
+from the 5m/15m/1h family, resolving on a ~24h cadence. Checked
 `solana-up-or-down-on-august-30-2026` directly: outcomes `["Up","Down"]`,
 price `[0.505, 0.495]`, **spread 0.07** (wide — 14% of the 0.50 fair range,
 notably worse than the old 5m books), `orderMinSize` 5 shares, liquidity

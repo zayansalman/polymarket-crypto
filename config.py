@@ -95,8 +95,8 @@ CHAINLINK_STALE_SECONDS = _env_float("CHAINLINK_STALE_SECONDS", 15.0)
 PRINT_GRANULARITY_USD = _env_float("PRINT_GRANULARITY_USD", 0.01)
 
 # Execution target. Paper is the default; live places REAL orders on the
-# Polymarket CLOB and only boots when POLYMARKET_PRIVATE_KEY is set AND
-# LIVE_CONFIRM=YES_I_UNDERSTAND. The private key is never logged.
+# Polymarket CLOB and only boots when POLYMARKET_PRIVATE_KEY is set and the
+# operator clicked LIVE in the dashboard. The private key is never logged.
 BOT_MODE = _env_choice("BOT_MODE", "paper", {"paper", "live"})
 # Trade shape. 'settle' (default): max one entry per window, hold to
 # resolution — the shape the April backtest validated (+31% ROI); the spread
@@ -113,8 +113,9 @@ POLYMARKET_CLOB_API = os.getenv("POLYMARKET_CLOB_API", "https://clob.polymarket.
 POLYMARKET_CHAIN_ID = _env_int("POLYMARKET_CHAIN_ID", 137)  # Polygon mainnet
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
 POLYMARKET_FUNDER = os.getenv("POLYMARKET_FUNDER", "")
-# 0 = EOA, 1 = email/magic proxy wallet, 2 = browser wallet proxy.
-POLYMARKET_SIGNATURE_TYPE = _env_int("POLYMARKET_SIGNATURE_TYPE", 1)
+# 2 = MetaMask (Polymarket Safe). The only supported setup — see
+# tools/live_detect_wallet.py.
+POLYMARKET_SIGNATURE_TYPE = _env_int("POLYMARKET_SIGNATURE_TYPE", 2)
 # Hard risk limits enforced by the unified RiskGate (issue #64) before every
 # paper or live entry. Same gate, same values, both modes — paper is a
 # faithful preview of live. The per-trade and daily-loss-halt limits are
@@ -129,8 +130,6 @@ TRADE_MAX_ENTRY_SLIPPAGE = _env_float("TRADE_MAX_ENTRY_SLIPPAGE", 0.02)
 # How long an exit SELL may rest before it is cancelled and retried at the
 # new best bid. Exits never rest beyond this bound.
 LIVE_EXIT_FILL_TIMEOUT_SECONDS = _env_float("LIVE_EXIT_FILL_TIMEOUT_SECONDS", 10.0)
-# Must be the literal string YES_I_UNDERSTAND for live mode to boot.
-LIVE_CONFIRM = os.getenv("LIVE_CONFIRM", "")
 # Touch this file to halt all live trading and cancel open orders.
 KILL_SWITCH_PATH = Path(
     os.getenv("KILL_SWITCH_PATH", str(DATA_DIR / "KILL"))

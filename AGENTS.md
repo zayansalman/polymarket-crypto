@@ -112,9 +112,11 @@ Out of scope:
   scope by default — see Scope Fence above.
 - One open BTC paper position at a time.
 - **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
-  It runs only with `BOT_MODE=live` **AND** `LIVE_CONFIRM=YES_I_UNDERSTAND`
-  **AND** a private key **AND** a coherent wallet. **Agents NEVER flip the gate or
-  place live orders; the operator launches.** Default is paper.
+  It runs only when the operator **clicks LIVE in the dashboard**
+  **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
+  presses Start. There is no env confirm phrase; an env `BOT_MODE=live` default alone
+  never trades. **Agents NEVER flip the gate or place live orders; the operator
+  launches.** Default is paper.
 - Do not read, print, log, commit, echo, or expose private keys.
 - The dashboard must stay local by default at `127.0.0.1:7860`.
 - Start means trade (paper unless every live gate is armed); Stop means stop.
@@ -166,6 +168,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 907.
+- **Tests:** 946.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

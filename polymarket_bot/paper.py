@@ -5,9 +5,9 @@ SETTLEMENT feed (Polymarket's Chainlink BTC/USD stream — reference open via
 the crypto-price REST API, live spot + sigma via the ws-live-data WebSocket,
 issue #21), quotes the EXECUTABLE market from the CLOB order book for both
 outcome tokens (issue #22), and records entries/exits in SQLite. In paper
-mode (the default) no real orders are ever placed. When ``BOT_MODE=live``
-AND the live boot gate passes (private key +
-``LIVE_CONFIRM=YES_I_UNDERSTAND``), entries/exits are ALSO routed through
+mode (the default) no real orders are ever placed. When the operator selects
+LIVE in the dashboard AND the live boot gate passes (private key + coherent
+wallet), entries/exits are ALSO routed through
 :class:`polymarket_exec.execution.live.LiveExecutor`, which places real risk-gated
 orders on the Polymarket CLOB.
 
@@ -38,15 +38,7 @@ import httpx
 
 from config import (
     BINANCE_API_BASE,
-    EXIT_STYLE,
     MARKET_TIMEFRAME_MINUTES,
-    PAPER_ENTRY_EDGE_MIN,
-    PAPER_MAX_TRADE_USD,
-    PAPER_MIN_TRADE_USD,
-    PAPER_STOP_RETURN,
-    PAPER_TARGET_RETURN,
-    PAPER_TICK_SECONDS,
-    PAPER_TIME_EXIT_SECONDS,
     POLYMARKET_CLOB_API,
     POLYMARKET_CRYPTO_PRICE_API,
     POLYMARKET_GAMMA_API,
@@ -55,6 +47,7 @@ from config import (
     PRINT_GRANULARITY_USD,
 )
 import config as _config
+from polymarket_bot import runtime_knobs as _knobs
 from db import connect, get_config, journal_live_order, notify, set_config
 from logging_setup import get_logger
 from polymarket_exec.connectors.chainlink_settlement import (
@@ -141,17 +134,21 @@ FIVE_MINUTES = MARKET_TIMEFRAME_MINUTES * 60
 def _strategy_params() -> StrategyParams:
     """StrategyParams for the shadow forward-tester's candidate roster.
 
-    Env defaults only — the operator params file (#37 Layer 2) was archived
-    with the v0 strategy. The trading loop itself no longer reads these.
+    Entry thresholds are the archived v0 defaults from ``config`` — the trading
+    loop itself no longer reads them. Sizing reads the in-memory knob cache
+    (``runtime_knobs.cached``), refreshed once per tick by ``paper_tick_once``,
+    so this stays a plain sync function.
     """
     # Operator runtime per-trade cap (#50): when the dashboard control is set,
     # it governs the sizing ceiling too (unified with the gate's effective cap),
-    # so the clip actually changes without a restart. Unset → env default, i.e.
+    # so the clip actually changes without a restart. Unset → knob default, i.e.
     # fully backward-compatible. The gate refreshed this value earlier this tick.
     override = _risk_gate.runtime_max_trade_usd if _risk_gate is not None else None
-    max_trade_usd = override if override is not None else PAPER_MAX_TRADE_USD
+    max_trade_usd = (
+        override if override is not None else _knobs.cached("paper_max_trade_usd")
+    )
     return StrategyParams(
-        min_trade_usd=PAPER_MIN_TRADE_USD,
+        min_trade_usd=_knobs.cached("paper_min_trade_usd"),
         max_trade_usd=max_trade_usd,
         entry_edge_min=_config.PAPER_ENTRY_EDGE_MIN,
         min_confidence=_config.PAPER_MIN_CONFIDENCE,
@@ -320,7 +317,7 @@ def _loss_halt_stop_detail(gate: Any, mode: str) -> str | None:
     if mode != "live":
         return None
     pnl = gate.halt_pnl
-    limit = gate.cfg.daily_loss_halt_usd
+    limit = gate.effective_daily_loss_halt_usd
     # Trailing high-water-mark floor (#112): peak - limit. Cite it (not a fixed
     # -limit), since the halt can fire at a POSITIVE pnl after a banked peak.
     return (
@@ -360,13 +357,14 @@ async def _notify_paper_halt_pause(gate: Any, mode: str) -> None:
     )
 
 
-async def run_paper_loop(stop_event: threading.Event) -> None:
+async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -> None:
     """Run until Stop is pressed or the process exits.
 
     Mode comes from ``BOT_MODE``: ``paper`` (default) journals simulated
     trades only; ``live`` ALSO routes entries/exits through the risk-gated
     LiveExecutor. Live boot refusal stops the loop — it never silently falls
-    back to paper.
+    back to paper. The controller passes the ``mode`` Start decided on; when
+    omitted it is read from the runtime selector (falling back to BOT_MODE).
     """
     global _live_executor, _chainlink_feed, _risk_gate, _loop_generation
     # Watchdog bookkeeping (#147): claim a fresh generation and stamp the
@@ -376,7 +374,8 @@ async def run_paper_loop(stop_event: threading.Event) -> None:
     _beat()
     # Runtime mode selector (dashboard) overrides the env default; live still
     # passes the same boot gate. Falls back to BOT_MODE when unset.
-    mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
+    if mode is None:
+        mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
     if mode == "live":
         try:
             executor = build_live_executor()
@@ -454,7 +453,7 @@ async def run_paper_loop(stop_event: threading.Event) -> None:
             # race keep running — notify once per episode.
             await _notify_paper_halt_pause(_risk_gate, mode)
             _beat()  # #147: iteration completed (even a failed tick beats)
-            await _sleep_interruptible(stop_event, float(PAPER_TICK_SECONDS))
+            await _sleep_interruptible(stop_event, float(_knobs.cached('paper_tick_seconds')))
     finally:
         if not _is_current_generation(my_generation):
             # A watchdog respawn superseded this loop while it was wedged
@@ -524,6 +523,9 @@ async def paper_tick_once() -> PaperSnapshot:
     if _risk_gate is not None:
         await _risk_gate.refresh_overrides()
         await _risk_gate.refresh_runtime_limits()
+    # Dashboard-editable strategy/behavior knobs (#206) — re-read every tick so
+    # an operator change applies without a restart, same as the gate above.
+    await _knobs.refresh_cache()
     async with _make_settlement_client() as client:
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
@@ -540,12 +542,24 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
     In live mode a position only counts as closed when the executor confirmed
     the flatten — failed live exits keep their ledger rows OPEN so they are
     retried (or escalated to the operator) instead of stranding real tokens.
+
+    Without a live executor, LIVE rows are never touched: a paper close would
+    mark them flat at a fictional price while real tokens stay on the exchange.
     """
     async with connect() as db:
         async with db.execute(
             "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
         ) as cur:
             positions = [dict(r) for r in await cur.fetchall()]
+    if _live_executor is None:
+        live_rows = [p for p in positions if p.get("mode") == "live"]
+        if live_rows:
+            log.warning(
+                "force_close.live_rows_left_open",
+                count=len(live_rows),
+                reason="no live executor — flatten on Polymarket",
+            )
+        positions = [p for p in positions if p.get("mode") != "live"]
     if not positions:
         return 0
     async with _make_settlement_client() as client:
@@ -562,12 +576,15 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
     return closed
 
 
-async def count_open_positions() -> int:
-    """Number of open rows in the position ledger."""
+async def count_open_positions(mode: str | None = None) -> int:
+    """Number of open rows in the position ledger (optionally one mode's)."""
+    sql = "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
+    params: tuple[str, ...] = ()
+    if mode is not None:
+        sql += " AND mode = ?"
+        params = (mode,)
     async with connect() as db:
-        async with db.execute(
-            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
-        ) as cur:
+        async with db.execute(sql, params) as cur:
             return int((await cur.fetchone())["n"])
 
 
@@ -593,7 +610,7 @@ async def load_paper_summary() -> PaperSummary:
             "AVG(strftime('%s', closed_at) - strftime('%s', opened_at)) AS avg_hold "
             "FROM paper_positions WHERE state = 'closed' "
             "AND quote_source = 'clob' AND strategy_style = ?",
-            (EXIT_STYLE,),
+            (_knobs.cached('exit_style'),),
         ) as cur:
             closed = await cur.fetchone()
         async with db.execute(
@@ -672,7 +689,7 @@ async def _mode_stats(db: Any, mode: str) -> ModeStats:
         "AVG(strftime('%s', closed_at) - strftime('%s', opened_at)) AS avg_hold "
         "FROM paper_positions WHERE state = 'closed' "
         "AND quote_source = 'clob' AND strategy_style = ? AND mode = ?",
-        (EXIT_STYLE, mode),
+        (_knobs.cached('exit_style'), mode),
     ) as cur:
         closed = await cur.fetchone()
     closed_count = int(closed["n"] if closed else 0)
@@ -702,7 +719,7 @@ def _connectivity_from_tick(
     source so a degraded sub-feed shows up here even when the loop keeps
     journaling ticks.
     """
-    stale_after = int(max(PAPER_TICK_SECONDS * 3, 20))
+    stale_after = int(max(_knobs.cached('paper_tick_seconds') * 3, 20))
     if tick is None:
         return ConnectivityStatus(
             tick_age_seconds=None,
@@ -769,7 +786,7 @@ def _risk_state(open_positions: int, last_tick_at: str | None) -> str:
     except ValueError:
         return "UNKNOWN: bad tick timestamp"
     age = (datetime.now(UTC) - ts).total_seconds()
-    if age > max(PAPER_TICK_SECONDS * 3, 20):
+    if age > max(_knobs.cached('paper_tick_seconds') * 3, 20):
         return f"STALE: last tick {int(age)}s ago"
     return "OK"
 
@@ -1186,7 +1203,7 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
         ) as cur:
             if (await cur.fetchone())["n"]:
                 return
-        if EXIT_STYLE == "settle":
+        if _knobs.cached('exit_style') == "settle":
             # One entry per window, ever (issue #28): re-entering the same
             # window after an exit pays the spread again for the same signal
             # — the churn that lost the scalp-style soak.
@@ -1351,7 +1368,7 @@ async def _insert_position_row(
                 snapshot.reason,
                 snapshot.feed_source,
                 snapshot.quote_source,
-                EXIT_STYLE,
+                _knobs.cached('exit_style'),
                 mode,
             ),
         )
@@ -1426,7 +1443,7 @@ async def _close_rolled_position(
     (pricing the OLD position off the NEW window's quote) was fiction.
     While settlement is not yet readable the row is held and retried.
     """
-    if _live_executor is not None and EXIT_STYLE != "settle":
+    if _live_executor is not None and _knobs.cached('exit_style') != "settle":
         advisory = _current_price_for_side(snapshot, pos["side"])
         if advisory is None:
             advisory = float(pos["entry_price"])
@@ -1686,7 +1703,7 @@ def _current_price_for_side(snapshot: PaperSnapshot, side: str) -> float | None:
 
 
 def _exit_reason(snapshot: PaperSnapshot, pos: dict[str, Any], exit_price: float) -> str | None:
-    if EXIT_STYLE == "settle":
+    if _knobs.cached('exit_style') == "settle":
         # Hold to resolution: the only exits are WINDOW_ROLL settlement
         # (handled in _close_rolled_position) and operator stop. Intra-window
         # marks against the bid are noise, not realized outcomes.
@@ -1697,11 +1714,11 @@ def _exit_reason(snapshot: PaperSnapshot, pos: dict[str, Any], exit_price: float
     notional = float(pos["notional_usd"])
     shares = float(pos["shares"])
     pnl = shares * (exit_price - entry_price)
-    if snapshot.remaining_seconds <= PAPER_TIME_EXIT_SECONDS:
+    if snapshot.remaining_seconds <= _knobs.cached('paper_time_exit_seconds'):
         return "TIME"
-    if pnl >= notional * PAPER_TARGET_RETURN:
+    if pnl >= notional * _knobs.cached('paper_target_return'):
         return "TARGET"
-    if pnl <= notional * PAPER_STOP_RETURN:
+    if pnl <= notional * _knobs.cached('paper_stop_return'):
         return "STOP"
     # Pricing-model-based exit only when the pricing model is trustworthy this tick:
     # a degraded settlement feed or an unquotable book pins edge near zero,
@@ -1709,7 +1726,7 @@ def _exit_reason(snapshot: PaperSnapshot, pos: dict[str, Any], exit_price: float
     if (
         not snapshot.feed_degraded
         and snapshot.has_executable_quote
-        and abs(snapshot.edge) < PAPER_ENTRY_EDGE_MIN / 2
+        and abs(snapshot.edge) < _config.PAPER_ENTRY_EDGE_MIN / 2
     ):
         return "BAND_REENTRY"
     return None

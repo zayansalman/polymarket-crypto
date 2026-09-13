@@ -12,7 +12,8 @@ restore steps: `docs/archive/v0-strategy.md`; code preserved at tag
   calibration, param tuner (`adaptive.py`, `calibration*.py`, `params*.py`,
   `tools/clear_auto_pause.py`, `AUTO_PAUSE_*` knobs).
 - Removed from the dashboard: STRATEGY card, decision-engine GATES column,
-  model picker, auto-pause chips.
+  model picker, auto-pause chip, and the SETTINGS card's entry-gate and
+  auto-pause knobs.
 - Kept: live-path safety gates (`RiskGate`), shared pricing math, shadow
   forward-tester, daily altcoin scanner.
 

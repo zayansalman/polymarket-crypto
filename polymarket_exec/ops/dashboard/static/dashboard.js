@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Toast Notifications
 // ---------------------------------------------------------------------------
 
-function showToast(message, type) {
+function showToast(message, type, ms) {
   type = type || 'info';
   var container = document.querySelector('.toast-container');
   if (!container) {
@@ -57,7 +57,7 @@ function showToast(message, type) {
   setTimeout(function() {
     toast.classList.add('fade-out');
     setTimeout(function() { toast.remove(); }, 300);
-  }, 3000);
+  }, ms || 3000);
 }
 
 // ---------------------------------------------------------------------------
@@ -70,36 +70,62 @@ function setButtonsDisabled(disabled) {
   });
 }
 
+// Per-process token from the page: LIVE selection and LIVE Start require it,
+// so only a click in this dashboard can arm real money.
+function dashboardHeaders() {
+  var meta = document.querySelector('meta[name="dashboard-token"]');
+  return {
+    'Content-Type': 'application/json',
+    'X-Dashboard-Token': meta ? meta.getAttribute('content') : ''
+  };
+}
+
+// No browser dialogs anywhere (confirm/alert/prompt): the click is the intent.
 function setMode(mode) {
-  if (mode === 'live' && !confirm(
-    'Switch to LIVE mode? The bot will be STOPPED. ' +
-    'You must press Start to begin trading with real funds on Polymarket.'
-  )) {
-    return;
-  }
+  // Clicking LIVE IS the real-money consent — no env phrase, no dialog.
   fetch('/api/mode', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: dashboardHeaders(),
     body: JSON.stringify({ mode: mode })
   })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.status === 'error') {
-        showToast('Mode switch refused: ' + (data.detail || ''), 'error');
-      } else {
-        showToast('Mode → ' + (data.mode || mode).toUpperCase(), 'success');
-        setTimeout(function() { window.location.reload(); }, 600);
+        showToast(data.detail || 'Mode switch failed', 'error');
+        return;
       }
+      var newMode = data.mode || mode;
+      document.querySelectorAll('.mode-opt').forEach(function(b) {
+        b.classList.toggle('active', b.classList.contains(newMode));
+      });
+      var liveBtn = document.querySelector('.mode-opt.live');
+      if (liveBtn && data.live_hint) {
+        liveBtn.title = data.live_hint;
+        liveBtn.setAttribute('data-armed', data.live_armed ? '1' : '0');
+      }
+      if (newMode === 'live' && data.live_armed === false) {
+        // LIVE is always selectable; an unarmed selection just can't Start yet.
+        showToast('LIVE — ' + (data.live_hint || 'not armed'), 'error', 5000);
+      } else {
+        showToast('Mode → ' + newMode.toUpperCase(), 'success');
+      }
+      refreshAll();
     })
     .catch(function(err) { showToast('Mode switch failed: ' + err.message, 'error'); });
 }
 
 function handleStart() {
   setButtonsDisabled(true);
-  fetch('/api/start', { method: 'POST' })
+  fetch('/api/start', { method: 'POST', headers: dashboardHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      showToast('Bot started: ' + (data.detail || data.status), 'success');
+      if (data.status === 'running' || data.status === 'mock_running') {
+        showToast('Bot started: ' + (data.detail || data.status), 'success');
+      } else if (data.status === 'error') {
+        showToast(data.detail || 'Start failed', 'error', 6000);
+      } else {
+        showToast('Start refused: ' + (data.detail || data.status), 'error', 6000);
+      }
       refreshAll();
     })
     .catch(function(err) {
@@ -138,15 +164,70 @@ function updateShareValue() {
   }
 }
 
+// Refreshes replace panel HTML every few seconds — keep what the operator is
+// typing (focused or edited-but-unsaved inputs, by id) so it isn't wiped.
+function swapKeepingInputs(container, html) {
+  var kept = [];
+  var active = document.activeElement;
+  container.querySelectorAll('input[id], select[id]').forEach(function(el) {
+    if (el === active || el.dataset.dirty === '1') {
+      kept.push({ id: el.id, value: el.value, focus: el === active, dirty: el.dataset.dirty });
+    }
+  });
+  container.innerHTML = html;
+  kept.forEach(function(k) {
+    var el = document.getElementById(k.id);
+    if (!el) return;
+    el.value = k.value;
+    if (k.dirty) el.dataset.dirty = k.dirty;
+    if (k.focus) el.focus();
+  });
+}
+
+function setLossHalt() {
+  var el = document.getElementById('halt-usd');
+  if (!el) return;
+  var v = parseFloat(el.value);
+  if (isNaN(v) || v < 0) {
+    showToast('Enter a loss halt in USD (0 or more)', 'error');
+    return;
+  }
+  fetch('/api/runtime-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'live_daily_loss_halt_usd', value: v })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'ok') {
+        delete el.dataset.dirty;
+        showToast('Loss halt → $' + Number(data.value).toFixed(2), 'success');
+      } else {
+        showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+      setTimeout(refreshAll, 300);
+    })
+    .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
+}
+
+function resetLossHalt() {
+  fetch('/api/loss_halt/reset', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      showToast(data.halt_reset
+        ? 'Loss halt reset — today\'s tally and peaks zeroed'
+        : 'Bot is running — stop it to zero the loss-halt tally', 'success');
+      setTimeout(refreshAll, 300);
+    })
+    .catch(function(err) { showToast('Reset failed: ' + err.message, 'error'); });
+}
+
 function setTradeShares() {
   var el = document.getElementById('ctl-shares');
   if (!el) return;
   var v = parseFloat(el.value);
   if (!(v >= 5)) {
     showToast('Minimum order is 5 shares (Polymarket)', 'error');
-    return;
-  }
-  if (!confirm('Set trade size to ' + v + ' shares? Applies to paper + live on the next tick.')) {
     return;
   }
   fetch('/api/runtime-config', {
@@ -158,6 +239,39 @@ function setTradeShares() {
     .then(function(data) {
       if (data.status === 'ok') {
         showToast('Trade size → ' + Number(data.value) + ' shares', 'success');
+      } else {
+        showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+      setTimeout(refreshAll, 300);
+    })
+    .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
+}
+
+function setKnob(name, kind) {
+  var el = document.getElementById('knob-' + name);
+  if (!el) return;
+  var v;
+  if (kind === 'bool') {
+    v = el.checked;
+  } else if (kind === 'enum') {
+    v = el.value;
+  } else {
+    v = parseFloat(el.value);
+    if (isNaN(v)) {
+      showToast('Enter a number', 'error');
+      return;
+    }
+  }
+  var label = (el.getAttribute('aria-label') || name);
+  fetch('/api/runtime-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: name, value: v })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'ok') {
+        showToast(label + ' → ' + data.value, 'success');
       } else {
         showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');
       }
@@ -268,7 +382,7 @@ function updateDashboard(data) {
   // Execution view (status ribbon + strategy/market/perf/TCA/blotter)
   if (data.execution_view) {
     var execEl = document.getElementById('execution-content');
-    if (execEl) execEl.innerHTML = data.execution_view || '';
+    if (execEl) swapKeepingInputs(execEl, data.execution_view || '');
   }
 
   // Activity

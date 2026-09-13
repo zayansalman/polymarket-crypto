@@ -11,18 +11,20 @@ from __future__ import annotations
 
 import config as _config
 from db import get_config
+from polymarket_bot import runtime_knobs as _knobs
 
 from polymarket_exec.ops.dashboard.panels import _data as data
+from polymarket_exec.ops.dashboard.panels import _wallet
 from polymarket_exec.ops.dashboard.panels import (
     blotter,
     controls,
     daily_altcoin,
     decision_engine,
-    guardrails,
     market,
     market_selector,
     performance,
     ribbon,
+    settings as settings_panel,
     tca,
 )
 
@@ -31,10 +33,11 @@ async def market_selector_html() -> str:
     """Render the topbar asset/timeframe selector with open-position glow."""
     from polymarket_bot import market_selection
 
+    style = await _knobs.get("exit_style")
     return market_selector.render(
         selection=await market_selection.get_selection(),
         open_pnl=market_selector.open_market_pnl(
-            open_pos=await data.open_positions(_config.EXIT_STYLE),
+            open_pos=await data.open_positions(style),
             daily_open=await data.daily_positions(state="open"),
             tick=await data.latest_tick(),
         ),
@@ -47,7 +50,7 @@ async def execution_view_html() -> str:
     Same public signature and output contract as before the panel split —
     ``app.py`` consumes this directly.
     """
-    style = _config.EXIT_STYLE
+    style = await _knobs.get("exit_style")
     mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
     state = await get_config("polymarket_bot.state", "stopped") or "stopped"
     session_start = await get_config("polymarket_bot.session_start", None)
@@ -74,12 +77,6 @@ async def execution_view_html() -> str:
     # Combined PnL for the ribbon's headline number. The loss-halt decision uses
     # the per-mode leg (live in live, paper in paper) — see RiskGate.halt_pnl (#76).
     day_pnl = live_pnl + paper_pnl
-    day_notional = float(
-        await get_config("risk.daily_buy_notional")
-        or await get_config("btc_live.daily_buy_notional")
-        or 0
-    )
-    bot_detail = await get_config("polymarket_bot.detail", "") or ""
 
     # ---- one-shot data load ----
     tick = await data.latest_tick()
@@ -93,8 +90,6 @@ async def execution_view_html() -> str:
     closed_paper = await data.closed(style, None, limit=40, mode="paper")
     last_live_at = await data.last_live_order_at()
     spread = await data.avg_spread()
-    blocked_today = await data.recent_blocked(limit=5)
-    submitted_count, submitted_notional = await data.today_submitted_summary()
 
     perf = data.performance(closed)
     perf_live = data.performance(closed_live)
@@ -122,6 +117,7 @@ async def execution_view_html() -> str:
     ]
     current_price = max(_px) if _px else None
 
+    loss_halt_current = await _knobs.get("live_daily_loss_halt_usd")
     ribbon_html = ribbon.render(
         mode=mode,
         state=state,
@@ -133,23 +129,10 @@ async def execution_view_html() -> str:
         closed_session=closed_session,
         tick=tick,
         last_live_at=last_live_at,
-    )
-    guardrails_html = guardrails.render(
-        day_spend=day_notional,
-        bankroll_cap=_config.TRADE_BANKROLL_CAP_USD,
-        submitted_count=submitted_count,
-        submitted_notional=submitted_notional,
-        day_pnl=day_pnl,
-        live_pnl=live_pnl,
-        paper_pnl=paper_pnl,
-        loss_halt_usd=_config.TRADE_DAILY_LOSS_HALT_USD,
+        wallet=await _wallet.wallet_snapshot(),
+        loss_halt_usd=loss_halt_current,
         live_peak=live_peak,
         paper_peak=paper_peak,
-        state=state,
-        bot_detail=bot_detail,
-        session_start=session_start,
-        blocked=blocked_today,
-        mode=mode,
         bypass_loss_halt=bypass_loss_halt,
     )
     controls_html = controls.render(
@@ -163,13 +146,19 @@ async def execution_view_html() -> str:
     )
     tca_html = tca.render(perf=perf, spread=spread)
     blotter_html = blotter.render(closed=closed, open_pos=open_pos, tick=tick)
-    daily_altcoin_html = daily_altcoin.render(open_positions=daily_open, perf=daily_perf)
+    daily_altcoin_html = daily_altcoin.render(
+        open_positions=daily_open,
+        perf=daily_perf,
+        scan_interval_seconds=await _knobs.get("daily_scan_interval_seconds"),
+        trade_usd=await _knobs.get("daily_trade_usd"),
+    )
+    settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
+    settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)
 
     return (
         "<div class='execution-view'>"
         + ribbon_html
         + "<div class='execution-grid'>"
-        + guardrails_html
         + controls_html
         + market_html
         + decision_html
@@ -177,5 +166,6 @@ async def execution_view_html() -> str:
         + tca_html
         + blotter_html
         + daily_altcoin_html
+        + settings_html
         + "</div></div>"
     )

@@ -21,7 +21,6 @@ import config as _config
 import db as _db
 from polymarket_exec.execution.live import (
     BUY,
-    CONFIRM_PHRASE,
     SELL,
     LiveBootRefused,
     LiveExecutor,
@@ -122,7 +121,7 @@ def _executor(
     return LiveExecutor(
         private_key="0x" + "1" * 64,
         funder="0xFUNDER",
-        signature_type=1,
+        signature_type=2,
         max_trade_usd=max_trade,
         daily_loss_halt_usd=daily_halt,
         bankroll_cap_usd=bankroll,
@@ -148,62 +147,31 @@ async def _journal_rows(journal_db) -> list[dict]:
 
 def test_boot_refused_without_private_key() -> None:
     with pytest.raises(LiveBootRefused, match="POLYMARKET_PRIVATE_KEY"):
-        assert_live_boot_allowed(private_key="", confirm=CONFIRM_PHRASE, funder="0xF")
+        assert_live_boot_allowed(private_key="", funder="0xF")
 
 
-def test_boot_refused_without_confirm_phrase() -> None:
-    with pytest.raises(LiveBootRefused, match="LIVE_CONFIRM"):
-        assert_live_boot_allowed(private_key="0xabc", confirm="", funder="0xF")
+def test_boot_allowed_with_key_and_no_env_confirm_phrase(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Consent is the dashboard LIVE click, not an env phrase (see controller).
+    monkeypatch.delenv("LIVE_CONFIRM", raising=False)
+    assert not hasattr(_config, "LIVE_CONFIRM")
+    assert_live_boot_allowed(private_key="0xabc", funder="0xF")
 
 
-def test_boot_refused_with_wrong_confirm_phrase() -> None:
-    with pytest.raises(LiveBootRefused):
-        assert_live_boot_allowed(
-            private_key="0xabc", confirm="yes_i_understand", funder="0xF"
-        )
+def test_boot_refused_without_funder() -> None:
+    # MetaMask trades from the Polymarket Safe; without it as funder the order
+    # maker falls back to the EOA and the CLOB rejects every order.
+    with pytest.raises(LiveBootRefused, match="POLYMARKET_FUNDER"):
+        assert_live_boot_allowed(private_key="0xabc", funder="", signature_type=2)
 
 
-def test_boot_refused_with_neither_gate() -> None:
-    with pytest.raises(LiveBootRefused, match="PRIVATE_KEY.*and.*CONFIRM"):
-        assert_live_boot_allowed(private_key="", confirm="", funder="0xF")
+def test_boot_allowed_for_metamask_safe() -> None:
+    assert_live_boot_allowed(private_key="0xabc", funder="0xSAFE", signature_type=2)
 
 
-def test_boot_allowed_with_key_and_exact_phrase() -> None:
-    assert_live_boot_allowed(
-        private_key="0xabc", confirm="YES_I_UNDERSTAND", funder="0xF"
-    )
-
-
-def test_boot_refused_without_funder_for_proxy_signature_types() -> None:
-    # Signature types 1/2/3 sign as a proxy/deposit wallet; without a funder
-    # the order maker falls back to the EOA and the CLOB rejects every order.
-    for sig in (1, 2, 3):
-        with pytest.raises(LiveBootRefused, match="POLYMARKET_FUNDER"):
-            assert_live_boot_allowed(
-                private_key="0xabc", confirm=CONFIRM_PHRASE,
-                funder="", signature_type=sig,
-            )
-
-
-def test_boot_allowed_for_deposit_wallet_type_3_with_funder() -> None:
-    assert_live_boot_allowed(
-        private_key="0xabc", confirm=CONFIRM_PHRASE,
-        funder="0xDEPOSIT", signature_type=3,
-    )
-
-
-def test_boot_allowed_without_funder_for_eoa() -> None:
-    assert_live_boot_allowed(
-        private_key="0xabc", confirm=CONFIRM_PHRASE, funder="", signature_type=0
-    )
-
-
-def test_boot_refused_with_unknown_signature_type() -> None:
+@pytest.mark.parametrize("sig", [0, 1, 3, 7])
+def test_boot_refused_for_non_metamask_signature_types(sig: int) -> None:
     with pytest.raises(LiveBootRefused, match="SIGNATURE_TYPE"):
-        assert_live_boot_allowed(
-            private_key="0xabc", confirm=CONFIRM_PHRASE,
-            funder="0xF", signature_type=7,
-        )
+        assert_live_boot_allowed(private_key="0xabc", funder="0xF", signature_type=sig)
 
 
 def test_boot_refused_on_malformed_risk_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -215,18 +183,16 @@ def test_boot_refused_on_malformed_risk_env(monkeypatch: pytest.MonkeyPatch) -> 
     )
     with pytest.raises(LiveBootRefused, match="invalid env value"):
         assert_live_boot_allowed(
-            private_key="0xabc", confirm=CONFIRM_PHRASE, funder="0xF"
+            private_key="0xabc", funder="0xF"
         )
 
 
 def test_boot_gate_reads_config_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "")
-    monkeypatch.setattr(_config, "LIVE_CONFIRM", "")
     monkeypatch.setattr(_config, "POLYMARKET_FUNDER", "")
     with pytest.raises(LiveBootRefused):
         build_live_executor()
     monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "0xabc")
-    monkeypatch.setattr(_config, "LIVE_CONFIRM", CONFIRM_PHRASE)
     monkeypatch.setattr(_config, "POLYMARKET_FUNDER", "0xFUNDER")
     executor = build_live_executor()
     assert isinstance(executor, LiveExecutor)
@@ -1268,7 +1234,7 @@ async def test_start_refreshes_balance_allowance(journal_db, tmp_path: Path) -> 
     await ex.start()
     client.update_balance_allowance.assert_called_once()
     params = client.update_balance_allowance.call_args.args[0]
-    assert params.signature_type == 1  # the executor's configured type
+    assert params.signature_type == 2  # the executor's configured type
 
 
 @pytest.mark.asyncio

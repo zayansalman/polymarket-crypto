@@ -26,7 +26,6 @@ TIMEFRAMES: dict[str, str] = {
     "5m": "5m",
     "15m": "15m",
     "1h": "1h",
-    "4h": "4h",
     "1d": "1d",
 }
 
