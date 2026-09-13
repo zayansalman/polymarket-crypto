@@ -35,7 +35,9 @@ from polymarket_exec.storage import venue_flow_store as store
 log = get_logger("flow_recorder")
 
 BINANCE_FAPI = "https://fapi.binance.com"
-BINANCE_FAPI_WS = "wss://fstream.binance.com/ws"
+# Binance routes futures market streams under /market/ (checked 2026-09-13): the legacy
+# /ws path still accepts connections and SUBSCRIBE acks but delivers no market data.
+BINANCE_FORCE_ORDER_WS = "wss://fstream.binance.com/market/ws/!forceOrder@arr"
 KRAKEN_SPOT_WS = "wss://ws.kraken.com/v2"
 KRAKEN_FUTURES_WS = "wss://futures.kraken.com/ws/v1"
 KRAKEN_FUTURES_API = "https://futures.kraken.com/derivatives/api/v3"
@@ -71,7 +73,7 @@ class FeedStatus:
     ok: bool | None  # rest: last check (None = not checked yet); ws: None
     connected: bool
     connected_since: float | None
-    last_event_at: float | None  # rest: last success; ws: last frame
+    last_event_at: float | None  # rest: last success; ws: last live data frame
     last_hour_ms: int | None  # newest bar written for this feed
     detail: str | None
 
@@ -102,6 +104,13 @@ def _default_client() -> httpx.AsyncClient:
 def _liquidations(msg: dict[str, Any]) -> list[vm.Trade]:
     trade = vm.binance_liquidation(msg)
     return [trade] if trade else []
+
+
+# Feeds whose "stream is alive" signal is broader than the trades they record: the
+# all-symbol liquidation stream proves it flows even while no BTCUSDT liquidation occurs.
+_DATA_FRAME: dict[str, Callable[[dict[str, Any]], bool]] = {
+    BINANCE_LIQ: lambda msg: msg.get("e") == "forceOrder",
+}
 
 
 class FlowRecorder:
@@ -158,7 +167,7 @@ class FlowRecorder:
                 ok=None,
                 connected=ws.connected,
                 connected_since=ws.connected_since,
-                last_event_at=ws.last_message_at,
+                last_event_at=ws.last_data_at,
                 last_hour_ms=self._last_hour.get(key),
                 detail=ws.last_error,
             )
@@ -168,7 +177,7 @@ class FlowRecorder:
         """Hold the WS trade feeds and record every ``interval_s`` until ``stop_event``."""
         self._started_at = self._time_fn()
         self._aggs = self._new_aggregators(int(self._started_at * 1000))
-        specs: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], list]]] = [
+        specs: list[tuple[str, str, dict[str, Any] | None, Callable[[dict[str, Any]], list]]] = [
             (KRAKEN_SPOT, KRAKEN_SPOT_WS,
              {"method": "subscribe",
               "params": {"channel": "trade", "symbol": ["BTC/USD"], "snapshot": False}},
@@ -176,9 +185,7 @@ class FlowRecorder:
             (KRAKEN_FUTURES, KRAKEN_FUTURES_WS,
              {"event": "subscribe", "feed": "trade", "product_ids": ["PF_XBTUSD"]},
              vm.kraken_futures_trades),
-            (BINANCE_LIQ, BINANCE_FAPI_WS,
-             {"method": "SUBSCRIBE", "params": ["!forceOrder@arr"], "id": 1},
-             _liquidations),
+            (BINANCE_LIQ, BINANCE_FORCE_ORDER_WS, None, _liquidations),
         ]
         tasks = [
             asyncio.create_task(
@@ -211,14 +218,19 @@ class FlowRecorder:
 
     def _trade_handler(
         self, key: str, parse: Callable[[dict[str, Any]], list]
-    ) -> Callable[[dict[str, Any]], None]:
-        def handle(msg: dict[str, Any]) -> None:
+    ) -> Callable[[dict[str, Any]], bool]:
+        is_data = _DATA_FRAME.get(key)
+
+        def handle(msg: dict[str, Any]) -> bool:
             agg = self._aggs[key]
             try:
-                for ts_ms, price, qty, side in parse(msg):
-                    agg.add(ts_ms, price, qty, side)
+                trades = parse(msg)
             except (KeyError, TypeError, ValueError) as exc:
                 log.warning("flow_recorder.bad_frame", feed=key, error=str(exc)[:200])
+                return False
+            for ts_ms, price, qty, side in trades:
+                agg.add(ts_ms, price, qty, side)
+            return is_data(msg) if is_data is not None else bool(trades)
 
         return handle
 

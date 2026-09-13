@@ -17,7 +17,7 @@ log = get_logger("ws_runner")
 class WsStatus:
     connected: bool = False
     connected_since: float | None = None
-    last_message_at: float | None = None
+    last_data_at: float | None = None  # last frame the handler reported as live data
     last_error: str | None = None
 
 
@@ -32,7 +32,7 @@ async def run_ws_forever(
     name: str,
     url: str,
     subscribe: dict[str, Any] | None,
-    on_message: Callable[[dict[str, Any]], None],
+    on_message: Callable[[dict[str, Any]], bool],
     on_gap: Callable[[int, int], None],
     stop_event: asyncio.Event,
     status: WsStatus,
@@ -44,8 +44,10 @@ async def run_ws_forever(
 ) -> None:
     """Connect, subscribe and feed JSON object frames to ``on_message`` until ``stop_event``.
 
-    Each disconnected stretch (including the one before the first connect) is
-    reported once the socket is up again as ``on_gap(from_ms, to_ms)``.
+    ``on_message`` returns True for a frame carrying live data; only those refresh
+    ``status.last_data_at``, so subscription acks and heartbeats can't make a silent
+    stream look healthy. Each disconnected stretch (including the one before the
+    first connect) is reported once the socket is up again as ``on_gap(from_ms, to_ms)``.
     """
     connect = connect or _default_connect
     backoff = initial_backoff_s
@@ -65,13 +67,12 @@ async def run_ws_forever(
                         frame = await asyncio.wait_for(ws.recv(), timeout=recv_timeout_s)
                     except asyncio.TimeoutError:
                         continue  # quiet feeds are normal; the library's pings detect dead sockets
-                    status.last_message_at = time_fn()
                     try:
                         msg = json.loads(frame)
                     except (TypeError, ValueError):
                         continue
-                    if isinstance(msg, dict):
-                        on_message(msg)
+                    if isinstance(msg, dict) and on_message(msg):
+                        status.last_data_at = time_fn()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — any socket error means reconnect

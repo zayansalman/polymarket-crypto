@@ -14,6 +14,28 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-14-hourly-btc-flow-strategy-design.md` (part A)
 
+## Amendment found while executing (2026-09-14, verified live)
+
+The first smoke run showed the Binance liquidations row as OK on a stream that sent
+nothing. Binance now serves USD-M futures market streams under `/market/`: the legacy
+`wss://fstream.binance.com/ws` still connects and acknowledges `SUBSCRIBE`, but delivers
+no market data (checked with `btcusdt@aggTrade` too). `…/market/ws/!forceOrder@arr`
+delivers frames in the documented shape.
+
+The branch implements these corrections, which replace the Task 3 and Task 5 code shown
+below where they differ:
+
+- `run_ws_forever`: `on_message` returns `bool` (True = live data frame), and
+  `WsStatus.last_message_at` is renamed `last_data_at`. It is set only for data frames,
+  so acks and heartbeats can't make a silent stream look healthy.
+- `flow_recorder`: `BINANCE_FAPI_WS` + `SUBSCRIBE` is replaced by
+  `BINANCE_FORCE_ORDER_WS = "wss://fstream.binance.com/market/ws/!forceOrder@arr"` with
+  no subscribe message. Trade handlers return whether the frame was live data. For
+  liquidations, any symbol's `forceOrder` frame counts as live (`_DATA_FRAME`), while
+  only BTCUSDT is aggregated.
+- Tests pin both: `test_ws_runner.py` asserts the data timestamp, and
+  `test_flow_recorder.py::test_liquidation_frames_for_any_symbol_count_as_live_data`.
+
 ## Global Constraints
 
 - Base branch: PR #231 (`fix/feeds-live`) rewrote `feeds.py`, `execution_view.py`, `app.py` lifespan and `tests/conftest.py`, and this plan edits those files.

@@ -54,10 +54,15 @@ async def test_reconnects_reports_gaps_and_delivers_frames() -> None:
     messages: list[dict] = []
     gaps: list[tuple[int, int]] = []
     status = WsStatus()
+
+    def on_message(msg: dict) -> bool:
+        messages.append(msg)
+        return msg.get("n") == 1  # only the first frame counts as data
+
     await asyncio.wait_for(
         run_ws_forever(
             name="t", url="wss://example.test/ws", subscribe={"op": "sub"},
-            on_message=messages.append, on_gap=lambda a, b: gaps.append((a, b)),
+            on_message=on_message, on_gap=lambda a, b: gaps.append((a, b)),
             stop_event=stop, status=status, connect=connect,
             time_fn=lambda: float(next(clock)), recv_timeout_s=1.0, initial_backoff_s=0.001,
         ),
@@ -68,6 +73,8 @@ async def test_reconnects_reports_gaps_and_delivers_frames() -> None:
     assert len(gaps) == 2
     assert gaps[1][0] > gaps[0][1]  # second gap starts after the first connection was up
     assert status.connected is False and status.last_error == "ConnectionError: socket closed"
+    # Acks and non-data frames (here {"n": 2}) never refresh the data timestamp.
+    assert status.last_data_at == 1020.0
 
 
 @pytest.mark.asyncio
@@ -76,7 +83,7 @@ async def test_no_subscribe_message_when_none() -> None:
     ws = _FakeWs([], fail_after=False, stop_event=stop)
     await asyncio.wait_for(
         run_ws_forever(
-            name="t", url="wss://x", subscribe=None, on_message=lambda m: None,
+            name="t", url="wss://x", subscribe=None, on_message=lambda m: False,
             on_gap=lambda a, b: None, stop_event=stop, status=WsStatus(),
             connect=lambda url: ws, recv_timeout_s=1.0, initial_backoff_s=0.001,
         ),

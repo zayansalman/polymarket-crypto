@@ -159,7 +159,7 @@ async def test_run_starts_ws_feeds_and_stops_cleanly(test_db) -> None:
         await asyncio.sleep(0.01)
     stop.set()
     await asyncio.wait_for(task, timeout=5)
-    assert sorted(urls) == sorted([fr.KRAKEN_SPOT_WS, fr.KRAKEN_FUTURES_WS, fr.BINANCE_FAPI_WS])
+    assert sorted(urls) == sorted([fr.KRAKEN_SPOT_WS, fr.KRAKEN_FUTURES_WS, fr.BINANCE_FORCE_ORDER_WS])
 
 
 def test_current_registry() -> None:
@@ -183,3 +183,15 @@ def test_dashboard_lifespan_registers_and_clears_the_recorder(
     with TestClient(app):
         assert isinstance(fr.current(), fr.FlowRecorder)
     assert fr.current() is None
+
+
+def test_liquidation_frames_for_any_symbol_count_as_live_data() -> None:
+    rec = _recorder(started_ms=H0)
+    handler = rec._trade_handler(fr.BINANCE_LIQ, fr._liquidations)
+    eth = {"e": "forceOrder", "E": H0 + 1, "o": {"s": "FILUSDT", "S": "SELL", "q": "7511.9",
+                                                "p": "0.9786", "ap": "0.9878", "X": "FILLED",
+                                                "z": "7511.9", "T": H0 + 60_000}}
+    assert handler(eth) is True  # proves the stream is flowing, even with no BTC liquidation
+    assert handler({"result": None, "id": 1}) is False
+    kraken = rec._trade_handler(fr.KRAKEN_SPOT, fr.vm.kraken_spot_trades)
+    assert kraken({"channel": "heartbeat"}) is False
