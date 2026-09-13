@@ -1,4 +1,4 @@
-"""Top status ribbon: mode/state pills, daily PnL split, feed liveness chips."""
+"""Top status ribbon: pause/kill chips, P&L stats, feed liveness chips."""
 from __future__ import annotations
 
 from html import escape
@@ -32,9 +32,6 @@ def render(
     mode_pnl = live_pnl if is_live else paper_pnl
     session_pnl = sum(c["realized_pnl_usd"] or 0.0 for c in closed_session)
 
-    run_pill = (
-        f"<span class='pill {'on' if state == 'running' else 'off'}'>{state.upper()}</span>"
-    )
 
     # Real liveness comes from (a) when the loop last journaled a tick, and
     # (b) what feed_source that tick recorded for each upstream. Each chip
@@ -91,8 +88,8 @@ def render(
 
     return (
         "<div class='ribbon'>"
-        f"<div class='ribbon-id'>{run_pill}{pause_chip}{kill_chip}</div>"
-        "<div class='ribbon-stats'>"
+        + (f"<div class='ribbon-id'>{pause_chip}{kill_chip}</div>" if pause_chip or kill_chip else "")
+        + "<div class='ribbon-stats'>"
         f"{s.stat('Equity Δ (session)', s.money(session_pnl, True) if closed_session else '—', s.cls(session_pnl), flash='pnl')}"
         f"{s.stat('P&L (today)', s.money(mode_pnl, True), s.cls(mode_pnl), flash='pnl')}"
         f"{s.stat('Open Risk', s.money(sum(p['notional_usd'] or 0 for p in open_pos)), '', f'{len(open_pos)} pos')}"
