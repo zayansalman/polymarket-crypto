@@ -119,6 +119,27 @@ Reading:
   boundary. The flow recorder already samples Binance open interest each hour; Bybit
   sampling would be a small addition.
 
+### Update: replication on ETH, SOL and XRP failed (pre-registered 2026-09-14)
+
+The BTC open-interest rule was frozen and run unchanged on each asset's own spot, perp
+and Bybit OI data, over the same walk-forward months.
+
+| Asset | Rule (OI did not rise) | Mirror (OI rose) |
+|---|---|---|
+| BTC (original) | 60.5% n=306 | 54.1% n=314 |
+| ETH | 55.2% n=201 | 57.5% n=221 |
+| SOL | 51.7% n=230 | 53.6% n=233 |
+| XRP | 52.0% n=246 | 48.1% n=237 |
+| ETH+SOL+XRP pooled | 52.9% n=677 (latest 11 months 47.1%) | 53.0% n=691 |
+
+The open-interest split does not replicate; on ETH it points the other way. The BTC
+60.5% is best read as one lucky slice of the eight rules tested, or at most a
+BTC-only effect. It should be carried as an observed, recorded filter, not as the
+strategy's expected win rate. Planning numbers stay as before:
+
+- Tier A: about 57%.
+- Flow push: about 53–54%.
+
 ## Goals
 
 1. Trade the hourly BTC market through the one shared paper/live pipeline, with
