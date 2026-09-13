@@ -1,7 +1,6 @@
-"""Top status ribbon: pause/kill chips, P&L stats, feed liveness chips."""
+"""Top status ribbon: kill chip, P&L stats, feed liveness chips."""
 from __future__ import annotations
 
-from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +14,6 @@ def render(
     mode: str,
     state: str,
     session_start: str | None,
-    paused: bool,
-    pause_reason: str,
     live_pnl: float,
     paper_pnl: float,
     day_pnl: float,
@@ -79,16 +76,11 @@ def render(
             # access often keeps reading and journaling skips.
             chips.append(_chip(label, live_age <= 300))
     feeds = "".join(chips)
-    pause_chip = (
-        f"<span class='pill warn' title='{escape(pause_reason)}'>⏸ AUTO-PAUSED</span>"
-        if paused
-        else ""
-    )
     kill_chip = "<span class='pill live'>KILL ARMED</span>" if kill_armed else ""
 
     return (
         "<div class='ribbon'>"
-        + (f"<div class='ribbon-id'>{pause_chip}{kill_chip}</div>" if pause_chip or kill_chip else "")
+        + (f"<div class='ribbon-id'>{kill_chip}</div>" if kill_chip else "")
         + "<div class='ribbon-stats'>"
         f"{s.stat('Equity Δ (session)', s.money(session_pnl, True) if closed_session else '—', s.cls(session_pnl), flash='pnl')}"
         f"{s.stat('P&L (today)', s.money(mode_pnl, True), s.cls(mode_pnl), flash='pnl')}"

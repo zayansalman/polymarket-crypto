@@ -108,15 +108,6 @@ EXIT_STYLE = _env_choice("EXIT_STYLE", "settle", {"settle", "scalp"})
 # with the live strategy (no real orders placed). "off" disables it entirely.
 SHADOW_ENABLED = _env_choice("SHADOW_ENABLED", "on", {"on", "off"})
 
-# Adaptive risk controller (issue #36): pause NEW entries when the strategy's
-# rolling expectancy decays, before losses pile up. Complements the hard halt.
-AUTO_PAUSE_ENABLED = _env_choice(
-    "AUTO_PAUSE_ENABLED", "true", {"true", "false"}
-) == "true"
-AUTO_PAUSE_WINDOW = _env_int("AUTO_PAUSE_WINDOW", 20)
-AUTO_PAUSE_MIN_TRADES = _env_int("AUTO_PAUSE_MIN_TRADES", 10)
-AUTO_PAUSE_MIN_ROI = _env_float("AUTO_PAUSE_MIN_ROI", -0.15)
-
 # --- Live trading (Polymarket CLOB) ---------------------------------------
 POLYMARKET_CLOB_API = os.getenv("POLYMARKET_CLOB_API", "https://clob.polymarket.com")
 POLYMARKET_CHAIN_ID = _env_int("POLYMARKET_CHAIN_ID", 137)  # Polygon mainnet

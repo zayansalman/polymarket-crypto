@@ -32,8 +32,6 @@ def render(
     state: str,
     bot_detail: str,
     session_start: str | None,
-    paused: bool,
-    pause_reason: str,
     blocked: list[dict[str, Any]],
     mode: str = "paper",
     bypass_loss_halt: bool = False,
@@ -100,25 +98,17 @@ def render(
         f".then(()=>setTimeout(refreshAll,300))\">{status_label}</button>"
     )
 
-    # RESET is the operator's "let me trade again": it always clears the adaptive
-    # auto-pause (a live config the loop honours next tick) and, when stopped,
-    # also zeroes the loss-halt tally + peaks. So it's enabled whenever there's
-    # something to clear — a running-but-auto-paused bot, or any stopped state.
-    # Disabled only when running with no pause (the loss-halt tally is owned by
-    # the loop then, and a real halt would have auto-stopped the bot).
-    if state == "running" and not paused:
+    # RESET is the operator's "let me trade again": when stopped it zeroes the
+    # loss-halt tally + peaks. Disabled while running (the loss-halt tally is
+    # owned by the loop then, and a real halt would have auto-stopped the bot).
+    if state == "running":
         reset_btn = (
             "<button class='gr-btn' disabled "
             "title='Stop the bot to reset the loss-halt tally "
             "(nothing to clear while running)'>Reset halt</button>"
         )
     else:
-        reset_title = (
-            "Clear the auto-pause and resume entries"
-            if (state == "running" and paused)
-            else "Clear the auto-pause and zero today&#39;s loss-halt tally + peaks "
-            "so entries resume"
-        )
+        reset_title = "Zero today&#39;s loss-halt tally + peaks so entries resume"
         reset_btn = (
             "<button class='gr-btn btn-ok' "
             f"title='{reset_title}' "
@@ -180,12 +170,6 @@ def render(
     detail_display = (
         (detail_first[:90] + "…") if len(detail_first) > 90 else (detail_first or "—")
     )
-    if paused:
-        pause_html = (
-            f"<span class='pill warn' title='{escape(pause_reason)}'>⏸ PAUSED</span>"
-        )
-    else:
-        pause_html = "<b class='mono dim'>—</b>"
     state_col = (
         "<div class='de-col'>"
         "<div class='de-h'>BOT STATE</div>"
@@ -193,7 +177,6 @@ def render(
         f"<div><span>State</span><span class='pill {state_pill_cls}'>{escape(state.upper())}</span></div>"
         f"<div><span>Uptime</span><b class='mono'>{escape(s.ago(session_start))}</b></div>"
         f"<div><span>Last detail</span><b class='mono {detail_cls}' title='{escape(bot_detail)}'>{escape(detail_display)}</b></div>"
-        f"<div><span>Auto-pause</span>{pause_html}</div>"
         "</div></div>"
     )
 

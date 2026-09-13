@@ -692,41 +692,32 @@ async def api_loss_halt_bypass(request: Request) -> dict[str, Any]:
 
 @app.post("/api/loss_halt/reset")
 async def api_loss_halt_reset() -> dict[str, Any]:
-    """Operator "let me trade again": clear the adaptive auto-pause and (when
-    stopped) reset the loss-halt tally + peaks so entries resume (#76, #36).
+    """Operator "let me trade again": when stopped, reset the loss-halt tally +
+    peaks so entries resume (#76).
 
-    Two mechanisms with different ownership:
-      * The adaptive auto-pause is a config flag the running loop re-reads every
-        tick, so clearing it works in BOTH states and resumes entries live.
-      * The loss-halt daily counters are held in memory by the running loop and
-        re-persisted on every close, so they can only be reset when STOPPED — a
-        loss-halt breach auto-stops the bot, so the operator is already stopped
-        when one fires. Bankroll-cap notional is left untouched.
+    The loss-halt daily counters are held in memory by the running loop and
+    re-persisted on every close, so they can only be reset when STOPPED — a
+    loss-halt breach auto-stops the bot, so the operator is already stopped
+    when one fires. Bankroll-cap notional is left untouched.
     Audited to ``notification_feed``.
     """
     from db import get_config, notify  # type: ignore[import-untyped]
     from polymarket_exec.execution.gate import reset_daily_loss_halt
-    from polymarket_bot.adaptive import clear_auto_pause
     state = (await get_config("polymarket_bot.state", "stopped")) or "stopped"
-    await clear_auto_pause()
     halt_reset = state != "running"
     if halt_reset:
         await reset_daily_loss_halt()
     await notify(
         "loss_halt_reset",
-        "Operator cleared the auto-pause"
-        + (
-            "; reset the loss-halt tally + peaks to $0.00 (live + paper)"
-            if halt_reset
-            else " (bot running — loss-halt tally left to the loop)"
-        ),
+        "Operator reset the loss-halt tally + peaks to $0.00 (live + paper)"
+        if halt_reset
+        else "Operator pressed reset while running — loss-halt tally left to the loop",
     )
     log.info("btc.loss_halt_reset", halt_reset=halt_reset, state=state)
     return {
         "status": "ok",
         "reset": True,
         "halt_reset": halt_reset,
-        "auto_pause_cleared": True,
     }
 
 
@@ -800,22 +791,6 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
         )
         log.info("btc.runtime_config_set", key=key, value=value)
         return {"status": "ok", "key": key, "value": value}
-    if key == "active_model":
-        from db import set_config
-        from polymarket_bot.shadow import runner as _shadow_runner
-
-        model = str((body or {}).get("value", ""))
-        if model not in _shadow_runner.SELECTABLE_MODELS:
-            # Hidden controls / unknown ids are not operator-selectable.
-            return {"status": "error", "detail": f"unknown or non-selectable model {model!r}"}
-        await set_config(_shadow_runner.ACTIVE_MODEL_KEY, model)
-        await notify(
-            "runtime_config",
-            f"Operator set active model to {model} (paper+live, runtime — no restart)",
-            {"key": key, "value": model},
-        )
-        log.info("btc.runtime_config_set", key=key, value=model)
-        return {"status": "ok", "key": key, "value": model}
     if key == "market":
         from polymarket_bot import market_selection
 

@@ -341,40 +341,66 @@ def test_modest_edge_favorite_passes_filters():
 
 
 # ---------------------------------------------------------------------------
-# Retired active-model fallback (#142 roster surgery)
+# No strategy loaded (v0 archived 2026-09-13)
 # ---------------------------------------------------------------------------
 
 
+def _stub_market_inputs(monkeypatch: pytest.MonkeyPatch, *, spot: float | None) -> None:
+    """Healthy book + feed for one window with a modest favourite edge on Up —
+    inside the archived v0 edge band, so the old gates would have entered."""
+    now = paper._now()
+    market = {
+        "window_start_ts": now - 120,
+        "slug": f"btc-updown-5m-{now - 120}",
+        "question": "BTC up?",
+        "outcomePrices": "[\"0.40\", \"0.60\"]",
+        "clobTokenIds": "[\"up-token\", \"down-token\"]",
+    }
+    books = {
+        "up-token": paper.BookTop(best_bid=0.54, best_ask=0.55, bid_size=50.0, ask_size=50.0),
+        "down-token": paper.BookTop(best_bid=0.44, best_ask=0.46, bid_size=50.0, ask_size=50.0),
+    }
+    monkeypatch.setattr(paper, "_fetch_current_market", AsyncMock(return_value=market))
+    monkeypatch.setattr(
+        paper, "_fetch_clob_book", AsyncMock(side_effect=lambda _c, token: books[token])
+    )
+    monkeypatch.setattr(paper, "_chainlink_spot_and_closes", lambda: (spot, []))
+    monkeypatch.setattr(paper, "_rest_spot_fallback", AsyncMock(return_value=None))
+    monkeypatch.setattr(paper, "_get_window_reference", AsyncMock(return_value=60_000.0))
+    monkeypatch.setattr(
+        paper, "_sigma_with_fallback", AsyncMock(return_value=(0.00002, "chainlink_ws"))
+    )
+
+
 @pytest.mark.asyncio
-async def test_retired_active_model_falls_back_to_default_loudly_once(test_db):
-    """A persisted selection pointing at a retired model (the operator's last
-    pick was down_skeptic_drift_v6, binned in #142) must trade the v0 native
-    path and notify exactly once per process — never crash, never silently
-    keep 'trading' a model that no longer exists."""
-    paper._unknown_model_notified.clear()
-    await _db.set_config("model.active", "down_skeptic_drift_v6")
+async def test_no_strategy_loaded_never_signals_an_entry(test_db, monkeypatch):
+    from polymarket_bot.strategy import signal_from_executable_edges
 
-    first = await paper._resolve_active_model()
-    second = await paper._resolve_active_model()
+    _stub_market_inputs(monkeypatch, spot=60_004.5)
 
-    assert first == "pricing_v0"
-    assert second == "pricing_v0"
-    async with _db.connect() as conn:
-        async with conn.execute(
-            "SELECT COUNT(*) AS n FROM notification_feed"
-            " WHERE event_type = 'model_fallback'"
-        ) as cur:
-            assert (await cur.fetchone())["n"] == 1
+    snap = await paper._build_snapshot(MagicMock())
+
+    # The archived v0 gates would have entered Up on exactly this tick.
+    old_side, _, old_notional, _ = signal_from_executable_edges(
+        edge_up=snap.fair_up_prob - 0.55,
+        edge_down=(1 - snap.fair_up_prob) - 0.46,
+        remaining_seconds=snap.remaining_seconds,
+        up_ask=0.55,
+        down_ask=0.46,
+        params=paper._strategy_params(),
+    )
+    assert old_side == "Up" and old_notional > 0
+    # The loop, with no strategy loaded, does not.
+    assert snap.signal_side is None
+    assert snap.notional_usd == 0.0
+    assert snap.reason == paper.NO_STRATEGY_REASON
 
 
 @pytest.mark.asyncio
-async def test_current_roster_models_resolve_unchanged(test_db):
-    paper._unknown_model_notified.clear()
-    await _db.set_config("model.active", "cushion_fresh_v7")
-    assert await paper._resolve_active_model() == "cushion_fresh_v7"
-    async with _db.connect() as conn:
-        async with conn.execute(
-            "SELECT COUNT(*) AS n FROM notification_feed"
-            " WHERE event_type = 'model_fallback'"
-        ) as cur:
-            assert (await cur.fetchone())["n"] == 0
+async def test_degraded_feed_reason_still_wins_over_no_strategy(test_db, monkeypatch):
+    _stub_market_inputs(monkeypatch, spot=None)
+
+    snap = await paper._build_snapshot(MagicMock())
+
+    assert snap.signal_side is None
+    assert snap.reason.startswith("skip: settlement feed degraded")

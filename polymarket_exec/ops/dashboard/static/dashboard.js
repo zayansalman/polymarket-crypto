@@ -166,30 +166,6 @@ function setTradeShares() {
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
 }
 
-function setActiveModel() {
-  var el = document.getElementById('ctl-model');
-  if (!el) return;
-  var v = el.value;
-  if (!confirm('Switch the active trading model to "' + v + '"? Applies to paper + live on the next tick.')) {
-    return;
-  }
-  fetch('/api/runtime-config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: 'active_model', value: v })
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.status === 'ok') {
-        showToast('Active model → ' + data.value, 'success');
-      } else {
-        showToast('Switch failed: ' + (data.detail || 'unknown error'), 'error');
-      }
-      setTimeout(refreshAll, 300);
-    })
-    .catch(function(err) { showToast('Switch failed: ' + err.message, 'error'); });
-}
-
 function setMarket(kind, value) {
   var sel = document.querySelector('.mkt-sel');
   if (!sel) return;

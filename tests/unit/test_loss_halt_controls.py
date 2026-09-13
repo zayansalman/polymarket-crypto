@@ -173,26 +173,16 @@ class TestLossHaltEndpoints:
         assert r.json()["bypass_loss_halt"] is False
         assert asyncio.run(get_loss_halt_bypass()) is False
 
-    def test_reset_running_clears_pause_keeps_tally(self, client: TestClient) -> None:
-        # While running, Reset clears the adaptive auto-pause (a live config the
-        # loop honours) but leaves the loss-halt tally to the loop (it owns it
-        # in memory). The operator's one-click "let me trade again".
+    def test_reset_running_keeps_tally(self, client: TestClient) -> None:
+        # While running, Reset leaves the loss-halt tally to the loop (it owns
+        # it in memory).
         asyncio.run(_db.set_config("polymarket_bot.state", "running"))
         asyncio.run(_db.set_config("risk.live_realized_pnl", "-8.0"))
-        asyncio.run(_db.set_config("polymarket_bot.auto_paused", "1"))
         r = client.post("/api/loss_halt/reset")
         body = r.json()
         assert body["status"] == "ok"
         assert body["halt_reset"] is False
         assert asyncio.run(_db.get_config("risk.live_realized_pnl")) == "-8.0"
-        assert asyncio.run(_db.get_config("polymarket_bot.auto_paused")) == "0"
-
-    def test_reset_clears_auto_pause_when_stopped(self, client: TestClient) -> None:
-        asyncio.run(_db.set_config("polymarket_bot.state", "stopped"))
-        asyncio.run(_db.set_config("polymarket_bot.auto_paused", "1"))
-        r = client.post("/api/loss_halt/reset")
-        assert r.json()["status"] == "ok"
-        assert asyncio.run(_db.get_config("polymarket_bot.auto_paused")) == "0"
 
     def test_reset_zeroes_when_stopped(self, client: TestClient) -> None:
         asyncio.run(_db.set_config("polymarket_bot.state", "stopped"))
@@ -277,8 +267,6 @@ def _render(**over) -> str:
         state="stopped",
         bot_detail="",
         session_start=None,
-        paused=False,
-        pause_reason="",
         blocked=[],
         mode="paper",
         bypass_loss_halt=False,
@@ -319,16 +307,9 @@ class TestGuardrailsPanel:
         assert "/api/loss_halt/reset" in html
         assert "Reset halt" in html
 
-    def test_reset_disabled_when_running_and_not_paused(self) -> None:
-        html = _render(mode="live", state="running", paused=False)
+    def test_reset_disabled_when_running(self) -> None:
+        html = _render(mode="live", state="running")
         assert "Stop the bot to reset" in html
-
-    def test_reset_enabled_when_running_and_paused(self) -> None:
-        # An auto-pause IS clearable while running (#36) — the button must be
-        # live so the operator can resume without stopping the bot.
-        html = _render(mode="live", state="running", paused=True)
-        assert "/api/loss_halt/reset" in html
-        assert "Stop the bot to reset" not in html
 
     def test_no_cannot_disable_text(self) -> None:
         html = _render(mode="live")

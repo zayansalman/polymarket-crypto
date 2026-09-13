@@ -45,14 +45,15 @@ firewall.
 
 - Enough live fills to measure the paper-vs-live fill gap (the one thing the
   archive can't simulate). Target: ≥ ~50 live settles.
-- The adaptive risk controller (#36, shipped) already provides the safety
-  floor (edge-decay auto-pause) this loop's experiments run beneath.
+- The adaptive risk controller (#36) that provided an edge-decay auto-pause
+  was archived with the v0 strategy on 2026-09-13 (`docs/archive/v0-strategy.md`).
 
 ## Status
 
 Designed, not built. Build after the first live soak yields real fills.
 
-A shipped, human-gated **v0** of steps 2–5 already exists for the backtest grid:
+*Archived 2026-09-13 with the v0 strategy (`docs/archive/v0-strategy.md`); kept
+here as history.* A human-gated **v0** of steps 2–5 existed for the backtest grid:
 `polymarket_bot/params_propose.py` runs `polymarket_bot.backtest.build_report`, picks the
 recommended params, and writes them to `$DATA_DIR/params_proposed.json` for
 operator review — it never auto-applies. `polymarket_bot/params_apply.py` then promotes

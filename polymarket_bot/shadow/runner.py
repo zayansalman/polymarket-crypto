@@ -7,7 +7,8 @@ independent (see ``paper._settle_due_shadows``) and PnL is booked NET of the
 Polymarket 7% taker fee. No real orders are ever placed from here — this is a
 pure paper comparison harness.
 
-Candidates (all are logged AND operator-selectable; see ``SELECTABLE_MODELS``):
+Candidates (all are logged; the dashboard model picker that let the loop trade
+one was archived with the v0 strategy on 2026-09-13):
 - ``pricing_v0``          — the live strategy, logged as the control baseline.
 - ``cushion_favorite_v2`` — v0 + a cushion gate (spot clearly on the favoured
   side of the strike): the only model sign-positive in-sample AND out-of-sample
@@ -126,28 +127,11 @@ _MODELS: dict[
 }
 
 
-# --- Live model selection (operator-switchable active trading model) ----------
-# The active model is stored in config under ACTIVE_MODEL_KEY and read every tick
-# by the loop, so switching it from the dashboard takes effect with no restart,
-# in paper AND live. v0 is the default and uses the loop's native signal path;
-# the others dispatch through CANDIDATE_SIGNALS.
-ACTIVE_MODEL_KEY = "model.active"
+# --- Roster registry -----------------------------------------------------------
 DEFAULT_MODEL = "pricing_v0"
 MODEL_IDS: list[str] = list(_MODELS.keys())
 
-# Operator-selectable models for the dashboard dropdown. The full logged roster
-# is selectable (ordered by the global vN experiment counter); v0's native path
-# stays the default. Kept as an explicit list (not just MODEL_IDS) so a model can
-# be hidden from the selector later without dropping it from the logged set.
-SELECTABLE_MODELS: list[str] = [
-    "pricing_v0",
-    "cushion_favorite_v2",
-    "cushion_fresh_v7",
-    "pricing_fresh_v8",
-    "cushion_fresh_v7_f45",
-]
-
-# Labels carry the model's version tag (vN) so the dashboard dropdown maps 1:1
+# Labels carry the model's version tag (vN) so they map 1:1
 # back to the persisted `model_id` (e.g. "Down-Skeptic (v4)" -> down_skeptic_v4).
 # The vN is a global experiment counter, not a per-family version: down_skeptic
 # is v4 and its regime-drift child is v6 because cushion_drift (v5) was logged

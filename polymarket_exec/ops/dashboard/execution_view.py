@@ -23,7 +23,6 @@ from polymarket_exec.ops.dashboard.panels import (
     market_selector,
     performance,
     ribbon,
-    strategy,
     tca,
 )
 
@@ -52,8 +51,6 @@ async def execution_view_html() -> str:
     mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
     state = await get_config("polymarket_bot.state", "stopped") or "stopped"
     session_start = await get_config("polymarket_bot.session_start", None)
-    paused = (await get_config("polymarket_bot.auto_paused", "0")) == "1"
-    pause_reason = await get_config("polymarket_bot.auto_pause_reason", "") or ""
 
     # Split counters (issue #67): show LIVE vs PAPER P&L distinctly so the
     # ribbon and LOSS HALT panel never blend real-money and study results.
@@ -103,7 +100,6 @@ async def execution_view_html() -> str:
     perf_live = data.performance(closed_live)
     perf_paper = data.performance(closed_paper)
     recon = await data.reconciliation()
-    is_live = mode == "live"
 
     daily_open = await data.daily_positions(state="open")
     daily_closed = await data.daily_positions(state="settled")
@@ -112,20 +108,9 @@ async def execution_view_html() -> str:
     # ---- panels ----
     from polymarket_exec.execution.gate import (
         get_loss_halt_bypass,
-        get_runtime_max_trade_usd,
         get_runtime_trade_shares,
     )
     bypass_loss_halt = await get_loss_halt_bypass()
-    # Operator runtime per-trade cap (#50): None when unset → bot uses the env
-    # default. Used by the CONTROLS card and the STRATEGY sizing line so the UI
-    # reflects the value the loop is actually enforcing this tick.
-    max_trade_current = await get_runtime_max_trade_usd()
-    max_trade_env = (
-        _config.TRADE_MAX_USD if is_live else _config.PAPER_MAX_TRADE_USD
-    )
-    max_trade_effective = (
-        max_trade_current if max_trade_current is not None else max_trade_env
-    )
     # Share-denominated trade size (#89) — the operator-facing knob. None → the
     # CONTROLS input defaults to the venue minimum. ``current_price`` is the
     # favoured side's live ask (the side ≥ 0.50) for the $-value estimate.
@@ -137,25 +122,10 @@ async def execution_view_html() -> str:
     ]
     current_price = max(_px) if _px else None
 
-    # Active params shape the decision-engine gate eval — same thresholds the
-    # live loop uses, so the gate column never lies.
-    from polymarket_bot import params as _params
-    active = _params.load_active()
-
-    class _GateParams:
-        entry_edge_min = active.entry_edge_min
-        entry_edge_max = active.entry_edge_max
-        min_confidence = active.min_confidence
-        entry_min_remaining_seconds = active.min_remaining_seconds
-        min_entry_price = active.min_entry_price
-        max_entry_price = active.max_entry_price
-
     ribbon_html = ribbon.render(
         mode=mode,
         state=state,
         session_start=session_start,
-        paused=paused,
-        pause_reason=pause_reason,
         live_pnl=live_pnl,
         paper_pnl=paper_pnl,
         day_pnl=day_pnl,
@@ -178,37 +148,16 @@ async def execution_view_html() -> str:
         state=state,
         bot_detail=bot_detail,
         session_start=session_start,
-        paused=paused,
-        pause_reason=pause_reason,
         blocked=blocked_today,
         mode=mode,
         bypass_loss_halt=bypass_loss_halt,
     )
-    from polymarket_bot.shadow import runner as _shadow_runner
-
-    active_model = (
-        await get_config(_shadow_runner.ACTIVE_MODEL_KEY, _shadow_runner.DEFAULT_MODEL)
-        or _shadow_runner.DEFAULT_MODEL
-    )
     controls_html = controls.render(
         trade_shares_current=trade_shares_current,
         current_price=current_price,
-        active_model=active_model,
-    )
-    strategy_html = strategy.render(
-        style=style,
-        is_live=is_live,
-        paused=paused,
-        pause_reason=pause_reason,
-        max_trade=max_trade_effective,
-        trade_shares=trade_shares_current,
-        current_price=current_price,
-        active_model=active_model,
     )
     market_html = market.render(tick, open_pos)
-    decision_html = decision_engine.render(
-        tick, _GateParams(), recent_ticks, paused, pause_reason
-    )
+    decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
         style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
     )
@@ -222,7 +171,6 @@ async def execution_view_html() -> str:
         + "<div class='execution-grid'>"
         + guardrails_html
         + controls_html
-        + strategy_html
         + market_html
         + decision_html
         + performance_html
