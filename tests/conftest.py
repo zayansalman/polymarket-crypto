@@ -56,6 +56,24 @@ def _no_real_live_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_quote_polling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dashboard app tests must not poll the venue for the order-size ticket.
+
+    The app lifespan starts ``quote_feed.run_forever``; swap it for a no-op that
+    just waits to be stopped. Tests of the poller itself call the real one.
+    """
+    try:
+        from polymarket_exec.ops.dashboard import quote_feed as _quote_feed
+    except Exception:  # noqa: BLE001 — dashboard package optional in some envs
+        return
+
+    async def _idle(stop_event) -> None:  # type: ignore[no-untyped-def]
+        await stop_event.wait()
+
+    monkeypatch.setattr(_quote_feed, "run_forever", _idle)
+
+
+@pytest.fixture(autouse=True)
 def _no_feed_monitor_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """Dashboard tests boot the app lifespan; keep its feed monitor offline.
 
