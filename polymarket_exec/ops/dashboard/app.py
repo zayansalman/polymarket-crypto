@@ -172,7 +172,10 @@ templates = Jinja2Templates(directory=str(dashboard_dir / "templates"))
 # browser otherwise caches /static/dashboard.js across server restarts, leaving
 # new functions (e.g. setActiveModel) undefined on a stale page.
 try:
-    _STATIC_VERSION = str(int((dashboard_dir / "static" / "dashboard.js").stat().st_mtime))
+    _STATIC_VERSION = str(int(max(
+        (dashboard_dir / "static" / name).stat().st_mtime
+        for name in ("dashboard.js", "style.css")
+    )))
 except OSError:
     _STATIC_VERSION = "1"
 
