@@ -52,7 +52,7 @@ class TestDashboardPage:
 
     def test_has_ems_panels(self, client: TestClient):
         text = client.get("/").text
-        for panel in ("ribbon", "ems-grid", "STRATEGY", "LIVE MARKET",
+        for panel in ("ribbon", "execution-grid", "DECISION ENGINE", "LIVE MARKET",
                       "PERFORMANCE / ALPHA", "TCA", "TRADE BLOTTER"):
             assert panel in text, f"missing EMS panel: {panel}"
 
@@ -87,7 +87,7 @@ class TestStaticFiles:
 
     def test_css_has_ems_components(self, client: TestClient):
         css = client.get("/static/style.css").text
-        for sel in (".ribbon", ".card", ".ems-grid", ".blotter", ".stat", ".pill", ".tag"):
+        for sel in (".ribbon", ".card", ".execution-grid", ".blotter", ".stat", ".pill", ".tag"):
             assert sel in css, f"missing {sel}"
 
     def test_js_served(self, client: TestClient):
@@ -102,7 +102,7 @@ class TestStaticFiles:
             assert fn in js, f"missing {fn}"
 
     def test_js_swaps_ems_content(self, client: TestClient):
-        assert "ems-content" in client.get("/static/dashboard.js").text
+        assert "execution-content" in client.get("/static/dashboard.js").text
 
     def test_js_has_runtime_control_handler(self, client: TestClient):
         js = client.get("/static/dashboard.js").text
@@ -314,9 +314,9 @@ class TestMarketOpenPosition:
         assert "LIVE MARKET" in html
 
     def test_render_is_full_width_card(self) -> None:
-        # The LIVE MARKET card must span both grid columns. The ems-grid has an
-        # odd number of single-width cards, so a half-width LIVE MARKET orphans
-        # the neighbouring cell (empty band under STRATEGY). Both the populated
+        # The LIVE MARKET card must span both grid columns. The execution-grid has
+        # an odd number of single-width cards, so a half-width LIVE MARKET orphans
+        # the neighbouring cell (an empty band beside it). Both the populated
         # and the no-tick states must carry `card wide`.
         from polymarket_exec.ops.dashboard.panels import market
 
