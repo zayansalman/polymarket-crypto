@@ -71,6 +71,46 @@ def test_annotate_importers_excludes_venv(tmp_path):
     assert by["pkg/alpha.py"].importers == 1
 
 
+def test_annotate_importers_excludes_claude_worktrees(tmp_path):
+    """Repo copies under `.claude/worktrees/<name>/` must not count as importers.
+
+    The main checkout holds full repo copies there; walking them would inflate
+    importer counts and flip DEAD? modules to WIRED.
+    """
+    root = tmp_path
+    pkg = root / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "alpha.py").write_text('"""A."""\n')
+    (root / "main.py").write_text('"""M."""\n')
+    copy = root / ".claude" / "worktrees" / "x" / "pkg"
+    copy.mkdir(parents=True)
+    (copy / "beta.py").write_text("from pkg.alpha import X\nimport main\n")
+
+    mods = gd.collect_modules(root, source_roots=["pkg"], toplevel=["main.py"])
+    gd.annotate_importers(root, mods, test_dirs=["tests"])
+    by = {m.path: m for m in mods}
+    assert by["pkg/alpha.py"].importers == 0
+    assert by["pkg/alpha.py"].status == "DEAD?"
+    assert by["main.py"].importers == 0
+
+
+def test_root_inside_claude_worktree_still_scanned(tmp_path):
+    """Exclusion applies below `root` only — a worktree's own files still count."""
+    root = tmp_path / ".claude" / "worktrees" / "x"
+    pkg = root / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "alpha.py").write_text('"""A."""\n')
+    (pkg / "beta.py").write_text("from pkg.alpha import X\n")
+
+    mods = gd.collect_modules(root, source_roots=["pkg"], toplevel=[])
+    gd.annotate_importers(root, mods, test_dirs=["tests"])
+    by = {m.path: m for m in mods}
+    assert set(by) == {"pkg/__init__.py", "pkg/alpha.py", "pkg/beta.py"}
+    assert by["pkg/alpha.py"].importers == 1
+
+
 def test_status_taxonomy_pkg_cli_wired_dead(tmp_path):
     """pkg / cli / WIRED / DEAD? precedence resolves correctly."""
     root = tmp_path
