@@ -101,38 +101,168 @@ class TestRuntimeConfigEndpoint:
         assert r.json()["status"] == "error"
 
 
+def _stored_market() -> tuple[str | None, str | None]:
+    from polymarket_bot import market_selection as ms
+
+    return (
+        asyncio.run(_db.get_config(ms.ASSET_KEY, None)),
+        asyncio.run(_db.get_config(ms.TIMEFRAME_KEY, None)),
+    )
+
+
+@pytest.fixture
+def no_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No market has a strategy (independent of the real registry)."""
+    from polymarket_bot import market_selection as ms
+
+    monkeypatch.setattr(ms, "STRATEGY_MARKETS", frozenset())
+
+
+@pytest.fixture
+def btc_1h_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only BTC 1h has a strategy."""
+    from polymarket_bot import market_selection as ms
+
+    monkeypatch.setattr(ms, "STRATEGY_MARKETS", frozenset({("btc", "1h")}))
+
+
+@pytest.fixture
+def two_strategies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BTC 1h (the default) and ETH 5m have strategies."""
+    from polymarket_bot import market_selection as ms
+
+    monkeypatch.setattr(ms, "STRATEGY_MARKETS", frozenset({("btc", "1h"), ("eth", "5m")}))
+
+
 class TestMarketSelection:
-    def test_default_is_btc_5m(self, client: TestClient) -> None:
+    def test_no_strategy_defaults_to_loop_market(
+        self, client: TestClient, no_strategy: None
+    ) -> None:
         from polymarket_bot import market_selection as ms
 
         sel = asyncio.run(ms.get_selection())
         assert (sel.asset, sel.timeframe) == ("btc", "5m")
         assert sel.loop_supported
 
-    def test_set_market_persists(self, client: TestClient) -> None:
+    def test_default_is_first_strategy_market(
+        self, client: TestClient, btc_1h_strategy: None
+    ) -> None:
+        from polymarket_bot import market_selection as ms
+
+        sel = asyncio.run(ms.get_selection())
+        assert (sel.asset, sel.timeframe) == ("btc", "1h")
+
+    def test_set_market_persists(self, client: TestClient, two_strategies: None) -> None:
         from polymarket_bot import market_selection as ms
 
         r = client.post(
             "/api/runtime-config",
-            json={"key": "market", "value": {"asset": "eth", "timeframe": "1h"}},
+            json={"key": "market", "value": {"asset": "eth", "timeframe": "5m"}},
         )
         body = r.json()
         assert body["status"] == "ok"
-        assert body["value"] == {"asset": "eth", "timeframe": "1h"}
+        assert body["value"] == {"asset": "eth", "timeframe": "5m"}
         assert body["loop_supported"] is False
+        assert _stored_market() == ("eth", "5m")
         sel = asyncio.run(ms.get_selection())
-        assert (sel.asset, sel.timeframe) == ("eth", "1h")
+        assert (sel.asset, sel.timeframe) == ("eth", "5m")
 
     def test_rejects_unknown_market(self, client: TestClient) -> None:
         for bad in ({"asset": "ltc", "timeframe": "5m"}, {"asset": "btc", "timeframe": "2m"}, "btc"):
             r = client.post("/api/runtime-config", json={"key": "market", "value": bad})
             assert r.json()["status"] == "error"
 
+    def test_rejects_market_without_strategy(
+        self, client: TestClient, btc_1h_strategy: None
+    ) -> None:
+        from polymarket_bot import market_selection as ms
+
+        ok = client.post(
+            "/api/runtime-config",
+            json={"key": "market", "value": {"asset": "btc", "timeframe": "1h"}},
+        )
+        assert ok.json()["status"] == "ok"
+        for asset, tf in (("eth", "1h"), ("btc", "5m"), ("doge", "1d")):
+            r = client.post(
+                "/api/runtime-config",
+                json={"key": "market", "value": {"asset": asset, "timeframe": tf}},
+            )
+            body = r.json()
+            assert body["status"] == "error"
+            assert "no strategy" in body["detail"]
+        assert _stored_market() == ("btc", "1h")
+        sel = asyncio.run(ms.get_selection())
+        assert (sel.asset, sel.timeframe) == ("btc", "1h")
+
+    def test_rejects_everything_while_no_strategy_exists(
+        self, client: TestClient, no_strategy: None
+    ) -> None:
+        r = client.post(
+            "/api/runtime-config",
+            json={"key": "market", "value": {"asset": "btc", "timeframe": "5m"}},
+        )
+        assert r.json()["status"] == "error"
+        assert "no strategy for BTC 5m" in r.json()["detail"]
+        assert _stored_market() == (None, None)
+
+    def test_stale_selection_without_strategy_falls_back(
+        self, client: TestClient, btc_1h_strategy: None
+    ) -> None:
+        from db import set_config
+        from polymarket_bot import market_selection as ms
+
+        asyncio.run(set_config(ms.ASSET_KEY, "eth"))
+        asyncio.run(set_config(ms.TIMEFRAME_KEY, "5m"))
+        sel = asyncio.run(ms.get_selection())
+        assert (sel.asset, sel.timeframe) == ("btc", "1h")
+
+    def test_timeframe_for_snaps_to_a_strategy(self, btc_1h_strategy: None) -> None:
+        from polymarket_bot import market_selection as ms
+
+        assert ms.timeframe_for("btc", "1h") == "1h"
+        assert ms.timeframe_for("btc", "5m") == "1h"
+        assert ms.timeframe_for("eth", "1h") is None
+
     def test_page_renders_selector(self, client: TestClient) -> None:
         html = client.get("/").text
         assert "id=\"market-selector\"" in html
         assert "data-asset='eth'" in html
         assert "data-timeframe='1h'" in html
+
+    def test_everything_greyed_while_no_strategy_exists(self, no_strategy: None) -> None:
+        from polymarket_bot.market_selection import MarketSelection
+        from polymarket_exec.ops.dashboard.panels import market_selector as mks
+
+        html = mks.render(selection=MarketSelection("btc", "5m"), open_pnl={})
+        assert html.count(" disabled ") == 10
+        assert "onclick=" not in html
+        assert "active' data-asset='btc' disabled title='No strategy for BTC yet'" in html
+        assert "active' data-timeframe='5m' disabled title='No strategy for BTC 5m yet'" in html
+
+    def test_only_strategy_markets_are_clickable(self, btc_1h_strategy: None) -> None:
+        from polymarket_bot.market_selection import MarketSelection
+        from polymarket_exec.ops.dashboard.panels import market_selector as mks
+
+        html = mks.render(selection=MarketSelection("btc", "1h"), open_pnl={})
+        assert "data-asset='btc' title='BTC' onclick=\"setMarket('btc','1h')\"" in html
+        assert "data-timeframe='1h' title='BTC 1h' onclick=\"setMarket('btc','1h')\"" in html
+        for asset in ("eth", "sol", "xrp", "doge", "bnb"):
+            assert f"data-asset='{asset}' disabled" in html
+        for tf in ("5m", "15m", "1d"):
+            assert f"data-timeframe='{tf}' disabled title='No strategy for BTC {tf} yet'" in html
+        assert html.count(" disabled ") == 8
+        assert html.count("onclick=") == 2
+
+
+    def test_asset_button_snaps_to_a_timeframe_with_strategy(
+        self, two_strategies: None
+    ) -> None:
+        from polymarket_bot.market_selection import MarketSelection
+        from polymarket_exec.ops.dashboard.panels import market_selector as mks
+
+        html = mks.render(selection=MarketSelection("btc", "1h"), open_pnl={})
+        assert "data-asset='eth' title='ETH' onclick=\"setMarket('eth','5m')\"" in html
+        assert "data-asset='sol' disabled title='No strategy for SOL yet'" in html
 
 
 class TestMarketSelectorGlow:

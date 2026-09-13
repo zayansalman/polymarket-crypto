@@ -56,6 +56,13 @@ body {
 .mkt-row + .mkt-row .mkt-btn { font-size: 10.5px; padding: 3px 8px; min-width: 38px; }
 .mkt-btn:hover { color: var(--text); border-color: var(--text); }
 .mkt-btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+/* no strategy for this market: greyed out, not clickable (glow below still shows open positions) */
+.mkt-btn:disabled {
+  background: var(--bg-alt); color: var(--muted); border-color: var(--border); opacity: .45; cursor: not-allowed;
+}
+.mkt-btn:disabled .mkt-logo { filter: grayscale(1); }
+.mkt-btn.active:disabled { color: var(--text); border-color: var(--text); } /* current market, no strategy */
+.mkt-btn:disabled[class*='glow-'] { opacity: .8; }
 .mkt-sel.unwired .mkt-btn.active { background: var(--bg-alt); color: var(--warn); border-color: var(--warn); }
 .mkt-btn.glow-pos { color: var(--pos); border-color: var(--pos); background: rgba(27,122,67,.10); box-shadow: 0 0 12px 1px rgba(27,122,67,.65); }
 .mkt-btn.glow-neg { color: var(--neg); border-color: var(--neg); background: rgba(179,38,30,.10); box-shadow: 0 0 12px 1px rgba(179,38,30,.65); }

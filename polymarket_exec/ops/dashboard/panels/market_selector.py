@@ -133,19 +133,42 @@ def render(
         vals = [open_pnl[k] for k in held if open_pnl[k] is not None]
         return _glow(sum(vals) if vals else None)
 
-    def _btn(kind: str, value: str, label: str, active: bool, glow: str, tip: str) -> str:
+    def _btn(
+        kind: str,
+        value: str,
+        label: str,
+        active: bool,
+        glow: str,
+        name: str,
+        target: tuple[str, str] | None,
+    ) -> str:
+        """One button; ``target`` is the (asset, timeframe) a click selects.
+
+        ``None`` greys the button out: no strategy exists for that market.
+        """
         logo = _logo(value) if kind == "asset" else ""
+        if target is None:
+            action = f"disabled title='{escape(f'No strategy for {name} yet')}'"
+        else:
+            action = (
+                f"title='{escape(name)}' "
+                f"onclick=\"setMarket('{escape(target[0])}','{escape(target[1])}')\""
+            )
         return (
             f"<button class='mkt-btn{' active' if active else ''}{glow}' "
-            f"data-{kind}='{escape(value)}' title='{escape(tip)}' "
-            f"onclick=\"setMarket('{kind}','{escape(value)}')\">{logo}{escape(label)}</button>"
+            f"data-{kind}='{escape(value)}' {action}>{logo}{escape(label)}</button>"
         )
+
+    def _asset_target(asset: str) -> tuple[str, str] | None:
+        tf = ms.timeframe_for(asset, selection.timeframe)
+        return (asset, tf) if tf is not None else None
 
     assets = "".join(
         _btn(
             "asset", a, label, a == selection.asset,
             _net([(a, tf) for tf in ms.TIMEFRAMES]),
             label,
+            _asset_target(a),
         )
         for a, label in ms.ASSETS.items()
     )
@@ -154,6 +177,7 @@ def render(
             "timeframe", tf, label, tf == selection.timeframe,
             _net([(selection.asset, tf)]),
             f"{ms.ASSETS[selection.asset]} {label}",
+            (selection.asset, tf) if ms.has_strategy(selection.asset, tf) else None,
         )
         for tf, label in ms.TIMEFRAMES.items()
     )
