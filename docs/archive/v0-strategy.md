@@ -30,7 +30,9 @@ enters** — in paper or live. Every tick journals `skip: no strategy loaded`.
 
 ## Restoring any of it
 
-Everything is preserved at the git tag `archive/v0-strategy`:
+Everything is preserved at the git tag `archive/v0-strategy`. The last
+versions — after the SETTINGS card moved these knobs into `runtime_knobs` —
+are at commit `d881ad0` (the develop tip this was merged onto):
 
 ```bash
 git show archive/v0-strategy:polymarket_bot/adaptive.py
