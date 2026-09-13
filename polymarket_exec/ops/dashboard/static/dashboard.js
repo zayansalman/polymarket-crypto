@@ -290,19 +290,13 @@ function setKnob(name, kind) {
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
 }
 
-function setMarket(kind, value) {
-  var sel = document.querySelector('.mkt-sel');
-  if (!sel) return;
-  var active = function(k) {
-    var b = sel.querySelector('.mkt-btn.active[data-' + k + ']');
-    return b ? b.getAttribute('data-' + k) : '';
-  };
-  var next = { asset: active('asset'), timeframe: active('timeframe') };
-  next[kind] = value;
+// The server renders each enabled button with the full market it selects;
+// markets without a strategy render disabled and never call this.
+function setMarket(asset, timeframe) {
   fetch('/api/runtime-config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: 'market', value: next })
+    body: JSON.stringify({ key: 'market', value: { asset: asset, timeframe: timeframe } })
   })
     .then(function(r) { return r.json(); })
     .then(function(data) {
