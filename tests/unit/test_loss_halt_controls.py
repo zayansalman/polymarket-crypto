@@ -265,7 +265,6 @@ def _render(**over) -> str:
         open_pos=[],
         closed_session=[],
         tick=None,
-        last_live_at=None,
         loss_halt_usd=10.0,
         bypass_loss_halt=False,
     )

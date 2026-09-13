@@ -116,12 +116,19 @@ body {
 .pill.gr-pill-btn { cursor: pointer; font-family: var(--font-mono); line-height: 1.2; }
 .pill.gr-pill-btn:hover { filter: brightness(1.18); }
 
-.feeds { display: flex; gap: 6px; align-items: center; }
-/* loop-heartbeat chip gets its own box, apart from the upstream feed chips */
-.tick-box { align-self: center; padding: 3px; border: 1px solid var(--border-strong); }
+/* feed status chips (FEEDS card) */
 .feed { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .5px; padding: 2px 6px; border-radius: 0; }
 .feed.on { color: var(--pos); background: rgba(43,212,125,.1); }
 .feed.warn { color: var(--warn); background: rgba(255,180,84,.1); }
+.feed.down { color: var(--neg); background: rgba(179,38,30,.08); }
+.feed.idle { color: var(--label); background: var(--bg-alt); }
+/* FEEDS card: one row per upstream feed */
+.feeds-scroll { overflow-x: auto; }
+.feeds-tbl td { white-space: nowrap; }
+.feeds-role { color: var(--muted); }
+.feeds-delay { text-align: right; }
+.feeds-delay.warn { color: var(--warn); }
+.card-h .win.warn { color: var(--warn); }
 
 /* ── stat blocks ── */
 .stat { display: flex; flex-direction: column; gap: 2px; min-width: 70px; }
