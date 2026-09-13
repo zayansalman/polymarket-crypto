@@ -409,6 +409,32 @@ async def _paper_html() -> str:
     )
 
 
+# Activity-log colour groups. Anything unlisted renders as "other" (neutral).
+_FEED_KIND = {
+    "system_start": "system",
+    "paper_started": "system",
+    "paper_stopped": "system",
+    "live_started": "system",
+    "paper_entry": "trade",
+    "live_entry": "trade",
+    "paper_exit": "trade",
+    "live_exit": "trade",
+    "runtime_config": "config",
+    "loss_halt_bypass": "config",
+    "loss_halt_reset": "config",
+    "paper_halt_pause": "warn",
+    "loss_halt_stop": "warn",
+    "loop_watchdog_restart": "warn",
+    "live_reconciled": "warn",
+    "live_positions_left_open": "warn",
+    "blocked": "alert",
+    "silent_stop": "alert",
+    "live_boot_refused": "alert",
+    "loop_watchdog_stall_live": "alert",
+    "live_kill_switch": "alert",
+}
+
+
 async def _activity_html() -> str:
     try:
         rows = await _load_feed()
@@ -416,12 +442,15 @@ async def _activity_html() -> str:
         rows = []
     if not rows:
         return "<p><em>No BTC bot activity yet. Press Start to begin paper trading.</em></p>"
-    lines = ["<h3>BTC Activity Feed</h3>", '<ul class="feed-list">']
+    lines = ['<ul class="feed-list">']
     for row in rows:
         stamp = _fmt_relative(row["created_at"])
+        kind = _FEED_KIND.get(row["event_type"], "other")
         event = row["event_type"].replace("_", " ")
-        event_cls = " class='down'" if row["event_type"] == "blocked" else ""
-        lines.append(f"<li><code>{escape(stamp)}</code> <strong{event_cls}>{escape(event)}</strong> — {escape(row['message'])}</li>")
+        lines.append(
+            f"<li class='k-{kind}'><code>{escape(stamp)}</code> "
+            f"<strong>{escape(event)}</strong> — {escape(row['message'])}</li>"
+        )
     lines.append("</ul>")
     return "\n".join(lines)
 
