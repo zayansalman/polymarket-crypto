@@ -27,19 +27,24 @@ WIRED_ALLOWLIST = {"main.py", "config.py", "db.py", "logging_setup.py"}
 # Virtualenv/build/VCS dirs: never walk into these. Third-party packages have
 # modules/symbols with short generic names (`main`, `config`) that collide with
 # our top-level modules and would inflate importer counts. `*.egg-info` is
-# handled separately (suffix match).
+# handled separately (suffix match). `.claude` holds full repo copies under
+# `.claude/worktrees/<name>/`; walking them would count every copy as an importer.
 EXCLUDE_DIRS = {".venv", "venv", "env", "__pycache__", ".git", ".pytest_cache",
-                "build", "dist", "node_modules", ".mypy_cache", ".ruff_cache"}
+                "build", "dist", "node_modules", ".mypy_cache", ".ruff_cache",
+                ".claude"}
 
 
 def _iter_py_files(root: Path):
     """Yield `*.py` files under `root`, skipping virtualenv/build/VCS dirs.
 
     Deterministic (sorted) and stdlib-only. Excludes any path with a part in
-    `EXCLUDE_DIRS` or a part ending in `.egg-info`.
+    `EXCLUDE_DIRS` or a part ending in `.egg-info`. Only parts below `root` are
+    checked, so a root that itself lives in `.claude/worktrees/<name>/` is
+    still scanned.
     """
     for p in sorted(root.rglob("*.py")):
-        if any(part in EXCLUDE_DIRS or part.endswith(".egg-info") for part in p.parts):
+        parts = p.relative_to(root).parts
+        if any(part in EXCLUDE_DIRS or part.endswith(".egg-info") for part in parts):
             continue
         yield p
 
