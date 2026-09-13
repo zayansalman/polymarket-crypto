@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import config as _config
 from polymarket_exec.ops import feed_monitor as fm
+from polymarket_exec.ops import flow_recorder as fr
 from polymarket_exec.ops.dashboard.panels import feeds, ribbon
 
 NOW = 1_800_000_000.0
@@ -111,3 +112,62 @@ def test_ribbon_no_longer_carries_feed_chips() -> None:
         open_pos=[], closed_session=[], tick=None,
     )
     assert "TICK" not in html and "class='feed " not in html
+
+
+
+def _flow(feeds: dict, taken_at: float = 10_000.0, started_at: float = 9_000.0) -> fr.FlowSnapshot:
+    base = {k: fr.FeedStatus("rest", None, False, None, None, None, None) for k in fr.REST_KEYS}
+    base.update({k: fr.FeedStatus("ws", None, False, None, None, None, None) for k in fr.WS_KEYS})
+    base.update(feeds)
+    return fr.FlowSnapshot(taken_at, started_at, 60.0, base)
+
+
+def _flow_rows(flow: fr.FlowSnapshot | None) -> dict:
+    return {(r.name, r.role): r for r in feeds.build_rows(None, flow)}
+
+
+def test_no_flow_rows_without_a_recorder() -> None:
+    # Keeps the monitor-only card (and its existing tests) unchanged outside the app.
+    names = {r.name for r in feeds.build_rows(None)}
+    assert "Kraken BTC/USD" not in names and "Binance liquidations" not in names
+
+
+def test_flow_rest_rows_ok_down_stale_and_checking() -> None:
+    flow = _flow({
+        fr.BINANCE_SPOT_BTC: fr.FeedStatus("rest", True, False, None, 9_990.0, 1, None),
+        fr.BINANCE_PERP_BTC: fr.FeedStatus("rest", False, False, None, None, None,
+                                           "HTTPStatusError: 503"),
+        fr.BINANCE_SPOT_ETH: fr.FeedStatus("rest", True, False, None, 9_000.0, 1, None),
+    })
+    rows = _flow_rows(flow)
+    assert rows[("Binance BTCUSDT", "hourly flow")].status == "OK"
+    perp = rows[("Binance perp BTCUSDT", "hourly flow")]
+    assert (perp.status, perp.level, perp.detail) == ("DOWN", "down", "HTTPStatusError: 503")
+    assert rows[("Binance ETHUSDT", "hourly flow")].status == "STALE"  # 1000 s > 3 × 60 s
+    assert rows[("Kraken PF_XBTUSD", "funding · OI")].status == "CHECKING"
+
+
+def test_flow_ws_rows_connecting_ok_stale_quiet_down() -> None:
+    flow = _flow(
+        {
+            fr.KRAKEN_SPOT: fr.FeedStatus("ws", None, True, 9_500.0, 9_995.0, None, None),
+            fr.KRAKEN_FUTURES: fr.FeedStatus("ws", None, True, 9_500.0, 9_600.0, None, None),
+            fr.BINANCE_LIQ: fr.FeedStatus("ws", None, False, None, None, None,
+                                          "ConnectionError: closed"),
+        },
+    )
+    rows = _flow_rows(flow)
+    assert rows[("Kraken BTC/USD", "hourly flow")].status == "OK"
+    assert rows[("Kraken PF_XBTUSD", "hourly flow")].status == "QUIET"  # sparse feed, 400 s
+    liq = rows[("Binance liquidations", "liquidation flow")]
+    assert (liq.status, liq.detail) == ("DOWN", "ConnectionError: closed")
+    stale = _flow_rows(_flow({
+        fr.KRAKEN_SPOT: fr.FeedStatus("ws", None, True, 9_000.0, 9_500.0, None, None)}))
+    assert stale[("Kraken BTC/USD", "hourly flow")].status == "STALE"
+    early = _flow_rows(_flow({}, taken_at=9_010.0, started_at=9_000.0))
+    assert early[("Kraken BTC/USD", "hourly flow")].status == "CONNECTING"
+
+
+def test_render_includes_flow_rows() -> None:
+    html = feeds.render(None, _flow({}))
+    assert "Kraken BTC/USD" in html and "Binance liquidations" in html
