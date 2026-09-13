@@ -270,6 +270,19 @@ body {
 .ctl-input::-webkit-outer-spin-button,
 .ctl-input::-webkit-inner-spin-button { opacity: 1; }
 .ctl-unit { font-family: var(--font-mono); font-size: 11px; color: var(--label); }
+
+/* ── settings panel (#206: every .env knob, dashboard-editable) ── */
+.settings-group { margin-bottom: 16px; }
+.settings-group:last-child { margin-bottom: 0; }
+.settings-group-h {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--label); margin-bottom: 6px; border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.settings-label {
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg);
+  min-width: 220px; flex: 1;
+}
 /* ── share-minimum infographic (#89) ── */
 .share-min { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
 .share-pips { display: flex; gap: 3px; }

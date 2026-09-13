@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Toast Notifications
 // ---------------------------------------------------------------------------
 
-function showToast(message, type) {
+function showToast(message, type, ms) {
   type = type || 'info';
   var container = document.querySelector('.toast-container');
   if (!container) {
@@ -57,7 +57,7 @@ function showToast(message, type) {
   setTimeout(function() {
     toast.classList.add('fade-out');
     setTimeout(function() { toast.remove(); }, 300);
-  }, 3000);
+  }, ms || 3000);
 }
 
 // ---------------------------------------------------------------------------
@@ -71,9 +71,15 @@ function setButtonsDisabled(disabled) {
 }
 
 function setMode(mode) {
-  if (mode === 'live' && !confirm(
-    'Switch to LIVE mode? The bot will be STOPPED. ' +
-    'You must press Start to begin trading with real funds on Polymarket.'
+  // LIVE is never disabled; unarmed only changes what the confirm warns about.
+  var liveBtn = document.querySelector('.mode-opt.live');
+  var armed = !liveBtn || liveBtn.getAttribute('data-armed') === '1';
+  if (mode === 'live' && !confirm(armed
+    ? 'Switch to LIVE mode? The bot will be STOPPED. ' +
+      'You must press Start to begin trading with real funds on Polymarket.'
+    : 'Switch to LIVE mode? The bot will be STOPPED. ' +
+      'LIVE is NOT armed yet, so Start will refuse until it is:\n\n' +
+      (liveBtn.title || '')
   )) {
     return;
   }
@@ -85,11 +91,11 @@ function setMode(mode) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.status === 'error') {
-        showToast('Mode switch failed: ' + (data.detail || ''), 'error');
-      } else if (/not armed/.test(data.detail || '')) {
+        showToast(data.detail || 'Mode switch failed', 'error');
+      } else if (data.mode === 'live' && data.live_armed === false) {
         // LIVE is always selectable; an unarmed selection just can't Start yet.
-        showToast(data.detail, 'error');
-        setTimeout(function() { window.location.reload(); }, 3000);
+        showToast('Mode → LIVE. ' + (data.live_hint || ''), 'error', 6000);
+        setTimeout(function() { window.location.reload(); }, 6300);
       } else {
         showToast('Mode → ' + (data.mode || mode).toUpperCase(), 'success');
         setTimeout(function() { window.location.reload(); }, 600);
@@ -103,7 +109,13 @@ function handleStart() {
   fetch('/api/start', { method: 'POST' })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      showToast('Bot started: ' + (data.detail || data.status), 'success');
+      if (data.status === 'running' || data.status === 'mock_running') {
+        showToast('Bot started: ' + (data.detail || data.status), 'success');
+      } else if (data.status === 'error') {
+        showToast(data.detail || 'Start failed', 'error', 6000);
+      } else {
+        showToast('Start refused: ' + (data.detail || data.status), 'error', 6000);
+      }
       refreshAll();
     })
     .catch(function(err) {
@@ -192,6 +204,42 @@ function setActiveModel() {
       setTimeout(refreshAll, 300);
     })
     .catch(function(err) { showToast('Switch failed: ' + err.message, 'error'); });
+}
+
+function setKnob(name, kind) {
+  var el = document.getElementById('knob-' + name);
+  if (!el) return;
+  var v;
+  if (kind === 'bool') {
+    v = el.checked;
+  } else if (kind === 'enum') {
+    v = el.value;
+  } else {
+    v = parseFloat(el.value);
+    if (isNaN(v)) {
+      showToast('Enter a number', 'error');
+      return;
+    }
+  }
+  var label = (el.getAttribute('aria-label') || name);
+  if (!confirm('Set ' + label + ' to ' + v + '? Applies on the next tick, paper + live.')) {
+    return;
+  }
+  fetch('/api/runtime-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: name, value: v })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'ok') {
+        showToast(label + ' → ' + data.value, 'success');
+      } else {
+        showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+      setTimeout(refreshAll, 300);
+    })
+    .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
 }
 
 function setMarket(kind, value) {

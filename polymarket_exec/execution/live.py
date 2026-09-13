@@ -326,11 +326,12 @@ class LiveExecutor:
         )
         # is_live=True → the gate halts on the live (real-money) leg (#76).
         self.gate = RiskGate(gate_cfg, is_live=True)
-        self.exit_fill_timeout_seconds = (
-            exit_fill_timeout_seconds
-            if exit_fill_timeout_seconds is not None
-            else _config.LIVE_EXIT_FILL_TIMEOUT_SECONDS
-        )
+        # An explicit constructor value (tests; a caller that wants a fixed
+        # timeout) always wins. Otherwise this tracks the dashboard-editable
+        # ``live_exit_fill_timeout_seconds`` knob (#206) via the shared gate,
+        # which is re-read every tick — so unset construction reflects operator
+        # changes without a restart, same as the gate's other risk knobs.
+        self._exit_fill_timeout_override = exit_fill_timeout_seconds
 
         self._client = client
         self._started = client is not None
@@ -390,15 +391,18 @@ class LiveExecutor:
         except Exception as e:  # noqa: BLE001
             log.warning("live_executor.allowance_refresh_failed", error=str(e))
         await self.gate.load()
+        # Pick up any operator-set dashboard knobs (#206) immediately at boot,
+        # rather than waiting for the paper loop's first per-tick refresh.
+        await self.gate.refresh_runtime_limits()
         await self._reconcile_account()
         log.info(
             "live_executor.started",
             host=self._host,
             signature_type=self._signature_type,
             funder_set=bool(self._funder),
-            max_trade_usd=self.gate.cfg.max_trade_usd,
-            daily_loss_halt_usd=self.gate.cfg.daily_loss_halt_usd,
-            bankroll_cap_usd=self.gate.cfg.bankroll_cap_usd,
+            max_trade_usd=self.gate.effective_max_trade_usd,
+            daily_loss_halt_usd=self.gate.effective_daily_loss_halt_usd,
+            bankroll_cap_usd=self.gate.effective_bankroll_cap_usd,
             daily_realized_pnl=round(self.gate.daily_realized_pnl, 4),
             daily_buy_notional=round(self.gate.daily_buy_notional, 4),
             adopted_position=self._position_open,
@@ -609,19 +613,26 @@ class LiveExecutor:
 
     @property
     def max_trade_usd(self) -> float:
-        return self.gate.cfg.max_trade_usd
+        return self.gate.effective_max_trade_usd
 
     @property
     def daily_loss_halt_usd(self) -> float:
-        return self.gate.cfg.daily_loss_halt_usd
+        return self.gate.effective_daily_loss_halt_usd
 
     @property
     def bankroll_cap_usd(self) -> float | None:
-        return self.gate.cfg.bankroll_cap_usd
+        cap = self.gate.effective_bankroll_cap_usd
+        return cap if cap and cap > 0 else None
 
     @property
     def max_entry_slippage(self) -> float:
-        return self.gate.cfg.max_entry_slippage
+        return self.gate.effective_max_entry_slippage
+
+    @property
+    def exit_fill_timeout_seconds(self) -> float:
+        if self._exit_fill_timeout_override is not None:
+            return self._exit_fill_timeout_override
+        return self.gate.effective_exit_fill_timeout_seconds
 
     @property
     def kill_switch_path(self) -> Path:

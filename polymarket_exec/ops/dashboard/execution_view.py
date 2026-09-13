@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import config as _config
 from db import get_config
+from polymarket_bot import runtime_knobs as _knobs
 
 from polymarket_exec.ops.dashboard.panels import _data as data
 from polymarket_exec.ops.dashboard.panels import (
@@ -23,6 +24,7 @@ from polymarket_exec.ops.dashboard.panels import (
     market_selector,
     performance,
     ribbon,
+    settings as settings_panel,
     strategy,
     tca,
 )
@@ -32,10 +34,11 @@ async def market_selector_html() -> str:
     """Render the topbar asset/timeframe selector with open-position glow."""
     from polymarket_bot import market_selection
 
+    style = await _knobs.get("exit_style")
     return market_selector.render(
         selection=await market_selection.get_selection(),
         open_pnl=market_selector.open_market_pnl(
-            open_pos=await data.open_positions(_config.EXIT_STYLE),
+            open_pos=await data.open_positions(style),
             daily_open=await data.daily_positions(state="open"),
             tick=await data.latest_tick(),
         ),
@@ -48,7 +51,7 @@ async def execution_view_html() -> str:
     Same public signature and output contract as before the panel split —
     ``app.py`` consumes this directly.
     """
-    style = _config.EXIT_STYLE
+    style = await _knobs.get("exit_style")
     mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
     state = await get_config("polymarket_bot.state", "stopped") or "stopped"
     session_start = await get_config("polymarket_bot.session_start", None)
@@ -121,7 +124,7 @@ async def execution_view_html() -> str:
     # reflects the value the loop is actually enforcing this tick.
     max_trade_current = await get_runtime_max_trade_usd()
     max_trade_env = (
-        _config.TRADE_MAX_USD if is_live else _config.PAPER_MAX_TRADE_USD
+        _config.TRADE_MAX_USD if is_live else await _knobs.get("paper_max_trade_usd")
     )
     max_trade_effective = (
         max_trade_current if max_trade_current is not None else max_trade_env
@@ -137,18 +140,22 @@ async def execution_view_html() -> str:
     ]
     current_price = max(_px) if _px else None
 
-    # Active params shape the decision-engine gate eval — same thresholds the
-    # live loop uses, so the gate column never lies.
-    from polymarket_bot import params as _params
-    active = _params.load_active()
+    # Active knobs shape the decision-engine gate eval — same thresholds the
+    # live loop uses (#206), so the gate column never lies.
+    _entry_edge_min = await _knobs.get("paper_entry_edge_min")
+    _entry_edge_max = await _knobs.get("paper_entry_edge_max")
+    _min_confidence = await _knobs.get("paper_min_confidence")
+    _entry_min_remaining_seconds = await _knobs.get("paper_entry_min_remaining_seconds")
+    _min_entry_price = await _knobs.get("paper_min_entry_price")
+    _max_entry_price = await _knobs.get("paper_max_entry_price")
 
     class _GateParams:
-        entry_edge_min = active.entry_edge_min
-        entry_edge_max = active.entry_edge_max
-        min_confidence = active.min_confidence
-        entry_min_remaining_seconds = active.min_remaining_seconds
-        min_entry_price = active.min_entry_price
-        max_entry_price = active.max_entry_price
+        entry_edge_min = _entry_edge_min
+        entry_edge_max = _entry_edge_max
+        min_confidence = _min_confidence
+        entry_min_remaining_seconds = _entry_min_remaining_seconds
+        min_entry_price = _min_entry_price
+        max_entry_price = _max_entry_price
 
     ribbon_html = ribbon.render(
         mode=mode,
@@ -164,15 +171,17 @@ async def execution_view_html() -> str:
         tick=tick,
         last_live_at=last_live_at,
     )
+    bankroll_cap_current = await _knobs.get("live_bankroll_cap_usd")
+    loss_halt_current = await _knobs.get("live_daily_loss_halt_usd")
     guardrails_html = guardrails.render(
         day_spend=day_notional,
-        bankroll_cap=_config.TRADE_BANKROLL_CAP_USD,
+        bankroll_cap=bankroll_cap_current if bankroll_cap_current > 0 else None,
         submitted_count=submitted_count,
         submitted_notional=submitted_notional,
         day_pnl=day_pnl,
         live_pnl=live_pnl,
         paper_pnl=paper_pnl,
-        loss_halt_usd=_config.TRADE_DAILY_LOSS_HALT_USD,
+        loss_halt_usd=loss_halt_current,
         live_peak=live_peak,
         paper_peak=paper_peak,
         state=state,
@@ -215,6 +224,8 @@ async def execution_view_html() -> str:
     tca_html = tca.render(perf=perf, spread=spread)
     blotter_html = blotter.render(closed=closed, open_pos=open_pos, tick=tick)
     daily_altcoin_html = daily_altcoin.render(open_positions=daily_open, perf=daily_perf)
+    settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
+    settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)
 
     return (
         "<div class='execution-view'>"
@@ -229,5 +240,6 @@ async def execution_view_html() -> str:
         + tca_html
         + blotter_html
         + daily_altcoin_html
+        + settings_html
         + "</div></div>"
     )

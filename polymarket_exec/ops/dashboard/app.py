@@ -44,25 +44,16 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config import (  # type: ignore[import-untyped]
     BOT_MODE,
     CHAINLINK_STREAM_URL,
-    TRADE_BANKROLL_CAP_USD,
-    TRADE_DAILY_LOSS_HALT_USD,
     TRADE_MAX_USD,
     KILL_SWITCH_PATH,
     HISTORY_CSV_PATH,
-    PAPER_ENTRY_EDGE_MIN,
-    PAPER_MAX_TRADE_USD,
-    PAPER_MIN_CONFIDENCE,
-    PAPER_MIN_TRADE_USD,
-    PAPER_STOP_RETURN,
-    PAPER_TARGET_RETURN,
-    PAPER_TICK_SECONDS,
-    PAPER_TIME_EXIT_SECONDS,
     DASHBOARD_SERVER_NAME,
     DASHBOARD_SERVER_PORT,
     DATA_DIR,
     DB_PATH,
 )
 from db import connect, init_db  # type: ignore[import-untyped]
+from polymarket_bot import runtime_knobs as _knobs
 from logging_setup import get_logger  # type: ignore[import-untyped]
 from polymarket_exec.ops.dashboard.execution_view import (  # type: ignore[import-untyped]
     execution_view_html,
@@ -364,14 +355,18 @@ async def _paper_html() -> str:
     last_edge = "n/a" if paper.last_edge is None else f"{paper.last_edge:+.3f}"
     last_fair = "n/a" if paper.last_fair_up_prob is None else f"{paper.last_fair_up_prob:.1%}"
     last_up = "n/a" if paper.last_up_price is None else f"{paper.last_up_price:.3f}"
+    entry_edge_min = await _knobs.get("paper_entry_edge_min")
+    min_trade = await _knobs.get("paper_min_trade_usd")
+    max_trade = await _knobs.get("paper_max_trade_usd")
+    min_confidence = await _knobs.get("paper_min_confidence")
     return (
         "<div class='grid'>"
         f"{_kpi_card('Last tick', _fmt_relative(paper.last_tick_at), paper.last_feed_source or 'no feed yet')}"
         f"{_kpi_card('Spot', 'n/a' if paper.last_spot_price is None else f'${paper.last_spot_price:,.2f}', paper.last_window_slug or 'no window yet')}"
         f"{_kpi_card('Fair Up', last_fair, f'market up {last_up}')}"
-        f"{_kpi_card('Edge', last_edge, f'min edge {PAPER_ENTRY_EDGE_MIN:.3f}')}"
+        f"{_kpi_card('Edge', last_edge, f'min edge {entry_edge_min:.3f}')}"
         f"{_kpi_card('Avg PnL', _money(paper.avg_pnl_usd, signed=True), f'avg hold {avg_hold}')}"
-        f"{_kpi_card('Sizing', f'${PAPER_MIN_TRADE_USD:.0f}-${PAPER_MAX_TRADE_USD:.0f}', f'min confidence {PAPER_MIN_CONFIDENCE:.0%}')}"
+        f"{_kpi_card('Sizing', f'${min_trade:.0f}-${max_trade:.0f}', f'min confidence {min_confidence:.0%}')}"
         "</div>"
         "<div class='panel'><h3>Recent Paper Positions</h3>"
         f"{_position_cards(paper.recent_positions)}"
@@ -434,8 +429,8 @@ def _brief_html() -> str:
         + (
             "<p><strong>Mode: LIVE — orders are real.</strong> Start places risk-gated "
             "limit orders on the Polymarket CLOB (per-trade cap "
-            f"${TRADE_MAX_USD:.2f}, daily loss halt ${TRADE_DAILY_LOSS_HALT_USD:.2f}, "
-            f"bankroll cap {_fmt_cap(TRADE_BANKROLL_CAP_USD)}); Stop cancels and flattens. "
+            f"${TRADE_MAX_USD:.2f}, daily loss halt ${_knobs.cached('live_daily_loss_halt_usd'):.2f}, "
+            f"bankroll cap {_fmt_cap(_knobs.cached('live_bankroll_cap_usd') or None)}); Stop cancels and flattens. "
             f"Kill switch file: <code>{escape(str(KILL_SWITCH_PATH))}</code>.</p>"
             if _IS_LIVE
             else "<p>Mode: paper — this mode does not sign or submit live orders. The active "
@@ -462,21 +457,24 @@ def _scorecard_html() -> str:
 def _settings_html() -> str:
     return (
         "<h3>BTC 5m Paper Rules</h3>\n"
+        "<p class='dim'>Every value below is a live, dashboard-editable knob — see the "
+        "SETTINGS card on the BTC 5m tab to change one. This list just reflects the "
+        "current values.</p>\n"
         "<ul>\n"
         f"<li>Market scope: BTC Up/Down 5-minute windows only.</li>\n"
-        f"<li>Paper sizing: <strong>${PAPER_MIN_TRADE_USD:.0f}-${PAPER_MAX_TRADE_USD:.0f}</strong> by confidence.</li>\n"
-        f"<li>Tick cadence: <strong>{PAPER_TICK_SECONDS:.0f}s</strong>.</li>\n"
-        f"<li>Minimum confidence: <strong>{PAPER_MIN_CONFIDENCE:.0%}</strong>.</li>\n"
-        f"<li>Minimum edge: <strong>{PAPER_ENTRY_EDGE_MIN:.3f}</strong>.</li>\n"
-        f"<li>Target / stop return: <strong>{PAPER_TARGET_RETURN:.0%} / {PAPER_STOP_RETURN:.0%}</strong>.</li>\n"
-        f"<li>Time exit: <strong>{PAPER_TIME_EXIT_SECONDS}s</strong>.</li>\n"
+        f"<li>Paper sizing: <strong>${_knobs.cached('paper_min_trade_usd'):.0f}-${_knobs.cached('paper_max_trade_usd'):.0f}</strong> by confidence.</li>\n"
+        f"<li>Tick cadence: <strong>{_knobs.cached('paper_tick_seconds'):.0f}s</strong>.</li>\n"
+        f"<li>Minimum confidence: <strong>{_knobs.cached('paper_min_confidence'):.0%}</strong>.</li>\n"
+        f"<li>Minimum edge: <strong>{_knobs.cached('paper_entry_edge_min'):.3f}</strong>.</li>\n"
+        f"<li>Target / stop return: <strong>{_knobs.cached('paper_target_return'):.0%} / {_knobs.cached('paper_stop_return'):.0%}</strong>.</li>\n"
+        f"<li>Time exit: <strong>{_knobs.cached('paper_time_exit_seconds')}s</strong>.</li>\n"
         f"<li>Settlement-aware reference target: {CHAINLINK_STREAM_URL}</li>\n"
         "</ul>\n"
         + (
             "<p><strong>Mode: LIVE — orders are real.</strong> Live limits: per-trade cap "
             f"<strong>${TRADE_MAX_USD:.2f}</strong>, daily loss halt "
-            f"<strong>${TRADE_DAILY_LOSS_HALT_USD:.2f}</strong>, session bankroll cap "
-            f"<strong>{_fmt_cap(TRADE_BANKROLL_CAP_USD)}</strong>, max 1 open position, "
+            f"<strong>${_knobs.cached('live_daily_loss_halt_usd'):.2f}</strong>, session bankroll cap "
+            f"<strong>{_fmt_cap(_knobs.cached('live_bankroll_cap_usd') or None)}</strong>, max 1 open position, "
             f"kill switch <code>{escape(str(KILL_SWITCH_PATH))}</code>.</p>"
             if _IS_LIVE
             else "<p>Required local env vars are optional for paper mode except path overrides. "
@@ -583,7 +581,7 @@ def _get_settings_data() -> str:
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request) -> Any:
     """Main dashboard page."""
-    mode, live_hint = await _mode_context()
+    mode, live_armed, live_hint = await _mode_context()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -593,30 +591,37 @@ async def dashboard(request: Request) -> Any:
             "activity": await _get_activity_data(),
             "backtest": _get_backtest_data(),
             "mode": mode,
+            "live_armed": live_armed,
             "live_hint": live_hint,
             "static_version": _STATIC_VERSION,
         },
     )
 
 
-async def _mode_context() -> tuple[str, str]:
-    """(active mode, LIVE button hint) for the mode toggle.
-
-    LIVE is never disabled — the hint only reports whether it is armed. The
-    boot gate blocks real orders at Start, not the mode switch.
-    """
+def _live_armed() -> tuple[bool, str]:
+    """(armed, hint) — whether the live boot gate passes right now."""
     if not _BTC_BOT_AVAILABLE:
-        return BOT_MODE, "polymarket_bot unavailable"
-    mode = await current_mode()
+        return False, "polymarket_bot unavailable"
     try:
         assert_live_boot_allowed()
-        return mode, "Switch to LIVE — real CLOB orders"
+        return True, "Switch to LIVE — real CLOB orders"
     except LiveBootRefused as e:
-        return mode, f"LIVE not armed — Start will refuse: {e}"
+        return False, f"LIVE not armed — Start will refuse: {e}"
+
+
+async def _mode_context() -> tuple[str, bool, str]:
+    """(active mode, live armed, LIVE button hint) for the mode toggle.
+
+    LIVE is never disabled — armed only changes the hint and confirm text.
+    The boot gate blocks real orders at Start, not the mode switch.
+    """
+    armed, hint = _live_armed()
+    mode = await current_mode() if _BTC_BOT_AVAILABLE else BOT_MODE
+    return mode, armed, hint
 
 
 @app.post("/api/mode")
-async def api_mode(request: Request) -> dict[str, str]:
+async def api_mode(request: Request) -> dict[str, Any]:
     """Switch execution mode (paper/live) and restart the loop cleanly."""
     if not _BTC_BOT_AVAILABLE:
         return {"status": "error", "detail": "polymarket_bot not available"}
@@ -629,7 +634,14 @@ async def api_mode(request: Request) -> dict[str, str]:
         return {"status": "error", "detail": f"invalid mode {mode!r}"}
     try:
         status = await set_mode(mode)
-        return {"status": status.state, "mode": status.mode, "detail": status.detail}
+        armed, hint = _live_armed()
+        return {
+            "status": status.state,
+            "mode": status.mode,
+            "detail": status.detail,
+            "live_armed": armed,
+            "live_hint": hint,
+        }
     except Exception as e:  # noqa: BLE001
         log.exception("btc.set_mode_failed", error=str(e))
         return {"status": "error", "detail": f"Mode switch failed: {e}"}
@@ -841,6 +853,23 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
             "value": {"asset": sel.asset, "timeframe": sel.timeframe},
             "loop_supported": sel.loop_supported,
         }
+    # Generic dashboard-editable knobs (#206) — everything registered in
+    # ``runtime_knobs.KNOBS`` (paper strategy, live risk limits, auto-pause,
+    # daily scanner) is validated and persisted through one shared path
+    # instead of a bespoke branch per knob.
+    if key in _knobs.KNOBS:
+        try:
+            value = await _knobs.set(key, (body or {}).get("value"))
+        except ValueError as e:
+            return {"status": "error", "detail": str(e)}
+        knob = _knobs.KNOBS[key]
+        await notify(
+            "runtime_config",
+            f"Operator set {knob.label} to {value} (runtime — no restart)",
+            {"key": key, "value": value},
+        )
+        log.info("btc.runtime_config_set", key=key, value=value)
+        return {"status": "ok", "key": key, "value": value}
     return {"status": "error", "detail": f"unknown runtime key {key!r}"}
 
 
