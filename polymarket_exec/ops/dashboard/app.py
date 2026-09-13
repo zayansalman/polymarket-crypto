@@ -113,12 +113,23 @@ async def _lifespan(app: FastAPI):
     daily_stop_event = asyncio.Event()
     daily_task = asyncio.create_task(_run_daily_scanner(daily_stop_event))
 
+    # Order-size ticket quotes: polls the selected market's book only while a
+    # dashboard is open (demand-driven), independent of the trading loop.
+    from polymarket_exec.ops.dashboard import quote_feed
+
+    quote_stop_event = asyncio.Event()
+    quote_task = asyncio.create_task(quote_feed.run_forever(quote_stop_event))
+
     yield
 
-    daily_stop_event.set()
-    daily_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await daily_task
+    for stop_event, task in (
+        (daily_stop_event, daily_task),
+        (quote_stop_event, quote_task),
+    ):
+        stop_event.set()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 # ---------------------------------------------------------------------------
