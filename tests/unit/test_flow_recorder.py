@@ -170,3 +170,16 @@ def test_current_registry() -> None:
     finally:
         fr.set_current(None)
     assert fr.current() is None
+
+
+def test_dashboard_lifespan_registers_and_clears_the_recorder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_db, "DB_PATH", tmp_path / "t.db")
+    from fastapi.testclient import TestClient
+
+    from polymarket_exec.ops.dashboard.app import app
+
+    with TestClient(app):
+        assert isinstance(fr.current(), fr.FlowRecorder)
+    assert fr.current() is None
