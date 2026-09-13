@@ -79,6 +79,8 @@ _RUNTIME_MAX_TRADE_KEY = "runtime.max_trade_usd"
 # the dollar cap above: the bot sizes each clip to this many shares and the
 # per-trade dollar cap derives from it (N shares cost ≤ ~$N since prices < 1).
 _RUNTIME_TRADE_SHARES_KEY = "runtime.trade_shares"
+# Trade size when the operator hasn't set one: the Polymarket venue minimum.
+DEFAULT_TRADE_SHARES = 5.0
 
 # Legacy keys, written by the live-only counter before issue #64. Read once at
 # boot if the new keys are absent, then never touched again — the next persist
@@ -326,6 +328,13 @@ class RiskGate:
     def runtime_trade_shares(self) -> float | None:
         """The operator-set trade size in shares (#89), or None when unset."""
         return self._runtime_trade_shares
+
+    @property
+    def trade_shares(self) -> float:
+        """Shares per clip: the operator's size, else ``DEFAULT_TRADE_SHARES``."""
+        if self._runtime_trade_shares is not None:
+            return self._runtime_trade_shares
+        return DEFAULT_TRADE_SHARES
 
     @property
     def effective_max_trade_usd(self) -> float:
