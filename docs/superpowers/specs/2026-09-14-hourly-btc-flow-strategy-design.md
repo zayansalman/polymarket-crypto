@@ -92,6 +92,33 @@ about 52.25% as a taker (fee plus 1-cent spread) and 50% as a maker. The strateg
 therefore records every hour so forward results show whether 57–60% holds. Nothing
 auto-disables a tier.
 
+### Update: open-interest filter (walk-forward, pre-registered 2026-09-14)
+
+Thresholds were set each month using only earlier data; out-of-sample covers
+2024-04 to 2026-08. Open interest is Bybit BTCUSDT linear hourly, free back to 2023-10.
+
+| Rule | Out-of-sample | Latest 11 months | Per year |
+|---|---|---|---|
+| Tier A | 57.3% [53.3, 61.1] n=620 | 58.2% n=213 | 59 / 55 / 58% |
+| **Tier A + open interest did not rise during H-1** | **60.5% [54.9, 65.8] n=306** | **61.4% [52.2, 69.8] n=114** | 59 / 61 / 61% (half-years 54–63%) |
+| Tier A + open interest rose during H-1 | 54.1% n=314 | 54.5% n=99 | — |
+| Strict Tier A (top-decile push, CLV ±0.9) | 62.9% [55.5, 69.7] n=175 | 57.5% n=73 | — |
+
+Reading:
+
+- Aggressive spot flow that does **not** add open interest (closing, covering,
+  liquidations) reverts about 60% of the time. Flow that opens new positions reverts
+  about 51–54%.
+- Both bet sides hold: bet Down 58.9%, bet Up 61.8%. About 2.4 bets a week.
+- **Not yet proven.** Eight rules were tested (this one passes FDR at q=0.10). The
+  pre-set bar required a lower bound of at least 55%, and this rule's is 54.9%. The
+  open-interest split does not show up on the broader flow-push signal. About 2–3
+  more months of forward bets would settle the bound.
+- Timing: the rule needs open interest at H:00. Bybit's hourly history publishes about
+  1–2 minutes late, so live use should sample open interest itself at the hour
+  boundary. The flow recorder already samples Binance open interest each hour; Bybit
+  sampling would be a small addition.
+
 ## Goals
 
 1. Trade the hourly BTC market through the one shared paper/live pipeline, with
