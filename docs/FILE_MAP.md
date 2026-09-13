@@ -6,12 +6,12 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 59 | Configuration for the local Polymarket crypto trading lab. |
-| `dashboard.py` | WIRED | 2 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 38 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
+| `config.py` | WIRED | 29 | Configuration for the local Polymarket crypto trading lab. |
+| `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
+| `db.py` | WIRED | 15 | SQLite storage for the local Polymarket crypto trading lab. |
+| `logging_setup.py` | WIRED | 10 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 10 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 12 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/adaptive.py` | WIRED | 3 | Adaptive risk controller (#36): edge-decay auto-pause + calibration. |
 | `polymarket_bot/backtest.py` | WIRED | 5 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
 | `polymarket_bot/calibration.py` | WIRED | 3 | Probability calibration for the side-relative model output (#37). |
@@ -25,6 +25,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
+| `polymarket_bot/market_selection.py` | WIRED | 3 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
 | `polymarket_bot/pairarb/feed.py` | WIRED | 2 | Fill feed for the copier — one interface, two transports (#182). |
 | `polymarket_bot/pairarb/fills.py` | WIRED | 1 | Back-of-queue maker fill simulation and window settlement (#182). |
@@ -80,6 +81,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → gates → final banner + tail. |
 | `polymarket_exec/ops/dashboard/panels/guardrails.py` | WIRED | 1 | Risk guardrails: daily spend, loss-halt, bot state, recent BLOCKED entries. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
+| `polymarket_exec/ops/dashboard/panels/market_selector.py` | WIRED | 1 | Topbar market selector: asset buttons over timeframe buttons. |
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |
 | `polymarket_exec/ops/dashboard/panels/ribbon.py` | WIRED | 1 | Top status ribbon: pause/kill chips, P&L stats, feed liveness chips. |
 | `polymarket_exec/ops/dashboard/panels/strategy.py` | WIRED | 1 | Strategy panel: active params, proposed-vs-applied delta, calibration. |
@@ -94,7 +96,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/strategy/signal.py` | DEAD? | 0 | Signal composition — bridge raw edge into a fully typed :class:`Signal`. |
 | `polymarket_exec/strategy/sizing.py` | WIRED | 1 | Position sizing derived from signal confidence and strategy parameters. |
 | `tools/backtest_btc_strategy.py` | cli | 0 | Run the BTC strategy backtest and parameter optimizer. |
-| `tools/chainlink_lead_lag.py` | cli | 1 | Chainlink-vs-Binance BTC lead-lag analysis (issue #57). |
+| `tools/chainlink_lead_lag.py` | cli | 0 | Chainlink-vs-Binance BTC lead-lag analysis (issue #57). |
 | `tools/clear_auto_pause.py` | cli | 0 | Clear the adaptive auto-pause and resume entries (#36). |
 | `tools/copytrade_dashboard.py` | cli | 0 | Dashboard for the copy-trade shadow ledgers (#182). |
 | `tools/copytrade_live.py` | cli | 0 | LIVE copy-trade executor — mirrors a target wallet with real funds (#182). |
@@ -102,17 +104,17 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `tools/copytrade_shadow.py` | cli | 0 | Live copy-trade shadow — mirror a target wallet, priced honestly (#182). |
 | `tools/demo_snapshot.py` | cli | 0 | Print a BTC paper trading snapshot. |
 | `tools/fetch_polymarket_trades.py` | cli | 0 | Pull this account's Polymarket trade history via the CLOB API → CSV. |
-| `tools/forecast_journal.py` | cli | 1 | Slow-market forecasting-skill pilot: journal + scoring (issue #162). |
-| `tools/gen_docs.py` | cli | 1 | Generate the machine-derived sections of the agent docs. |
+| `tools/forecast_journal.py` | cli | 0 | Slow-market forecasting-skill pilot: journal + scoring (issue #162). |
+| `tools/gen_docs.py` | cli | 0 | Generate the machine-derived sections of the agent docs. |
 | `tools/live_detect_wallet.py` | cli | 0 | Detect the Polymarket funder wallet + signature type from a signer key (#34). |
 | `tools/live_preflight.py` | cli | 0 | Live-launch preflight: verify the .env wallet config end to end (issue #32). |
 | `tools/live_setup.py` | cli | 0 | One-time live-trading onboarding (issues #32, #33). |
-| `tools/offline_replay.py` | cli | 1 | Offline replay of the BTC 5-m pricing-model strategy on HF Polymarket data. |
+| `tools/offline_replay.py` | cli | 0 | Offline replay of the BTC 5-m pricing-model strategy on HF Polymarket data. |
 | `tools/pairarb_report.py` | cli | 0 | Report on the two-sided pair shadow ledger (#182). |
 | `tools/pairarb_shadow.py` | cli | 0 | Live shadow runner for two-sided maker quoting on 5m Up/Down markets (#182). |
-| `tools/race_status.py` | cli | 1 | One-shot fee-true race standings + deploy-bar tracker (issue #150). |
-| `tools/reconcile_live_ledger.py` | cli | 1 | Reconcile the live paper-ledger against the REAL Polymarket account (issue #102). |
-| `tools/regime_attribution.py` | cli | 1 | Regime-attribution instrument for the shadow forward-tester (issue #120). |
-| `tools/replay_race.py` | cli | 1 | Tick-replay backtest for the shadow roster over the FULL quote history (#144). |
-| `tools/shadow_performance.py` | cli | 3 | Per-model performance comparison for the shadow forward-tester. |
-| `tools/venue_recorder.py` | cli | 2 | Venue recorder — the research program's one blocking build item (C17). |
+| `tools/race_status.py` | cli | 0 | One-shot fee-true race standings + deploy-bar tracker (issue #150). |
+| `tools/reconcile_live_ledger.py` | cli | 0 | Reconcile the live paper-ledger against the REAL Polymarket account (issue #102). |
+| `tools/regime_attribution.py` | cli | 0 | Regime-attribution instrument for the shadow forward-tester (issue #120). |
+| `tools/replay_race.py` | cli | 0 | Tick-replay backtest for the shadow roster over the FULL quote history (#144). |
+| `tools/shadow_performance.py` | cli | 1 | Per-model performance comparison for the shadow forward-tester. |
+| `tools/venue_recorder.py` | cli | 1 | Venue recorder — the research program's one blocking build item (C17). |

@@ -37,6 +37,35 @@ body {
 .brand .sub { display:block; font-family: var(--font-ui); font-size: 10.5px; letter-spacing: 0.5px; color: var(--muted); margin-top: 2px; }
 .controls { display: flex; align-items: center; gap: 8px; }
 
+/* market selector: asset row over timeframe row */
+.topbar { flex-wrap: wrap; gap: 10px 16px; }
+.brand, .controls, .btn { white-space: nowrap; }
+#market-selector { flex: 1; display: flex; justify-content: center; }
+@media (max-width: 1180px) {
+  #market-selector { order: 3; flex-basis: 100%; }
+}
+.mkt-sel { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.mkt-row { display: inline-flex; gap: 4px; }
+.mkt-btn {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .6px; padding: 5px 10px; min-width: 44px;
+  background: var(--bg); color: var(--muted); border: 1px solid var(--border-strong); border-radius: 0;
+  cursor: pointer; transition: all .12s;
+}
+.mkt-row:first-child .mkt-btn { display: inline-flex; align-items: center; gap: 5px; }
+.mkt-logo { flex: none; display: block; }
+.mkt-row + .mkt-row .mkt-btn { font-size: 10.5px; padding: 3px 8px; min-width: 38px; }
+.mkt-btn:hover { color: var(--text); border-color: var(--text); }
+.mkt-btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.mkt-sel.unwired .mkt-btn.active { background: var(--bg-alt); color: var(--warn); border-color: var(--warn); }
+.mkt-btn.glow-pos { color: var(--pos); border-color: var(--pos); background: rgba(27,122,67,.10); box-shadow: 0 0 12px 1px rgba(27,122,67,.65); }
+.mkt-btn.glow-neg { color: var(--neg); border-color: var(--neg); background: rgba(179,38,30,.10); box-shadow: 0 0 12px 1px rgba(179,38,30,.65); }
+.mkt-btn.active.glow-pos { background: var(--pos); color: var(--bg); }
+.mkt-btn.active.glow-neg { background: var(--neg); color: var(--bg); }
+.mkt-btn.glow-flat { border-color: var(--muted); box-shadow: 0 0 10px rgba(107,112,120,.55); }
+.mkt-btn.glow-pos, .mkt-btn.glow-neg { animation: mkt-pulse 2.4s ease-in-out infinite; }
+@keyframes mkt-pulse { 50% { box-shadow: 0 0 4px 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .mkt-btn.glow-pos, .mkt-btn.glow-neg { animation: none; } }
+
 /* paper / live mode selector */
 .mode-toggle { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 0; overflow: hidden; margin-right: 4px; }
 .mode-opt {
