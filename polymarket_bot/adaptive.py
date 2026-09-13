@@ -57,11 +57,16 @@ async def rolling_performance(
     ``since`` (an ISO ``opened_at``) scopes to the current run session so the
     live safety layer judges THIS deployment's edge, not stale trades from an
     earlier strategy config in the same journal.
+
+    Only model entries count: operator Market-mode buys (``entry_source =
+    'market'``) must never auto-pause the model. NULL rows predate the column
+    and are model entries.
     """
     sql = (
         "SELECT realized_pnl_usd, notional_usd, edge, entry_price "
         "FROM paper_positions "
-        "WHERE state='closed' AND quote_source='clob' AND strategy_style=?"
+        "WHERE state='closed' AND quote_source='clob' AND strategy_style=? "
+        "AND COALESCE(entry_source, 'model') = 'model'"
     )
     params: list[Any] = [style]
     if since:

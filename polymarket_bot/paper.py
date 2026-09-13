@@ -66,6 +66,8 @@ from polymarket_exec.execution.gate import (
 )
 from polymarket_bot.adaptive import evaluate_and_maybe_pause
 from polymarket_bot import calibration as _calibration
+from polymarket_bot import manual_entry
+from polymarket_bot.manual_entry import EntryOutcome, ManualEntryIntent
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
 from polymarket_bot.shadow.types import SnapshotView
@@ -184,6 +186,20 @@ _MIN_CHAINLINK_SIGMA_POINTS = 30
 
 BINANCE_API = BINANCE_API_BASE
 FIVE_MINUTES = MARKET_TIMEFRAME_MINUTES * 60
+
+
+def _execution_strategy() -> str:
+    """'market' when the operator picked Market (manual Buy Up/Down), else 'model'.
+
+    Enum decode doesn't re-validate a persisted value, so anything that isn't
+    exactly "market" keeps the default model auto-entries.
+    """
+    return "market" if _knobs.cached("execution_strategy") == "market" else "model"
+
+
+def _runner_mode() -> str:
+    """The railroad switch as a label: an attached live executor means LIVE."""
+    return "live" if _live_executor is not None else "paper"
 
 
 def _strategy_params() -> StrategyParams:
@@ -446,6 +462,9 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             await executor.start()
         except Exception as e:  # noqa: BLE001 — includes LiveBootRefused
             error = f"{type(e).__name__}: {e!s}"
+            # A Market click accepted while the executor was booting has no
+            # runner to act on it — refuse it now, not after the click times out.
+            manual_entry.cancel_pending("LIVE mode refused to start — order not placed")
             await set_config("polymarket_bot.state", "stopped")
             await set_config("polymarket_bot.mode", "live")
             await _set_detail(
@@ -506,6 +525,13 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
                 error = f"{type(e).__name__}: {e!s}"
                 log.warning("paper_loop.tick_failed", error=error)
                 await _set_detail(f"BTC {mode} loop tick failed: {error}")
+                # A Market click still waiting was never acted on this tick.
+                # Refuse it loudly: leaving it would also keep the wake flag set,
+                # so a failing tick would retry back-to-back with no sleep.
+                manual_entry.cancel_pending(
+                    f"Bot tick failed ({error}) — order not placed, click again",
+                    status="error",
+                )
             # Issue #76: a breached daily loss halt STOPS the bot (cancel +
             # flatten via the finally below), not just blocks entries — so the
             # operator resets the tally and restarts to resume trading.
@@ -531,6 +557,9 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             feed.stop()
             feed_task.cancel()
             return
+        # Any Market click still waiting belongs to this (stopping) loop.
+        # Skipped above for a superseded loop: its successor owns the slot.
+        manual_entry.cancel_pending("Bot stopped — order not placed")
         if _live_executor is not None:
             # Flatten BEFORE dropping the executor: this thread owns it, so
             # Stop can never paper-close a live position (which would strand
@@ -595,8 +624,24 @@ async def paper_tick_once() -> PaperSnapshot:
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
         await _close_due_positions(snapshot, client)
+        # Market mode: an operator Buy click is consumed HERE, on the runner's
+        # own loop, after exits and against this tick's fresh book — never on
+        # the dashboard loop. A click replaces the model entry for this tick;
+        # in Market mode the model never auto-enters.
+        intent = manual_entry.take()
         if not kill_active:
-            await _maybe_open_position(snapshot)
+            if intent is not None:
+                await _consume_manual_intent(intent, snapshot)
+            elif _execution_strategy() == "model":
+                await _maybe_open_position(snapshot)
+        elif intent is not None and intent.future.set_running_or_notify_cancel():
+            manual_entry.resolve(
+                intent,
+                EntryOutcome(
+                    "blocked", "Kill switch is armed — entries are off",
+                    mode=_runner_mode(), side=intent.side,
+                ),
+            )
         await _record_and_settle_shadow(snapshot, client)
     return snapshot
 
@@ -1316,6 +1361,7 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
 
 
 async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
+    """Model auto-entry: the strategy's own prechecks, then the shared pipeline."""
     if not snapshot.signal_side or snapshot.notional_usd <= 0:
         return
     # Adaptive edge-decay gate (#36): pause new entries when rolling expectancy
@@ -1329,40 +1375,81 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
             reason=pause_reason,
         )
         return
-    async with connect() as db:
-        async with db.execute(
-            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
-        ) as cur:
-            if (await cur.fetchone())["n"]:
-                return
-        if _knobs.cached('exit_style') == "settle":
-            # One entry per window, ever (issue #28): re-entering the same
-            # window after an exit pays the spread again for the same signal
-            # — the churn that lost the scalp-style soak.
+    if _knobs.cached('exit_style') == "settle":
+        # One entry per window, ever (issue #28): re-entering the same
+        # window after an exit pays the spread again for the same signal
+        # — the churn that lost the scalp-style soak.
+        async with connect() as db:
             async with db.execute(
                 "SELECT COUNT(*) AS n FROM paper_positions WHERE window_slug = ?",
                 (snapshot.window_slug,),
             ) as cur:
                 if (await cur.fetchone())["n"]:
                     return
+    await _execute_entry(
+        snapshot,
+        snapshot.signal_side,
+        snapshot.notional_usd,
+        entry_source="model",
+        entry_reason=snapshot.reason,
+        confidence=snapshot.confidence,
+        edge=snapshot.edge,
+        reference_price=None,
+    )
+
+
+async def _execute_entry(
+    snapshot: PaperSnapshot,
+    side: str,
+    notional: float,
+    *,
+    entry_source: str,
+    entry_reason: str,
+    confidence: float | None,
+    edge: float | None,
+    reference_price: float | None,
+) -> EntryOutcome:
+    """Open one position through the entry pipeline shared by paper and live.
+
+    Model auto-entries and Market-mode operator clicks both land here, so every
+    safety check applies to both: max one open position, an executable ask,
+    the venue-minimum bump, the top-of-book cap, and the shared RiskGate. The
+    only branch is the railroad switch — an attached live executor places a
+    real order, otherwise the paper fill is journaled.
+
+    ``reference_price`` is the price the entry expects to pay (the ask the
+    operator saw when clicking). ``None`` — the model path — means this tick's
+    ask, so the model's gate and executor inputs are exactly what they were
+    before the split. Every exit returns an :class:`EntryOutcome` saying why.
+    """
+    mode = _runner_mode()
+    async with connect() as db:
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
+        ) as cur:
+            if (await cur.fetchone())["n"]:
+                return EntryOutcome(
+                    "blocked",
+                    "A position is already open (max 1) — wait for it to exit",
+                    mode=mode, side=side,
+                )
     # Honest paper fill (issue #22): a BUY fills at the side's best ASK,
     # capped by the top-of-book size. No ask means no executable entry.
     entry_price = (
         snapshot.market_up_price
-        if snapshot.signal_side == "Up"
+        if side == "Up"
         else snapshot.market_down_price
     )
     if entry_price is None or entry_price <= 0:
         log.info(
             "paper_entry.skipped_no_ask",
             window_slug=snapshot.window_slug,
-            side=snapshot.signal_side,
+            side=side,
         )
-        return
+        return EntryOutcome("blocked", f"No ask on the {side} book", mode=mode, side=side)
     top_size = (
-        snapshot.up_ask_size if snapshot.signal_side == "Up" else snapshot.down_ask_size
+        snapshot.up_ask_size if side == "Up" else snapshot.down_ask_size
     )
-    notional = snapshot.notional_usd
     shares = notional / entry_price
     # Parity with live auto-bump (#87): round a sub-minimum clip up to the venue
     # share minimum so paper previews the same fill live would place.
@@ -1374,20 +1461,32 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
             log.info(
                 "paper_entry.skipped_empty_top_of_book",
                 window_slug=snapshot.window_slug,
-                side=snapshot.signal_side,
+                side=side,
             )
-            return
+            return EntryOutcome(
+                "blocked", f"No size at the top of the {side} book", mode=mode, side=side
+            )
         if shares > top_size:
             shares = top_size
             notional = shares * entry_price
             log.info(
                 "paper_entry.size_capped_to_top_of_book",
                 window_slug=snapshot.window_slug,
-                side=snapshot.signal_side,
+                side=side,
                 shares=round(shares, 4),
                 notional=round(notional, 4),
             )
 
+    # What the slippage guard compares the book ask against.
+    side_price = reference_price if reference_price is not None else entry_price
+    row_fields: dict[str, Any] = {
+        "side": side,
+        "confidence": confidence,
+        "edge": edge,
+        "entry_reason": entry_reason,
+        "entry_source": entry_source,
+    }
+    status = "filled"
     executor = _live_executor
     if executor is not None:
         # The ledger is authoritatively flat here (the open-row check above
@@ -1403,11 +1502,11 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
         # could leave a REAL position with no ledger row — unmanaged by
         # every exit path. The shared RiskGate runs inside submit_entry.
         position_id = await _insert_position_row(
-            snapshot, entry_price, notional, shares
+            snapshot, entry_price, notional, shares, **row_fields
         )
         result = await executor.submit_entry(
-            token_id=_token_id_for_side(snapshot, snapshot.signal_side),
-            side_price=entry_price,
+            token_id=_token_id_for_side(snapshot, side),
+            side_price=side_price,
             notional_usd=notional,
             window_slug=snapshot.window_slug,
         )
@@ -1415,11 +1514,19 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
             # Blocked/error — journaled in live_orders. Remove the
             # provisional row so the ledger mirrors live intent.
             await _delete_position_row(position_id)
-            return
+            why = result.reason or result.status
+            return EntryOutcome(
+                "blocked",
+                f"Blocked: {why}" if result.status == "BLOCKED"
+                else f"Order not placed ({result.status}): {why}",
+                mode=mode, side=side,
+            )
         entry_price = result.price or entry_price
         notional = result.notional_usd or notional
         shares = result.size or (notional / entry_price)
         await _update_position_terms(position_id, entry_price, notional, shares)
+        if not _live_entry_fully_matched(executor):
+            status = "placed"
     else:
         # Paper mode: route the entry through the SAME RiskGate live uses
         # (issue #64). A paper trade that paper opens is one live would have
@@ -1432,10 +1539,12 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
                     notional_usd=notional,
                     position_open=False,  # already checked the ledger above
                     entry_order_resting=False,  # paper has no resting orders
-                    # Same snapshot for both → slippage delta is 0; honest
-                    # live-grade slippage parity requires re-quoting the book
-                    # at this point (follow-up after issue #64).
-                    side_price=entry_price,
+                    # The model passes this tick's ask for both → slippage
+                    # delta 0 (honest live-grade parity would re-quote the
+                    # book here, follow-up after issue #64). A Market click
+                    # passes the ask the operator saw, so paper enforces the
+                    # same click-to-fill slippage cap live does.
+                    side_price=side_price,
                     best_ask=entry_price,
                 )
             )
@@ -1443,39 +1552,163 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
                 await journal_live_order(
                     intent="ENTRY", side="BUY", status="BLOCKED",
                     window_slug=snapshot.window_slug,
-                    token_id=_token_id_for_side(snapshot, snapshot.signal_side),
+                    token_id=_token_id_for_side(snapshot, side),
                     price=entry_price, size=shares, notional_usd=notional,
                     error=blocked, mode="paper",
                 )
                 log.info(
                     "paper_entry.blocked_by_gate",
                     window_slug=snapshot.window_slug,
-                    side=snapshot.signal_side,
+                    side=side,
                     reason=blocked,
                 )
-                return
-        await _insert_position_row(snapshot, entry_price, notional, shares)
+                return EntryOutcome("blocked", f"Blocked: {blocked}", mode=mode, side=side)
+        position_id = await _insert_position_row(
+            snapshot, entry_price, notional, shares, **row_fields
+        )
         if gate is not None:
             await gate.record_buy_notional(round(entry_price * shares, 4))
     label = "LIVE" if executor is not None else "Paper"
+    source_tag = "[market] " if entry_source == "market" else ""
     await notify(
         "live_entry" if executor is not None else "paper_entry",
-        f"{label} BUY {snapshot.signal_side} ${notional:.2f} @ {entry_price:.3f}",
-        {"window_slug": snapshot.window_slug, "confidence": snapshot.confidence},
+        f"{source_tag}{label} BUY {side} ${notional:.2f} @ {entry_price:.3f}",
+        {"window_slug": snapshot.window_slug, "confidence": confidence},
     )
     log.info(
         "paper_position.opened",
         mode="live" if executor is not None else "paper",
         window_slug=snapshot.window_slug,
-        side=snapshot.signal_side,
+        side=side,
         notional=notional,
         entry_price=entry_price,
+        entry_source=entry_source,
+    )
+    detail = f"{label} BUY {side} {shares:.2f} sh @ {entry_price:.3f} (${notional:.2f})"
+    if status == "placed":
+        detail += " placed — not fully matched yet; the rest rests on the book"
+    return EntryOutcome(
+        status, detail, mode=mode, side=side, price=entry_price,
+        shares=shares, notional_usd=notional, position_id=position_id,
     )
 
 
+def _live_entry_fully_matched(executor: LiveExecutor) -> bool:
+    """True when the live entry just placed matched in full at placement.
+
+    ``submit_entry`` keeps its resting-order id only while part of the order
+    still rests on the book; a fully matched placement drops it (live.py).
+    """
+    return getattr(executor, "_entry_order_id", None) is None
+
+
+async def _consume_manual_intent(
+    intent: ManualEntryIntent, snapshot: PaperSnapshot
+) -> None:
+    """Act on one operator Buy click (Market mode) and resolve its future.
+
+    Runs inside ``paper_tick_once`` on the runner thread, against this tick's
+    book. The click goes through the SAME ``_execute_entry`` the model uses, so
+    every safety check still applies (kill switch, loss halt, max 1, per-trade
+    and bankroll caps, slippage vs the ask the operator saw, venue minimum,
+    top-of-book cap, resync_flat, row-before-order). Model-quality filters do
+    not: edge/confidence bands, entry price band, min seconds remaining, the
+    feed-degraded skip, adaptive auto-pause, settle one-entry-per-window.
+    The future always resolves.
+    """
+    if not intent.future.set_running_or_notify_cancel():
+        return  # the dashboard stopped waiting before the runner got here
+    try:
+        outcome = await _manual_entry_outcome(intent, snapshot)
+    except Exception as exc:  # noqa: BLE001 — the click must always get an answer
+        log.error(
+            "market_entry.failed",
+            side=intent.side,
+            window_slug=snapshot.window_slug,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        outcome = EntryOutcome(
+            "error", f"Market order failed: {exc}", mode=_runner_mode(), side=intent.side
+        )
+    manual_entry.resolve(intent, outcome)
+    log.info(
+        "market_entry.resolved",
+        side=intent.side,
+        window_slug=snapshot.window_slug,
+        status=outcome.status,
+        detail=outcome.detail,
+    )
+
+
+async def _manual_entry_outcome(
+    intent: ManualEntryIntent, snapshot: PaperSnapshot
+) -> EntryOutcome:
+    """Refuse a stale or mismatched click, else size it and run the shared entry."""
+    mode = _runner_mode()
+    side = intent.side
+
+    def refuse(detail: str) -> EntryOutcome:
+        return EntryOutcome("blocked", detail, mode=mode, side=side)
+
+    if time.monotonic() - intent.requested_at > manual_entry.INTENT_TTL_SECONDS:
+        return refuse("Click expired before the bot could act — click again")
+    if mode != intent.mode:
+        return refuse("Mode changed — click again")
+    if _execution_strategy() != "market":
+        return refuse("Execution strategy is Model — switch to Market")
+    if side not in ("Up", "Down"):
+        return refuse(f"Unknown side {side!r} — use Up or Down")
+    if snapshot.window_slug != intent.window_slug:
+        return refuse("Window rolled to a new market — click again")
+    if snapshot.remaining_seconds <= 0:
+        return refuse("Window already ended")
+    ask = snapshot.market_up_price if side == "Up" else snapshot.market_down_price
+    bid = snapshot.up_best_bid if side == "Up" else snapshot.down_best_bid
+    if ask is None or ask <= 0:
+        return refuse(f"No ask on the {side} book")
+    if bid is not None and bid > ask:
+        return refuse(f"The {side} book is crossed (bid {bid:.3f} > ask {ask:.3f}) — click again")
+    # Size: the operator's CONTROLS share count, else the venue minimum.
+    gate = _risk_gate
+    trade_shares = gate.runtime_trade_shares if gate is not None else None
+    shares = trade_shares if trade_shares and trade_shares > 0 else DEFAULT_MIN_ORDER_SIZE
+    # The ask the operator saw is the slippage reference; a missing or junk
+    # value falls back to this tick's ask (no slippage delta).
+    seen_ask = intent.seen_ask if intent.seen_ask and intent.seen_ask > 0 else None
+    return await _execute_entry(
+        snapshot,
+        side,
+        shares * ask,
+        entry_source="market",
+        entry_reason=f"market: operator Buy {side} @ {ask:.3f}",
+        confidence=None,
+        edge=None,
+        reference_price=seen_ask,
+    )
+
+
+# Default for _insert_position_row's overrides: take the field from the snapshot.
+_FROM_SNAPSHOT: Any = object()
+
+
 async def _insert_position_row(
-    snapshot: PaperSnapshot, entry_price: float, notional: float, shares: float
+    snapshot: PaperSnapshot,
+    entry_price: float,
+    notional: float,
+    shares: float,
+    *,
+    side: str | None = _FROM_SNAPSHOT,
+    confidence: float | None = _FROM_SNAPSHOT,
+    edge: float | None = _FROM_SNAPSHOT,
+    entry_reason: str | None = _FROM_SNAPSHOT,
+    entry_source: str = "model",
 ) -> int:
+    """Journal one open position row.
+
+    The overrides default to the snapshot's model fields. A Market click passes
+    its own side and reason with NULL confidence/edge, so model stats and
+    calibration never read an operator buy as a model prediction.
+    """
     mode = "live" if _live_executor is not None else "paper"
     async with connect() as db:
         cur = await db.execute(
@@ -1483,25 +1716,26 @@ async def _insert_position_row(
             INSERT INTO paper_positions(
               opened_at, window_slug, market_question, side, state, entry_price,
               notional_usd, shares, opened_spot, confidence, edge, entry_reason,
-              feed_source, quote_source, strategy_style, mode
-            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              feed_source, quote_source, strategy_style, mode, entry_source
+            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.created_at,
                 snapshot.window_slug,
                 snapshot.market_question,
-                snapshot.signal_side,
+                snapshot.signal_side if side is _FROM_SNAPSHOT else side,
                 entry_price,
                 notional,
                 shares,
                 snapshot.spot_price,
-                snapshot.confidence,
-                snapshot.edge,
-                snapshot.reason,
+                snapshot.confidence if confidence is _FROM_SNAPSHOT else confidence,
+                snapshot.edge if edge is _FROM_SNAPSHOT else edge,
+                snapshot.reason if entry_reason is _FROM_SNAPSHOT else entry_reason,
                 snapshot.feed_source,
                 snapshot.quote_source,
                 _knobs.cached('exit_style'),
                 mode,
+                entry_source,
             ),
         )
         position_id = int(cur.lastrowid or 0)
@@ -1855,8 +2089,12 @@ def _exit_reason(snapshot: PaperSnapshot, pos: dict[str, Any], exit_price: float
     # Pricing-model-based exit only when the pricing model is trustworthy this tick:
     # a degraded settlement feed or an unquotable book pins edge near zero,
     # which must not masquerade as "the edge genuinely collapsed".
+    # Skipped for operator Market-mode buys: this tick's MODEL edge says
+    # nothing about a discretionary position, and would dump it on the next
+    # tick. TIME/TARGET/STOP above and settlement still apply to those rows.
     if (
-        not snapshot.feed_degraded
+        pos.get("entry_source") != "market"
+        and not snapshot.feed_degraded
         and snapshot.has_executable_quote
         and abs(snapshot.edge) < _knobs.cached('paper_entry_edge_min') / 2
     ):
@@ -1879,11 +2117,19 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
         )
     else:
         header = "BTC paper loop running. No real orders are placed.\n\n"
+    # Market mode: the model signal is still computed and shown, but it never
+    # trades — say so, so the status line doesn't imply an auto-entry.
+    market_note = (
+        "Market mode — model auto-entries off (signal below is reference only)\n"
+        if _execution_strategy() == "market"
+        else ""
+    )
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
         f"Polymarket Up: {snapshot.market_up_price:.3f}; fair Up: {snapshot.fair_up_prob:.3f}; "
         f"edge: {snapshot.edge:+.3f}\n"
+        f"{market_note}"
         f"Signal: {side}; confidence {snapshot.confidence:.2f}; notional ${snapshot.notional_usd:.0f}\n"
         f"Gate: {_gate_preview_line(snapshot)}\n"
         f"{_feed_label(snapshot.feed_source)}"
@@ -1980,6 +2226,7 @@ def _gate_preview_line(snapshot: PaperSnapshot) -> str:
 async def _sleep_interruptible(stop_event: threading.Event, seconds: float) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        if stop_event.is_set():
+        # A waiting Market click wakes the loop so it runs a tick right away.
+        if stop_event.is_set() or manual_entry.wake.is_set():
             return
         await asyncio.sleep(min(0.25, deadline - time.monotonic()))

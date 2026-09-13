@@ -24,13 +24,22 @@ def render(
         c = "live" if label == "LIVE" else "paper" if label == "PAPER" else "warn"
         return f"<span class='pill {c}'>{escape(label)}</span>"
 
+    def _chips(row: dict[str, Any]) -> str:
+        # MKT = an operator Market-mode Buy, not a model entry.
+        mkt = (
+            " <span class='pill mkt' title='Market order — operator Buy'>MKT</span>"
+            if row.get("entry_source") == "market"
+            else ""
+        )
+        return _mode_chip(row.get("mode")) + mkt
+
     rows = ""
     recent = list(reversed(closed))[:12]
     for c in recent:
         p = c["realized_pnl_usd"] or 0.0
         rows += (
             "<tr>"
-            f"<td>{_mode_chip(c.get('mode'))}</td>"
+            f"<td>{_chips(c)}</td>"
             f"<td class='mono dim'>{s.ago(c.get('closed_at'))}</td>"
             f"<td><span class='tag {c['side'].lower()}'>{escape(c['side'])}</span></td>"
             f"<td class='mono'>{(c['entry_price'] or 0):.3f}</td>"
@@ -54,7 +63,7 @@ def render(
             pnl_cell = "<td class='mono flat'>OPEN</td>"
         rows = (
             "<tr class='live-row'>"
-            f"<td>{_mode_chip(c.get('mode'))}</td>"
+            f"<td>{_chips(c)}</td>"
             f"<td class='mono dim'>now</td>"
             f"<td><span class='tag {c['side'].lower()}'>{escape(c['side'])}</span></td>"
             f"<td class='mono'>{(c['entry_price'] or 0):.3f}</td>"

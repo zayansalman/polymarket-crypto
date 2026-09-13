@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 import time
 from dataclasses import dataclass
@@ -9,7 +10,9 @@ from datetime import UTC, datetime
 
 import config as _config
 from polymarket_exec.execution.live import LiveBootRefused, assert_live_boot_allowed
+from polymarket_bot import manual_entry
 from polymarket_bot import paper as _paper
+from polymarket_bot.manual_entry import EntryOutcome
 from polymarket_bot.paper import (
     count_open_positions,
     force_close_open_positions,
@@ -121,6 +124,22 @@ def live_consented() -> bool:
 
 def _is_runner_alive() -> bool:
     return _runner_thread is not None and _runner_thread.is_alive()
+
+
+def is_running() -> bool:
+    """True while this process's runner thread is alive and not asked to stop.
+
+    Reads the thread itself, not the persisted state row (which can lag a stop
+    or outlive a dead loop) — the rule a Market Buy click is accepted under,
+    shared by ``request_manual_entry`` and the dashboard's EXECUTION card.
+    """
+    stop_event = _stop_event
+    return (
+        _is_runner_alive()
+        and stop_event is not None
+        and not stop_event.is_set()
+        and _desired_running
+    )
 
 
 async def get_status() -> BtcBotStatus:
@@ -255,6 +274,10 @@ async def request_start() -> BtcBotStatus:
     _mode_cache = mode
     _silent_stop_notified = False  # #138: re-arm on every legitimate start
     _paper._beat()  # startup grace: the watchdog measures from Start
+    if not _is_runner_alive():
+        # A Market click queued before this Start must never run on the new
+        # runner (possibly in a different mode). A live runner keeps its own.
+        manual_entry.cancel_pending("Bot stopped — order not placed")
     _ensure_runner_started()
     _ensure_watchdog_started()
     await set_config("polymarket_bot.state", "running")
@@ -302,6 +325,9 @@ async def request_stop() -> BtcBotStatus:
     runner = _runner_thread
     if runner is not None and runner.is_alive():
         await asyncio.to_thread(runner.join, 90.0)
+    # The runner is gone (or past its entry step): refuse any Market click it
+    # never picked up rather than leave the dashboard waiting for a timeout.
+    manual_entry.cancel_pending("Bot stopped — order not placed")
 
     if (runner is not None and runner.is_alive()) or _paper._live_executor is not None:
         detail = (
@@ -332,6 +358,61 @@ async def request_stop() -> BtcBotStatus:
     await set_config("polymarket_bot.updated_at", now)
     await set_config("polymarket_bot.detail", detail)
     return await get_status()
+
+
+async def request_manual_entry(
+    side: str,
+    *,
+    window_slug: str,
+    seen_ask: float | None,
+    timeout: float = 20.0,
+) -> EntryOutcome:
+    """Hand one Market-mode Buy click to the running loop and wait for the outcome.
+
+    Nothing here touches the executor, the gate or the ledger: the click is
+    parked in ``manual_entry``'s single slot and the runner thread acts on it
+    inside its next tick, through the same entry pipeline the model uses. The
+    wait runs in a worker thread so the dashboard's event loop never blocks.
+    Never auto-starts the bot.
+    """
+    mode = _mode_cache
+    if side not in ("Up", "Down"):
+        return EntryOutcome("blocked", f"Unknown side {side!r} — use Up or Down", side=side)
+    if not is_running():
+        return EntryOutcome(
+            "blocked", "Bot is stopped — press ▶ Start first", mode=mode, side=side
+        )
+    intent = manual_entry.ManualEntryIntent(
+        side=side, window_slug=window_slug, seen_ask=seen_ask, mode=mode
+    )
+    if not manual_entry.submit(intent):
+        return EntryOutcome(
+            "blocked", "A Market order is already in progress", mode=mode, side=side
+        )
+    log.info(
+        "btc.market_entry_requested",
+        side=side, window_slug=window_slug, seen_ask=seen_ask, mode=mode,
+    )
+    future = intent.future
+    try:
+        return await asyncio.to_thread(future.result, timeout)
+    except concurrent.futures.TimeoutError:
+        pass
+    if future.cancel():
+        # The runner never started it; drop it from the slot if still there.
+        manual_entry.withdraw(intent)
+        log.warning("btc.market_entry_timed_out", side=side, window_slug=window_slug)
+        return EntryOutcome(
+            "blocked", "The bot didn't pick up the order in time — not placed",
+            mode=mode, side=side,
+        )
+    if future.done():
+        return future.result()
+    log.warning("btc.market_entry_still_running", side=side, window_slug=window_slug)
+    return EntryOutcome(
+        "pending", "Order is still being processed — watch the activity feed",
+        mode=mode, side=side,
+    )
 
 
 def _ensure_runner_started(force: bool = False) -> None:

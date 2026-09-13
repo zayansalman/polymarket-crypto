@@ -103,6 +103,21 @@ async def open_positions(style: str) -> list[dict[str, Any]]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def open_position_count() -> int:
+    """Every open ledger row — any exit style, any mode.
+
+    The loop's one-open-position rule counts them all, unlike
+    ``open_positions(style)``, so a position opened under the other exit style
+    still disables the Market Buy buttons.
+    """
+    async with connect() as db:
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM paper_positions WHERE state='open'"
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row["n"]) if row else 0
+
+
 async def avg_spread() -> float | None:
     """Average quoted spread (Up+Down) over recent ticks — the taker cost."""
     async with connect() as db:

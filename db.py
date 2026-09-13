@@ -224,6 +224,10 @@ POSITION_COLUMN_MIGRATIONS = {
     # executor was attached. Legacy rows are backfilled by joining
     # live_orders on window_slug.
     "mode": "TEXT",
+    # 'model' | 'market' — who opened the row: the strategy's auto-entry or an
+    # operator Buy Up/Down click in Market mode. NULL rows predate the column
+    # and are model entries.
+    "entry_source": "TEXT",
 }
 
 # Issue #22: executable top-of-book quotes journaled per tick. Rows without

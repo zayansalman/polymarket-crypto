@@ -20,6 +20,7 @@ from polymarket_exec.ops.dashboard.panels import (
     controls,
     daily_altcoin,
     decision_engine,
+    execution,
     market,
     market_selector,
     performance,
@@ -203,9 +204,32 @@ async def execution_view_html() -> str:
         current_price=current_price,
         active_model=active_model,
     )
+    # Execution strategy (Model | Market Buy Up/Down). Anything but "market"
+    # reads as Model, same as the loop. Running comes from the runner thread,
+    # not the saved state row, and the open count is unfiltered — the loop's
+    # max-1 rule counts every open row whatever its style or mode.
+    from polymarket_bot import controller, market_selection
+
+    execution_strategy = (
+        "market" if await _knobs.get("execution_strategy") == "market" else "model"
+    )
+    selection = await market_selection.get_selection()
+    execution_html = execution.render(
+        strategy=execution_strategy,
+        running=controller.is_running(),
+        mode=mode,
+        asset=selection.asset,
+        timeframe=selection.timeframe,
+        loop_supported=selection.loop_supported,
+        tick=tick,
+        trade_shares=trade_shares_current,
+        open_position_count=await data.open_position_count(),
+        kill_armed=ribbon.kill_switch_armed(),
+    )
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(
-        tick, _GateParams(), recent_ticks, paused, pause_reason
+        tick, _GateParams(), recent_ticks, paused, pause_reason,
+        execution_strategy=execution_strategy,
     )
     performance_html = performance.render(
         style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
@@ -225,6 +249,7 @@ async def execution_view_html() -> str:
         "<div class='execution-view'>"
         + ribbon_html
         + "<div class='execution-grid'>"
+        + execution_html
         + controls_html
         + strategy_html
         + market_html

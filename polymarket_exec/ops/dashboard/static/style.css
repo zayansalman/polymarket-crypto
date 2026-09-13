@@ -272,6 +272,38 @@ body {
   font-family: var(--font-mono); font-size: 11px; color: var(--fg);
   min-width: 220px; flex: 1;
 }
+/* ── execution strategy: Model | Market toggle + Buy Up / Buy Down ── */
+.exec-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.exec-toggle { margin-right: 0; }
+.exec-toggle .mode-opt.active { background: var(--text); color: var(--bg); }
+.exec-note { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.mo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.mo-btn {
+  display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 4px 10px;
+  font-family: var(--font-mono); text-align: left; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: 0; background: var(--bg); color: var(--text);
+  transition: all .12s;
+}
+.mo-btn.up { background: rgba(43,212,125,.06); }
+.mo-btn.down { background: rgba(255,84,112,.06); }
+.mo-btn.up:hover:not([disabled]) { background: rgba(43,212,125,.14); border-color: var(--pos); }
+.mo-btn.down:hover:not([disabled]) { background: rgba(255,84,112,.14); border-color: var(--neg); }
+.mo-l { font-size: 12px; font-weight: 700; letter-spacing: .8px; }
+.mo-px { font-size: 18px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.mo-btn.up .mo-l, .mo-btn.up .mo-px { color: var(--pos); }
+.mo-btn.down .mo-l, .mo-btn.down .mo-px { color: var(--neg); }
+.mo-sub { font-size: 10.5px; color: var(--muted); }
+.mo-btn .pill { justify-self: end; }
+.mo-btn[disabled] { cursor: not-allowed; background: var(--bg-alt); border-color: var(--border); }
+.mo-btn[disabled] .mo-l, .mo-btn[disabled] .mo-px { color: var(--muted); }
+.mo-btn.pending { animation: pulse 1.2s infinite; }
+.mo-status { margin-top: 9px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.mo-status.off { color: var(--warn); }
+@media (max-width: 880px) { .mo-grid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .mo-btn.pending { animation: none; } }
+/* MKT chip in the blotter: an operator Market buy, not a model entry */
+.pill.mkt { background: var(--bg-alt); color: var(--text); border-color: var(--text); }
+
 /* ── share-minimum infographic (#89) ── */
 .share-min { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
 .share-pips { display: flex; gap: 3px; }

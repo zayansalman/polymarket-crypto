@@ -283,22 +283,89 @@ function setKnob(name, kind) {
       return;
     }
   }
-  var label = (el.getAttribute('aria-label') || name);
-  fetch('/api/runtime-config', {
+  postKnob(name, v, el.getAttribute('aria-label') || name);
+}
+
+// Save one runtime knob and toast the result. `shown` (optional) replaces the
+// saved value in the success toast, e.g. 'Market' for 'market'.
+function postKnob(name, value, label, shown) {
+  return fetch('/api/runtime-config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: name, value: v })
+    body: JSON.stringify({ key: name, value: value })
   })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.status === 'ok') {
-        showToast(label + ' → ' + data.value, 'success');
+        showToast(label + ' → ' + (shown || data.value), 'success');
       } else {
         showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');
       }
       setTimeout(refreshAll, 300);
     })
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
+}
+
+// EXECUTION card toggle: one click switches Model <-> Market (no Apply step).
+function setExecutionStrategy(value) {
+  var shown = value === 'market' ? 'Market' : 'Model';
+  postKnob('execution_strategy', value, 'Execution strategy', shown);
+}
+
+// Market strategy: one click buys that side at the current ask. The running
+// loop executes it through the normal pipeline; in LIVE it is a real order.
+// The click is the intent — no dialog. Both buttons stay off until it answers.
+function buyMarket(side) {
+  var card = document.getElementById('exec-card');
+  if (!card || window.pendingMarketOrder) return;
+  var btn = card.querySelector('.mo-btn[data-side="' + side + '"]');
+  var ask = btn ? parseFloat(btn.getAttribute('data-ask')) : NaN;
+  window.pendingMarketOrder = { side: side };
+  applyPendingMarketOrder();
+  fetch('/api/market-order', {
+    method: 'POST',
+    headers: dashboardHeaders(),
+    body: JSON.stringify({
+      side: side,
+      window_slug: card.getAttribute('data-window') || '',
+      ask: ask > 0 ? ask : null,
+      asset: card.getAttribute('data-asset') || '',
+      timeframe: card.getAttribute('data-timeframe') || ''
+    })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'filled' || data.status === 'placed') {
+        var label = data.mode === 'live' ? 'LIVE' : 'Paper';
+        var msg = label + ' BUY ' + (data.side || side);
+        if (data.shares != null && data.price != null) {
+          msg += ' ' + Math.round(Number(data.shares) * 100) / 100 +
+            ' sh @ ' + Number(data.price).toFixed(3);
+        }
+        if (data.status === 'placed') msg += ' — placed, part still resting on the book';
+        showToast(msg, 'success', 5000);
+      } else if (data.status === 'pending') {
+        showToast(data.detail || 'Order is still being processed', 'info', 6000);
+      } else {
+        showToast('Buy ' + side + ' not placed: ' + (data.detail || data.status), 'error', 6000);
+      }
+    })
+    .catch(function(err) { showToast('Buy ' + side + ' failed: ' + err.message, 'error', 6000); })
+    .finally(function() {
+      window.pendingMarketOrder = null;
+      setTimeout(refreshAll, 300);
+    });
+}
+
+// Keep a waiting Buy visible: the SSE refresh replaces the card's HTML, so
+// re-mark the clicked button and keep both buttons off until the click answers.
+function applyPendingMarketOrder() {
+  var pending = window.pendingMarketOrder;
+  if (!pending) return;
+  document.querySelectorAll('#exec-card .mo-btn').forEach(function(b) {
+    b.disabled = true;
+    b.classList.toggle('pending', b.getAttribute('data-side') === pending.side);
+  });
 }
 
 function setMarket(kind, value) {
@@ -404,6 +471,7 @@ function updateDashboard(data) {
   if (data.execution_view) {
     var execEl = document.getElementById('execution-content');
     if (execEl) swapKeepingInputs(execEl, data.execution_view || '');
+    applyPendingMarketOrder();
   }
 
   // Activity

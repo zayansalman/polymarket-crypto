@@ -18,6 +18,11 @@ import config as _config
 from . import _shared as s
 
 
+def kill_switch_armed() -> bool:
+    """True when the kill-switch file exists (every entry is refused while it does)."""
+    return Path(str(_config.KILL_SWITCH_PATH)).exists()
+
+
 def render(
     *,
     mode: str,
@@ -45,7 +50,7 @@ def render(
     floor = peak - halt
     headroom = halt_pnl - floor  # remaining loss budget on the running leg
     halted = halt_pnl <= floor and not bypass_loss_halt
-    kill_armed = Path(str(_config.KILL_SWITCH_PATH)).exists()
+    kill_armed = kill_switch_armed()
     mode_pnl = live_pnl if is_live else paper_pnl
     session_pnl = sum(c["realized_pnl_usd"] or 0.0 for c in closed_session)
 

@@ -120,7 +120,7 @@ class EntryRequest:
     notional_usd: float
     position_open: bool  # any open ledger / live position
     entry_order_resting: bool  # live: unfilled entry order resting in the book
-    side_price: Optional[float]  # the price the signal was computed against
+    side_price: Optional[float]  # expected price: model signal ask or operator-seen ask
     best_ask: Optional[float]  # the live ask AT FILL TIME
 
 
@@ -486,11 +486,12 @@ class RiskGate:
             and req.side_price > 0
             and req.best_ask - req.side_price > slippage_cap
         ):
+            # Neutral wording: the expected price is the model's signal price
+            # or the ask the operator saw when clicking Buy (Market mode).
             return (
-                f"entry slippage guard: book ask {req.best_ask:.3f} is "
-                f"{req.best_ask - req.side_price:+.3f} above the signal price "
-                f"{req.side_price:.3f} (max {slippage_cap:.3f}); "
-                "the edge that justified this trade no longer exists"
+                f"entry slippage guard: best ask {req.best_ask:.3f} is "
+                f"{req.best_ask - req.side_price:.3f} above the expected price "
+                f"{req.side_price:.3f} (cap {slippage_cap:.3f})"
             )
         return None
 

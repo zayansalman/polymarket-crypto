@@ -11,6 +11,8 @@ Endpoints:
     POST /api/start     — Start the trading bot (paper by default; LIVE when
                           BOT_MODE=live and the boot gates pass)
     POST /api/stop      — Stop the trading bot (live mode flattens first)
+    POST /api/market-order — Market strategy Buy Up / Buy Down click (token
+                          required; the running loop executes it)
     GET  /api/data      — Full dashboard data as JSON
     GET  /api/stream    — Server-Sent Events for live updates
 """
@@ -712,6 +714,98 @@ async def api_start(request: Request) -> dict[str, str]:
     except Exception as e:
         log.exception("btc.start_failed", error=str(e))
         return {"status": "error", "detail": f"Start failed: {e}"}
+
+
+def _market_order_reply(status: str, detail: str, **fields: Any) -> dict[str, Any]:
+    """The /api/market-order response: always the same keys, HTTP 200."""
+    reply: dict[str, Any] = {
+        "status": status, "detail": detail, "mode": None, "side": None,
+        "price": None, "shares": None, "notional_usd": None,
+    }
+    reply.update(fields)
+    return reply
+
+
+async def _market_order(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    """Validate one Market Buy click, then hand it to the running loop."""
+    side = str(body.get("side") or "")
+    if not _has_dashboard_token(request):
+        return _market_order_reply("error", "Missing dashboard token — reload the page")
+    if not _BTC_BOT_AVAILABLE:
+        return _market_order_reply("error", "polymarket_bot not available")
+    if side not in ("Up", "Down"):
+        return _market_order_reply("error", f"Unknown side {side!r} — use Up or Down")
+    if await _knobs.get("execution_strategy") != "market":
+        return _market_order_reply(
+            "error", "Switch execution strategy to Market first", side=side
+        )
+    from polymarket_bot import controller, market_selection
+
+    sel = await market_selection.get_selection()
+    if (str(body.get("asset") or ""), str(body.get("timeframe") or "")) != (
+        sel.asset, sel.timeframe
+    ):
+        return _market_order_reply("error", "Market changed — refresh", side=side)
+    if not sel.loop_supported:
+        return _market_order_reply(
+            "error",
+            "Market orders only run on BTC 5m for now — the loop isn't wired for "
+            f"{sel.asset.upper()} {sel.timeframe}",
+            side=side,
+        )
+    window_slug = str(body.get("window_slug") or "")
+    if not window_slug:
+        return _market_order_reply(
+            "error", "No market window yet — wait for market data", side=side
+        )
+    try:
+        seen_ask: float | None = float(body.get("ask"))
+    except (TypeError, ValueError):
+        seen_ask = None
+    if seen_ask is not None and not 0 < seen_ask <= 1:
+        seen_ask = None  # no usable ask seen → the runner uses its own tick's ask
+    outcome = await controller.request_manual_entry(
+        side, window_slug=window_slug, seen_ask=seen_ask
+    )
+    return _market_order_reply(
+        outcome.status, outcome.detail, mode=outcome.mode, side=outcome.side,
+        price=outcome.price, shares=outcome.shares, notional_usd=outcome.notional_usd,
+    )
+
+
+@app.post("/api/market-order")
+async def api_market_order(request: Request) -> dict[str, Any]:
+    """Market execution strategy: the operator's BUY UP / BUY DOWN click.
+
+    Requires the page token in BOTH modes — an order only ever comes from a
+    click in this dashboard, never from another HTTP client. Nothing here
+    touches the executor, the gate or the ledger: the controller hands the
+    click to the running loop, which buys through the same entry pipeline the
+    model uses (paper fill or a real LIVE order) and reports what happened.
+    Always HTTP 200 with ``{status, detail, mode, side, price, shares,
+    notional_usd}``; status is filled | placed | pending | blocked | error.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    log.info(
+        "btc.market_order_requested",
+        side=body.get("side"), window_slug=body.get("window_slug"), ask=body.get("ask"),
+        asset=body.get("asset"), timeframe=body.get("timeframe"),
+    )
+    try:
+        reply = await _market_order(request, body)
+    except Exception as e:  # noqa: BLE001 — the click always gets an answer
+        log.exception("btc.market_order_failed", error=str(e))
+        reply = _market_order_reply("error", f"Market order failed: {e}")
+    log.info(
+        "btc.market_order_outcome",
+        status=reply["status"], detail=reply["detail"], mode=reply["mode"],
+        side=reply["side"], price=reply["price"], shares=reply["shares"],
+    )
+    return reply
 
 
 @app.post("/api/stop")

@@ -49,6 +49,13 @@ class Knob:
 
 
 KNOBS: dict[str, Knob] = {
+    # --- Execution (polymarket_bot/paper.py, manual_entry.py) -------------
+    # "model" = the strategy auto-enters; "market" = model auto-entries off,
+    # the operator buys with the dashboard's Buy Up / Buy Down buttons.
+    "execution_strategy": Knob(
+        "runtime.execution.strategy", "model", "enum", "Execution strategy",
+        choices=("model", "market"), group="Execution",
+    ),
     # --- Paper strategy (polymarket_bot/paper.py) -------------------------
     "paper_min_trade_usd": Knob(
         "runtime.paper.min_trade_usd", 1.0, "float", "Min trade size",

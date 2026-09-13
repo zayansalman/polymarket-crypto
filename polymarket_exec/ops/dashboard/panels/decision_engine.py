@@ -19,7 +19,11 @@ def render(
     recent: list[dict[str, Any]],
     paused: bool,
     pause_reason: str,
+    execution_strategy: str = "model",
 ) -> str:
+    """``execution_strategy`` "market" means the model never auto-enters: the
+    banner says so instead of ENTER UP/DOWN, and the model's signal is shown
+    for reference only."""
     if not tick:
         return (
             "<section class='card wide'><div class='card-h'>DECISION ENGINE"
@@ -162,7 +166,13 @@ def render(
     reason = (tick.get("reason") or "idle").strip()
     side = tick.get("signal_side")
     notional = tick.get("notional_usd") or 0.0
-    if paused:
+    if execution_strategy == "market":
+        # The operator buys from the EXECUTION card; a model signal here is
+        # never traded, so it must not read as an entry.
+        d_cls, d_lbl = "dim", "MARKET — auto entries off"
+        signal = f"model: {side} · {reason}" if side in ("Up", "Down") else reason
+        d_body = f"model signal shown for reference · {signal}"
+    elif paused:
         d_cls, d_lbl, d_body = (
             "down",
             "AUTO-PAUSED",
