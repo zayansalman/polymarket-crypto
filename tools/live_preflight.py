@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import config as _config  # noqa: E402  (loads .env)
-from btc_5m_fv.execution.live import (  # noqa: E402
+from polymarket_exec.execution.live import (  # noqa: E402
     LiveBootRefused,
     assert_live_boot_allowed,
 )
@@ -72,8 +72,7 @@ def main() -> int:
     balance = float((bal or {}).get("balance", 0)) / 1e6  # USDC 6dp
     print(f"\nusable balance: ${balance:.2f}")
     if balance <= 0:
-        print("NO-GO: fund the funder wallet, then re-run. "
-              "(Withdraw from a Polymarket UI account straight to the funder address.)")
+        print("NO-GO: deposit USDC into your Polymarket account (MetaMask), then re-run.")
         return 1
     print("GO: config verified — launch with the dashboard Start button.")
     return 0

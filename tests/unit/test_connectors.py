@@ -10,15 +10,15 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from btc_5m_fv.connectors import (
+from polymarket_exec.connectors import (
     BinanceConnector,
     ChainlinkConnectorStub,
     ConnectorRegistry,
     PolymarketConnector,
 )
-from btc_5m_fv.connectors.polymarket import _json_list, _outcome_prices
-from btc_5m_fv.core.exceptions import FeedError, MarketDiscoveryError
-from btc_5m_fv.core.types import MarketWindow
+from polymarket_exec.connectors.polymarket import _json_list, _outcome_prices
+from polymarket_exec.core.exceptions import FeedError, MarketDiscoveryError
+from polymarket_exec.core.types import MarketWindow
 
 
 # ---------------------------------------------------------------------------

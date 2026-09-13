@@ -4,7 +4,7 @@ Replaces the manual "export from Polymarket → drop CSV in data/" flow. Uses
 the same auth the live executor uses (POLYMARKET_PRIVATE_KEY etc.) so no
 extra credentials are needed.
 
-The output CSV matches the schema ``btc_bot.backtest.build_opportunities``
+The output CSV matches the schema ``polymarket_bot.backtest.build_opportunities``
 expects, so the existing backtest tool runs against it unchanged:
 
     timestamp, action, marketName, tokenName, usdcAmount, tokenAmount, hash
@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import config as _config  # noqa: E402
-from btc_5m_fv.execution.live import assert_live_boot_allowed  # noqa: E402
+from polymarket_exec.execution.live import assert_live_boot_allowed  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

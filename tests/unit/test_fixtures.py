@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from btc_5m_fv.core.types import (
+from polymarket_exec.core.types import (
     BacktestParams,
     MarketWindow,
     Signal,
@@ -166,7 +166,7 @@ class TestMockFixtures:
         self, mock_execution_manager: object
     ) -> None:
         """Execution manager mock should return a PaperOrder on submit."""
-        from btc_5m_fv.core.types import Signal, Side, SignalAction, MarketWindow
+        from polymarket_exec.core.types import Signal, Side, SignalAction, MarketWindow
 
         signal = Signal(
             action=SignalAction.ENTER_UP,
@@ -190,7 +190,7 @@ class TestMockFixtures:
         self, mock_execution_manager: object
     ) -> None:
         """Execution manager check_exits should return None by default."""
-        from btc_5m_fv.core.types import PaperPosition, PaperOrder
+        from polymarket_exec.core.types import PaperPosition, PaperOrder
 
         mock_pos = PaperPosition(
             position_id=1,
@@ -231,7 +231,7 @@ class TestInfrastructureFixtures:
     @pytest.mark.asyncio
     async def test_feed_tracker_fixture(self, tmp_db_path: Path) -> None:
         """feed_tracker fixture should be initialised and usable."""
-        from btc_5m_fv.ops.telemetry import FeedHealthTracker
+        from polymarket_exec.ops.telemetry import FeedHealthTracker
 
         tracker = FeedHealthTracker(window_seconds=3600)
         await tracker.init_db(tmp_db_path)
@@ -240,7 +240,7 @@ class TestInfrastructureFixtures:
     @pytest.mark.asyncio
     async def test_latency_tracker_fixture(self, tmp_db_path: Path) -> None:
         """latency_tracker fixture should be initialised and usable."""
-        from btc_5m_fv.ops.telemetry import LatencyTracker
+        from polymarket_exec.ops.telemetry import LatencyTracker
 
         tracker = LatencyTracker(max_samples=100)
         await tracker.init_db(tmp_db_path)

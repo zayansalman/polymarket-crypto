@@ -1,20 +1,20 @@
 from pathlib import Path
 
-from btc_bot.history import load_btc_history_stats
-from btc_bot.backtest import BacktestParams, BuyOpportunity, evaluate_params, parse_market_window
-from btc_bot.strategy import StrategyParams, notional_from_confidence
-from config import BTC_PAPER_MAX_TRADE_USD, BTC_PAPER_MIN_CONFIDENCE, BTC_PAPER_MIN_TRADE_USD
+from polymarket_bot.history import load_btc_history_stats
+from polymarket_bot.backtest import BacktestParams, BuyOpportunity, evaluate_params, parse_market_window
+from polymarket_bot.strategy import StrategyParams, notional_from_confidence
+from config import PAPER_MAX_TRADE_USD, PAPER_MIN_CONFIDENCE, PAPER_MIN_TRADE_USD
 
 
 def test_confidence_sizing_stays_in_paper_bounds() -> None:
     params = StrategyParams(
-        min_trade_usd=BTC_PAPER_MIN_TRADE_USD,
-        max_trade_usd=BTC_PAPER_MAX_TRADE_USD,
+        min_trade_usd=PAPER_MIN_TRADE_USD,
+        max_trade_usd=PAPER_MAX_TRADE_USD,
         entry_edge_min=0.045,
-        min_confidence=BTC_PAPER_MIN_CONFIDENCE,
+        min_confidence=PAPER_MIN_CONFIDENCE,
     )
-    assert notional_from_confidence(BTC_PAPER_MIN_CONFIDENCE, params) >= BTC_PAPER_MIN_TRADE_USD
-    assert notional_from_confidence(0.99, params) <= BTC_PAPER_MAX_TRADE_USD
+    assert notional_from_confidence(PAPER_MIN_CONFIDENCE, params) >= PAPER_MIN_TRADE_USD
+    assert notional_from_confidence(0.99, params) <= PAPER_MAX_TRADE_USD
 
 
 def test_history_csv_is_optional(tmp_path: Path) -> None:

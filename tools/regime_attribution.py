@@ -1,7 +1,7 @@
 """Regime-attribution instrument for the shadow forward-tester (issue #120).
 
 Answers one question, rigorously: does any *a-priori* regime carry real,
-two-sided edge? It reads SETTLED rows from ``btc_model_shadow_positions``
+two-sided edge? It reads SETTLED rows from ``model_shadow_positions``
 (read-only) and, per ``(model x regime x side-BET)`` cell, reports expectancy
 with a Wilson win-rate band, then applies three guards the project learned the
 hard way:
@@ -487,7 +487,7 @@ def load_settled_rows(db_path: Path) -> list[sqlite3.Row]:
         # simply fail _axis_value_present for the vol/basis axes.
         present = {
             r["name"]
-            for r in conn.execute("PRAGMA table_info(btc_model_shadow_positions)")
+            for r in conn.execute("PRAGMA table_info(model_shadow_positions)")
         }
         optional = (
             "sigma_per_second",
@@ -503,7 +503,7 @@ def load_settled_rows(db_path: Path) -> list[sqlite3.Row]:
             SELECT model_id, side, entry_price, shares, outcome,
                    realized_pnl_usd, created_at, edge,
                    {opt_select}
-              FROM btc_model_shadow_positions
+              FROM model_shadow_positions
              WHERE state = 'settled'
             """
         ).fetchall()

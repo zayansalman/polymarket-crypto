@@ -8,8 +8,8 @@ import pytest
 import pytest_asyncio
 
 import db as _db
-from btc_bot.shadow.fees import net_pnl_per_share
-from btc_bot.shadow.ledger import record_shadow_signal, settle_open_shadow
+from polymarket_bot.shadow.fees import net_pnl_per_share
+from polymarket_bot.shadow.ledger import record_shadow_signal, settle_open_shadow
 
 
 @pytest_asyncio.fixture
@@ -48,7 +48,7 @@ async def _record(
 async def _fetch_all(db) -> list:
     async with db.connect() as conn:
         async with conn.execute(
-            "SELECT * FROM btc_model_shadow_positions ORDER BY model_id"
+            "SELECT * FROM model_shadow_positions ORDER BY model_id"
         ) as cur:
             return await cur.fetchall()
 
@@ -126,7 +126,7 @@ async def test_regime_columns_migrated_and_default_null(test_db):
         cols = {
             r["name"]
             for r in await (
-                await conn.execute("PRAGMA table_info(btc_model_shadow_positions)")
+                await conn.execute("PRAGMA table_info(model_shadow_positions)")
             ).fetchall()
         }
     assert {

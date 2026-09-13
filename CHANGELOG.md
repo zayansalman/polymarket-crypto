@@ -1,5 +1,75 @@
 # Changelog
 
+## Unreleased — Archive the v0 strategy (2026-09-13)
+
+The operator shut down the v0 BTC 5-minute strategy to make room for new ones.
+The loop still runs and journals market data, but no strategy is loaded, so it
+takes no entries in paper or live (`skip: no strategy loaded`). Details and
+restore steps: `docs/archive/v0-strategy.md`; code preserved at tag
+`archive/v0-strategy`.
+
+- Removed from the loop: v0 entry gates, model picker, edge-decay auto-pause,
+  calibration, param tuner (`adaptive.py`, `calibration*.py`, `params*.py`,
+  `tools/clear_auto_pause.py`, `AUTO_PAUSE_*` knobs).
+- Removed from the dashboard: STRATEGY card, decision-engine GATES column,
+  model picker, auto-pause chip, and the SETTINGS card's entry-gate and
+  auto-pause knobs.
+- Kept: live-path safety gates (`RiskGate`), shared pricing math, shadow
+  forward-tester, daily altcoin scanner.
+
+## v1.0.2 — Rename project to polymarket-crypto (#184) (2026-08-30)
+
+Following the branch close-out in #182 / commit 27f38fd: 5-minute-market work is closed
+and the next chapter (daily-window altcoin markets, #185) is not BTC- or 5-minute-specific.
+The old name — folder, GitHub repo, package `btc-5m-exec`, module dirs — was inaccurate
+BTC-5m-era branding. Mechanical rename plus a small set of honest status rewrites, no
+behavior change: 908 tests still green.
+
+- **`btc_5m_exec/` → `polymarket_exec/`**, **`btc_bot/` → `polymarket_bot/`** (`git mv`,
+  history preserved); package name `btc-5m-exec` → `polymarket-crypto` in `pyproject.toml`;
+  all imports, docstrings, comments, CI config, and current-state docs (README, AGENTS.md,
+  `docs/*.md`) updated to match.
+- Deleted `btc_5m_fv/` (confirmed dead — untracked, only `__pycache__`/`.DS_Store`,
+  superseded by #169) and the stale `btc_5m_exec.egg-info/` build artifact.
+- `docs/FILE_MAP.md` and the `<!-- GENERATED -->` blocks in `AGENTS.md`/`docs/CODE_MAP.md`
+  regenerated via `tools/gen_docs.py` — not hand-edited.
+- **Substantive, not cosmetic**: `AGENTS.md`'s Scope Fence previously named "BTC 5-minute
+  Up/Down" as the sole authorized live-trading market. Updated to state no market is
+  currently authorized for live trading — 5-minute work closed, no replacement category
+  chosen or built. Strictly more restrictive than before, cannot enable anything that
+  wasn't already stopped.
+- Left unchanged (deliberately): the `data/btc_5m_binary_fair_value.db` default filename
+  (`config.py`, `.env.example`) — same reasoning as #169: a data-layer identifier, not code
+  branding, renaming it risks silently pointing at a new, empty DB. Also left unchanged:
+  historical records that would be falsified by editing them — every `CHANGELOG.md` entry
+  below this one, `tasks/*.md` session logs, and the dated per-issue archives under
+  `docs/specs/` and `docs/superpowers/`.
+- Also renamed: the GitHub repo (`zayansalman/polymarket-btc-5m-pricing` →
+  `zayansalman/polymarket-crypto`, old URL redirects) and the local project folder.
+
+## v1.0.1 — Remove "fair value" branding (#169) (2026-08-04)
+
+Reopen housekeeping before any new build work (see the 9-issue reopen scope filed this
+session). "Fair value" overclaimed rigor the strategy never had — the logic is empirical
+entry-gate heuristics layered on a market-implied probability, not a derived fair value.
+Mechanical rename, no behavior change: 828 tests still green.
+
+- **`btc_5m_fv/` → `btc_5m_exec/`** (matches its real role per `docs/CODE_MAP.md`: execution
+  gate + dashboard + backtest + connectors); **`strategy/fair_value.py` →
+  `strategy/pricing_model.py`**.
+- Model-id literals `fair_value_v0` → `pricing_v0`, `fair_value_fresh_v8` → `pricing_fresh_v8`
+  (`btc_bot/shadow/runner.py`, `signals.py`); dashboard dropdown/labels follow.
+- Package name `btc-5m-fv` → `btc-5m-exec` in `pyproject.toml`; all imports, docstrings,
+  comments, and current-state docs (README, AGENTS.md, `docs/*.md`) updated to match.
+- `docs/FILE_MAP.md` and the `<!-- GENERATED -->` blocks in `AGENTS.md`/`docs/CODE_MAP.md`
+  regenerated via `tools/gen_docs.py` — not hand-edited.
+- Left unchanged (deliberately): the `data/btc_5m_binary_fair_value.db` default filename
+  (`config.py`, `.env.example`, `Dockerfile`, `tools/*.py`) — a data-layer identifier, not
+  code branding; renaming it risks silently pointing a live deployment at a new, empty DB
+  file. Also left unchanged: historical records that would be falsified by editing them —
+  every `CHANGELOG.md` entry below this one, `tasks/*.md` session logs, and the dated
+  per-issue archives under `docs/specs/` and `docs/superpowers/`.
+
 ## v1.0.0 — FINAL: research archive (2026-07-10)
 
 The program reached its pre-registered verdict and closed. Post-freeze out-of-sample
@@ -16,7 +86,7 @@ f45 signals + replay grid (#149), race_status CLI (#150), honest feed labels (#1
 silent-stop alerts (#138), vol/basis regime columns (#122), f45 roster arm (#155),
 tick-cadence stall detection (#157), maker/taker placement telemetry — 23% maker share
 (#137), deploy-bar min-n guard, forecast_journal pilot tool (#162). Plus decision docs:
-docs/PIVOT_2026-07.md and the full audit trail in tasks/race_log.md.
+docs/archive/PIVOT_2026-07.md and the full audit trail in tasks/race_log.md.
 
 ## v0.4.27 — Tick-replay backtest + v8 pre-registered (2026-07-02)
 
@@ -38,7 +108,7 @@ Operator mandate: bin the losers, build better candidates (#142, PR #143).
 
 ## v0.4.25 — Postmortem: boot heal, fee-true books, ledger reconciled (2026-07-02)
 
-Forensic postmortem of the 06-25 outage and the full trade history (docs/POSTMORTEM_2026-07.md, #132–#138). Venue truth: bot-era PnL **−$17.24** = +$6.27 gross signal − $23.51 taker fees; the books had shown −$8.01/−$3.10 (fee-blind).
+Forensic postmortem of the 06-25 outage and the full trade history (docs/archive/POSTMORTEM_2026-07.md, #132–#138). Venue truth: bot-era PnL **−$17.24** = +$6.27 gross signal − $23.51 taker fees; the books had shown −$8.01/−$3.10 (fee-blind).
 
 - **#132** — boot reconciliation no longer hard-refuses on CLOB-pruned entry orders (the outage): resolved-window rows close as `RECONCILED_STALE_RESOLVED`; unresolved rows adopt the journal's placement match; refusal reserved for genuinely unknowable live risk.
 - **#133** — fee-true booking: the venue's taker fee (`0.07·p·(1−p)`/share, USDC, on the placement-crossed portion) is captured at entry and booked at settlement/exit; ledger row = journal = daily-halt to the cent; fee math shared with the shadow ledger.

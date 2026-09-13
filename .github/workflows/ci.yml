@@ -36,10 +36,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: an unpinned install picked up ruff 0.16's wider default rule set
+        # and turned CI red with hundreds of new findings overnight.
+        run: pip install ruff==0.15.12
 
       - name: Ruff check
-        run: ruff check btc_5m_fv/ btc_bot/ tests/ tools/
+        run: ruff check polymarket_exec/ polymarket_bot/ tests/ tools/
 
   # (mypy retired at archive, 2026-07-11) It was always advisory
   # (continue-on-error) and never a merge gate; the type-cleanup epic (#81) was

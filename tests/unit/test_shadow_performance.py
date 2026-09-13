@@ -25,13 +25,13 @@ from tools.shadow_performance import (
 )
 
 # ---------------------------------------------------------------------------
-# Schema mirrors the btc_model_shadow_positions contract (LEDGER agent owns the
+# Schema mirrors the model_shadow_positions contract (LEDGER agent owns the
 # canonical CREATE TABLE in db.py; this is an independent copy for an isolated
 # temp DB so the test never touches the live database).
 # ---------------------------------------------------------------------------
 
 _SHADOW_TABLE = """
-CREATE TABLE btc_model_shadow_positions (
+CREATE TABLE model_shadow_positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT,
   window_slug TEXT,
@@ -53,7 +53,7 @@ CREATE TABLE btc_model_shadow_positions (
   feed_source TEXT
 );
 CREATE UNIQUE INDEX idx_shadow_window_model
-  ON btc_model_shadow_positions(window_slug, model_id);
+  ON model_shadow_positions(window_slug, model_id);
 """
 
 
@@ -137,7 +137,7 @@ def _seed_db(path: Path) -> None:
 
     conn.executemany(
         """
-        INSERT INTO btc_model_shadow_positions (
+        INSERT INTO model_shadow_positions (
           created_at, window_slug, model_id, side, entry_price, notional_usd,
           shares, fair_prob, edge, confidence, reason, state, outcome,
           settlement_price, resolved_at, realized_pnl_usd, quote_source, feed_source

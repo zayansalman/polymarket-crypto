@@ -13,11 +13,11 @@ import pytest
 import pytest_asyncio
 
 import db as _db
-from btc_bot import strategy
-from btc_bot.paper import PaperSnapshot
-from btc_bot.shadow import runner
-from btc_bot.shadow.fees import net_pnl_per_share
-from btc_bot.shadow.ledger import settle_open_shadow
+from polymarket_bot import strategy
+from polymarket_bot.paper import PaperSnapshot
+from polymarket_bot.shadow import runner
+from polymarket_bot.shadow.fees import net_pnl_per_share
+from polymarket_bot.shadow.ledger import settle_open_shadow
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def _snapshot(**overrides: object) -> PaperSnapshot:
 async def _models_for(db, window_slug: str) -> dict[str, dict]:
     async with db.connect() as conn:
         async with conn.execute(
-            "SELECT * FROM btc_model_shadow_positions WHERE window_slug = ?",
+            "SELECT * FROM model_shadow_positions WHERE window_slug = ?",
             (window_slug,),
         ) as cur:
             return {r["model_id"]: dict(r) for r in await cur.fetchall()}
@@ -92,12 +92,12 @@ async def test_favorite_window_logs_v0_and_cushion(test_db, params) -> None:
     await runner.record_shadow(_snapshot(), params)
     rows = await _models_for(test_db, "btc-updown-5m-1700000000")
     # A clean cushioned favourite: v0 fires AND the cushion gate passes.
-    assert "fair_value_v0" in rows
+    assert "pricing_v0" in rows
     assert "cushion_favorite_v2" in rows
     # 180s into the window: the freshness gates (<=60s) skip v7 AND v8 even
     # though v2 trades — the whole point of the fresh family (#142, #144).
     assert "cushion_fresh_v7" not in rows
-    assert "fair_value_fresh_v8" not in rows
+    assert "pricing_fresh_v8" not in rows
     assert rows["cushion_favorite_v2"]["side"] == "Up"
     assert rows["cushion_favorite_v2"]["entry_price"] == pytest.approx(0.56)
     assert rows["cushion_favorite_v2"]["shares"] == runner.SHADOW_SHARES
@@ -113,8 +113,8 @@ async def test_fresh_window_logs_v7_too(test_db, params) -> None:
     assert rows["cushion_fresh_v7"]["entry_price"] == pytest.approx(0.56)
     assert rows["cushion_fresh_v7"]["reason"].startswith("fresh 50s;")
     # v8 (freshness alone) fires on the same fresh window.
-    assert "fair_value_fresh_v8" in rows
-    assert rows["fair_value_fresh_v8"]["reason"].startswith("fresh 50s;")
+    assert "pricing_fresh_v8" in rows
+    assert rows["pricing_fresh_v8"]["reason"].startswith("fresh 50s;")
     # ...but f45 (≤45s gate, #155) does NOT fire at 50s elapsed — that is the
     # whole point of the tighter freshness window.
     assert "cushion_fresh_v7_f45" not in rows
@@ -166,24 +166,23 @@ async def test_settle_books_net_of_fee_pnl(test_db, params) -> None:
 
 
 def test_model_registry_constants() -> None:
-    assert runner.DEFAULT_MODEL == "fair_value_v0"
+    assert runner.DEFAULT_MODEL == "pricing_v0"
     # Post-surgery roster (#142): control, champion, challenger — retired
     # models (v3/v4/v5/v6) are neither logged nor selectable nor dispatchable.
     # #155 added cushion_fresh_v7_f45 (the #149 replay winner) as a 5th arm;
     # additive only — the racing specs v0/v2/v7/v8 are unchanged.
     expected = [
-        "fair_value_v0",
+        "pricing_v0",
         "cushion_favorite_v2",
         "cushion_fresh_v7",
-        "fair_value_fresh_v8",
+        "pricing_fresh_v8",
         "cushion_fresh_v7_f45",
     ]
     assert list(runner.MODEL_IDS) == expected
-    assert runner.SELECTABLE_MODELS == expected
     assert set(runner.CANDIDATE_SIGNALS) == {
         "cushion_favorite_v2",
         "cushion_fresh_v7",
-        "fair_value_fresh_v8",
+        "pricing_fresh_v8",
         "cushion_fresh_v7_f45",
     }
     for retired in (
@@ -194,7 +193,7 @@ def test_model_registry_constants() -> None:
     ):
         assert retired not in runner.MODEL_IDS
         assert retired not in runner.CANDIDATE_SIGNALS
-    assert "fair_value_v0" not in runner.CANDIDATE_SIGNALS
+    assert "pricing_v0" not in runner.CANDIDATE_SIGNALS
     # every logged id has a label + description for the dashboard
     for mid in runner.MODEL_IDS:
         assert mid in runner.MODEL_LABELS and mid in runner.MODEL_DESCRIPTIONS
@@ -204,7 +203,7 @@ def test_candidate_signal_dispatch(params) -> None:
     """The live-dispatch helper routes to the candidate, and v0/unknown -> None."""
     view = runner.build_view(_snapshot())  # cushioned Up favourite (see _snapshot)
     # v0 and unknown ids return None — the caller uses the native v0 path.
-    assert runner.candidate_signal("fair_value_v0", view, params) is None
+    assert runner.candidate_signal("pricing_v0", view, params) is None
     assert runner.candidate_signal("not_a_model", view, params) is None
     # a real candidate dispatches to its function.
     sig = runner.candidate_signal("cushion_favorite_v2", view, params)

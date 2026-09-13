@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from btc_bot import strategy
-from btc_bot.shadow.fees import net_pnl_per_share
+from polymarket_bot import strategy
+from polymarket_bot.shadow.fees import net_pnl_per_share
 from tools.replay_race import SHARES, reconstruct_outcomes, replay
 
 
@@ -85,7 +85,7 @@ class TestReplay:
     def test_first_signal_per_window_fee_true(self, params) -> None:
         """One window, two firing ticks -> ONE trade at the FIRST tick's ask,
         settled net of the taker fee."""
-        from btc_bot.shadow.signals import fair_value_fresh_v8
+        from polymarket_bot.shadow.signals import pricing_fresh_v8
 
         slug = "btc-updown-5m-1000000000"
         ticks = {
@@ -95,7 +95,7 @@ class TestReplay:
             ]
         }
         trades = replay(
-            ticks, {slug: "Up"}, {"fair_value_fresh_v8": fair_value_fresh_v8}, params
+            ticks, {slug: "Up"}, {"pricing_fresh_v8": pricing_fresh_v8}, params
         )
         assert len(trades) == 1
         t = trades[0]
@@ -104,8 +104,8 @@ class TestReplay:
         assert t.pnl == pytest.approx(SHARES * net_pnl_per_share(0.55, won=True))
 
     def test_unlabeled_window_produces_no_trades(self, params) -> None:
-        from btc_bot.shadow.signals import fair_value_fresh_v8
+        from polymarket_bot.shadow.signals import pricing_fresh_v8
 
         slug = "btc-updown-5m-1000000000"
         ticks = {slug: [_tick(slug, 260, 100.0)]}
-        assert replay(ticks, {}, {"fair_value_fresh_v8": fair_value_fresh_v8}, params) == []
+        assert replay(ticks, {}, {"pricing_fresh_v8": pricing_fresh_v8}, params) == []

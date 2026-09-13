@@ -33,7 +33,7 @@ def _make_db(path: Path, rows: list[dict]) -> None:
     conn = sqlite3.connect(path)
     conn.execute(
         """
-        CREATE TABLE btc_model_shadow_positions (
+        CREATE TABLE model_shadow_positions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           created_at TEXT, window_slug TEXT, model_id TEXT, side TEXT,
           entry_price REAL, notional_usd REAL, shares REAL, fair_prob REAL,
@@ -45,7 +45,7 @@ def _make_db(path: Path, rows: list[dict]) -> None:
     )
     for r in rows:
         conn.execute(
-            """INSERT INTO btc_model_shadow_positions
+            """INSERT INTO model_shadow_positions
                (created_at, model_id, side, entry_price, shares, edge, state,
                 outcome, realized_pnl_usd)
                VALUES (:created_at, :model_id, :side, :entry_price, :shares,

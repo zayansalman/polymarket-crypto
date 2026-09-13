@@ -90,7 +90,7 @@ class TestStatsHelpers:
 # ---------------------------------------------------------------------------
 
 _SHADOW_TABLE = """
-CREATE TABLE btc_model_shadow_positions (
+CREATE TABLE model_shadow_positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT, window_slug TEXT, model_id TEXT, side TEXT,
   entry_price REAL, notional_usd REAL, shares REAL, fair_prob REAL,
@@ -101,7 +101,7 @@ CREATE TABLE btc_model_shadow_positions (
 """
 
 _POSITIONS_TABLE = """
-CREATE TABLE btc_paper_positions (
+CREATE TABLE paper_positions (
   position_id INTEGER PRIMARY KEY AUTOINCREMENT,
   opened_at TEXT, closed_at TEXT, window_slug TEXT, side TEXT, state TEXT,
   entry_price REAL, exit_price REAL, notional_usd REAL, shares REAL,
@@ -109,7 +109,7 @@ CREATE TABLE btc_paper_positions (
 );
 """
 
-_TICKS_TABLE = "CREATE TABLE btc_paper_ticks (id INTEGER PRIMARY KEY, created_at TEXT);"
+_TICKS_TABLE = "CREATE TABLE paper_ticks (id INTEGER PRIMARY KEY, created_at TEXT);"
 
 _CONFIG_TABLE = "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);"
 
@@ -124,7 +124,7 @@ def _seed(path: Path) -> None:
 
     def shadow(model_id: str, slug: str, created: str, pnl: float, px: float, state="settled"):
         conn.execute(
-            "INSERT INTO btc_model_shadow_positions "
+            "INSERT INTO model_shadow_positions "
             "(created_at, window_slug, model_id, side, entry_price, state, "
             "realized_pnl_usd) VALUES (?,?,?,?,?,?,?)",
             (created, slug, model_id, "Up", px, state, pnl),
@@ -145,24 +145,24 @@ def _seed(path: Path) -> None:
     # Live book: two days of real-money fills.
     for day, pnl in [("2026-07-06", 4.0), ("2026-07-07", -8.0)]:
         conn.execute(
-            "INSERT INTO btc_paper_positions "
+            "INSERT INTO paper_positions "
             "(opened_at, mode, realized_pnl_usd, side, state, entry_price, "
             "notional_usd, shares) VALUES (?,?,?,?,?,?,?,?)",
             (f"{day}T00:00:00+00:00", "live", pnl, "Up", "closed", 0.5, 2.5, 5.0),
         )
     # A paper-mode row must NOT count toward the live book.
     conn.execute(
-        "INSERT INTO btc_paper_positions "
+        "INSERT INTO paper_positions "
         "(opened_at, mode, realized_pnl_usd, side, state, entry_price, "
         "notional_usd, shares) VALUES (?,?,?,?,?,?,?,?)",
         ("2026-07-07T01:00:00+00:00", "paper", 3.0, "Up", "closed", 0.5, 2.5, 5.0),
     )
 
-    conn.execute("INSERT INTO btc_paper_ticks (created_at) VALUES ('2026-07-07T06:40:00+00:00')")
+    conn.execute("INSERT INTO paper_ticks (created_at) VALUES ('2026-07-07T06:40:00+00:00')")
     for k, v in [
-        ("btc_bot.mode", "paper"),
-        ("btc_bot.state", "stopped"),
-        ("btc_bot.updated_at", "2026-07-08T16:51:23+00:00"),
+        ("polymarket_bot.mode", "paper"),
+        ("polymarket_bot.state", "stopped"),
+        ("polymarket_bot.updated_at", "2026-07-08T16:51:23+00:00"),
     ]:
         conn.execute(
             "INSERT INTO config (key, value, updated_at) VALUES (?,?,?)",
@@ -229,7 +229,7 @@ class TestGatherLiveBook:
         assert live.by_day[-1] == ("2026-07-07", 1, -8.0)
 
     def test_missing_orders_table_yields_zero_split(self, seeded_db: Path) -> None:
-        """The seeded DB has no btc_live_orders — split degrades to zeroes."""
+        """The seeded DB has no live_orders — split degrades to zeroes."""
         conn = _conn(seeded_db)
         live = gather_live_book(conn)
         conn.close()
@@ -237,7 +237,7 @@ class TestGatherLiveBook:
 
 
 _LIVE_ORDERS_TABLE = """
-CREATE TABLE btc_live_orders (
+CREATE TABLE live_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT, window_slug TEXT, token_id TEXT, intent TEXT, side TEXT,
   price REAL, size REAL, notional_usd REAL, order_type TEXT, status TEXT,
@@ -265,7 +265,7 @@ class TestPlacementSplit:
                 else None
             )
             conn.execute(
-                "INSERT INTO btc_live_orders "
+                "INSERT INTO live_orders "
                 "(created_at, intent, side, status, details_json, mode) "
                 "VALUES ('2026-07-09T00:00:00+00:00',?,?,?,?,?)",
                 (intent, "Up", status, details, mode),
@@ -324,8 +324,8 @@ def _cadence_db(tmp_path: Path, *, state: str, n_recent_ticks: int) -> Path:
     now = datetime.now(timezone.utc)
     for i in range(n_recent_ticks):
         ts = (now - timedelta(seconds=5 * (i + 1))).isoformat()
-        conn.execute("INSERT INTO btc_paper_ticks (created_at) VALUES (?)", (ts,))
-    for k, v in [("btc_bot.mode", "paper"), ("btc_bot.state", state)]:
+        conn.execute("INSERT INTO paper_ticks (created_at) VALUES (?)", (ts,))
+    for k, v in [("polymarket_bot.mode", "paper"), ("polymarket_bot.state", state)]:
         conn.execute(
             "INSERT INTO config (key, value, updated_at) VALUES (?,?,?)",
             (k, v, now.isoformat()),

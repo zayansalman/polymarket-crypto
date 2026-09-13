@@ -18,6 +18,10 @@ data/
 !.claude/settings.json
 local_private/
 archive/
+!docs/archive/
+!docs/archive/**
+!tasks/archive/
+!tasks/archive/**
 .idea/
 .vscode/
 *.log

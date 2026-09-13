@@ -19,7 +19,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 NO_DOCSTRING = "(needs docstring)"
 
-SOURCE_ROOTS = ["btc_5m_fv", "btc_bot", "tools"]
+SOURCE_ROOTS = ["polymarket_exec", "polymarket_bot", "tools"]
 TOPLEVEL_MODULES = ["main.py", "config.py", "db.py", "logging_setup.py", "dashboard.py"]
 # Entrypoints / foundation: never flagged DEAD even with zero importers.
 WIRED_ALLOWLIST = {"main.py", "config.py", "db.py", "logging_setup.py"}
@@ -181,14 +181,21 @@ def annotate_importers(root: Path, mods, test_dirs=("tests",)) -> None:
 def count_tests(root: Path) -> int:
     try:
         out = subprocess.run(
-            [sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q"],
+            [sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q",
+             "--continue-on-collection-errors"],
             cwd=root, capture_output=True, text=True, timeout=120,
         )
     except subprocess.TimeoutExpired:
         return 0  # fail soft — a hung collection must not break doc generation
-    if out.returncode != 0:
-        return 0
+    # Exit code is nonzero whenever ANY module fails to collect (e.g. missing
+    # optional local deps like polars/py_clob_client_v2/h2), even though
+    # --continue-on-collection-errors still collects and reports everything
+    # else. Discarding the whole count on that made this silently report 0
+    # real tests instead of ~800 — do not gate on returncode here; the
+    # trailing-line parser below already returns 0 for a genuinely empty or
+    # malformed run.
     # pytest prints a trailing summary line like "488 tests collected in 1.2s"
+    # (or "822 tests collected, 3 errors in 0.5s" with errors present).
     for line in reversed(out.stdout.splitlines()):
         line = line.strip()
         if "test" in line and line.split() and line.split()[0].isdigit():
@@ -199,7 +206,7 @@ def count_tests(root: Path) -> int:
 def entrypoint_ok(root: Path) -> bool:
     try:
         res = subprocess.run(
-            [sys.executable, "-c", "import btc_5m_fv.ops.dashboard.app"],
+            [sys.executable, "-c", "import polymarket_exec.ops.dashboard.app"],
             cwd=root, capture_output=True, text=True, timeout=60,
         )
     except subprocess.TimeoutExpired:
@@ -208,10 +215,12 @@ def entrypoint_ok(root: Path) -> bool:
 
 
 def collect_env_knobs(root: Path):
-    """Parse config.py for BTC_* knob names + their deprecated aliases.
+    """Parse config.py for * knob names + their deprecated aliases.
 
     Returns sorted list of (canonical, default, deprecated_alias|''). Best-effort:
-    reads the literal os.environ.get / _trade_knob string args via AST.
+    reads the literal os.environ.get / _env_* string args via AST. A knob name
+    is an ALL_CAPS, multi-word (underscore-joined) constant — this excludes
+    bare single-word env vars like ``PATH`` that aren't project knobs.
     """
     cfg = _read_text(root / "config.py")
     tree = ast.parse(cfg)
@@ -219,7 +228,7 @@ def collect_env_knobs(root: Path):
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             v = node.value
-            if v.startswith("BTC_") and v.isupper():
+            if "_" in v and v.isupper():
                 knobs.setdefault(v, "")
     return sorted(knobs)
 
@@ -295,8 +304,8 @@ def render_summary(
     else:
         n = PLACEHOLDER_TEST_COUNT
     lines = [
-        "- **Trees:** `btc_bot/` = live loop + signal math; `btc_5m_fv/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.",
-        "- **Entry:** `python main.py` → FastAPI `btc_5m_fv/ops/dashboard/app.py`; loop starts on operator ▶ Start → `btc_bot/controller.py:request_start`.",
+        "- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.",
+        "- **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.",
         f"- **Tests:** {n}.",
         f"- **Built-but-dead (do not edit expecting runtime effect):** {', '.join(f'`{d}`' for d in dead) or 'none'}.",
     ]
@@ -372,7 +381,7 @@ def main(argv=None) -> int:
 
     _write_generated(REPO, fast=args.fast)
     if not entrypoint_ok(REPO):
-        print("WARNING: btc_5m_fv.ops.dashboard.app failed to import — Gradio fallback would activate.", file=sys.stderr)
+        print("WARNING: polymarket_exec.ops.dashboard.app failed to import — Gradio fallback would activate.", file=sys.stderr)
     return 0
 
 

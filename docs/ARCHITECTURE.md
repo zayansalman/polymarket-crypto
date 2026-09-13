@@ -15,20 +15,20 @@ generated status in [FILE_MAP.md](FILE_MAP.md).)
                         └───────────────▲────────────────────────────┘
                                         │ reads SQLite / POST controls
 ┌──────────────┐   ticks   ┌────────────┴───────────┐   would-be trades
-│ Feeds        │──────────▶│ btc_bot/paper.py       │──────────────────┐
+│ Feeds        │──────────▶│ polymarket_bot/paper.py       │──────────────────┐
 │  Chainlink WS│           │  the ONE loop          │                  ▼
-│  + REST poll │           │  snapshot → signal →   │        btc_bot/shadow/
+│  + REST poll │           │  snapshot → signal →   │        polymarket_bot/shadow/
 │  (settlement-│           │  gate → paper/live     │         runner+ledger
 │   aligned)   │           │  execution → settle    │        (5-model race,
 │  Binance vol │           └────────┬───────────────┘         idempotent)
 └──────────────┘                    │ real orders (multi-gated)
                                     ▼
-                          btc_5m_fv/execution/live.py
+                          polymarket_exec/execution/live.py
                           CLOB executor · RiskGate · kill switch
 ```
 
-- **`btc_bot/`** — the live tick loop, fair-value math, and the shadow race.
-- **`btc_5m_fv/`** — layered core/strategy/connectors/storage/execution/ops.
+- **`polymarket_bot/`** — the live tick loop, pricing-model math, and the shadow race.
+- **`polymarket_exec/`** — layered core/strategy/connectors/storage/execution/ops.
 - **Foundation** — `config.py` (env parsing that *refuses* live boot on parse errors),
   `db.py` (SQLite + additive migrations + backfills), `logging_setup.py` (structlog).
 - **`tools/`** — research instruments; read-only against the ledger by construction.
@@ -44,7 +44,7 @@ the recorded shadow ledger **100% on side and entry price**, that wasn't a happy
 — purity made behavioral drift impossible.
 
 ### One fee model, one place
-`btc_bot/shadow/fees.py` (`0.07·p·(1−p)` per share, charged at entry) settles the shadow
+`polymarket_bot/shadow/fees.py` (`0.07·p·(1−p)` per share, charged at entry) settles the shadow
 ledger, the live book, the replayer, and the breakeven arithmetic. The project's June bug —
 fee-blind live books overstating PnL by 2× — is structurally unrepresentable now: there is
 no second implementation to disagree.
@@ -60,9 +60,9 @@ identically in both modes, with persisted daily counters. Paper is therefore a f
 preview of live — and the halts fired correctly in production three times, once ending a
 real-money session at −$8.10 exactly as specified.
 
-### Live is opt-in five times over
-Real orders require: `BTC_BOT_MODE=live` **and** the literal string
-`BTC_LIVE_CONFIRM=YES_I_UNDERSTAND` **and** a private key **and** a coherent wallet
+### Live is opt-in four times over
+Real orders require: the operator clicking **LIVE** in the dashboard (the consent — no
+env phrase) **and** a private key **and** a coherent wallet
 **and** a clean config parse (`CONFIG_PARSE_ERRORS` non-empty refuses live boot — a typo in
 a risk limit must never silently loosen it). A kill-switch file cancels and flattens.
 Missing gates refuse loudly; live never falls back to paper silently, and paper never

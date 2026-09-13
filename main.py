@@ -9,7 +9,7 @@ from logging_setup import get_logger, setup_logging
 
 # New architecture entrypoint (v0.2+)
 try:
-    from btc_5m_fv.ops.dashboard.app import app as dashboard_app
+    from polymarket_exec.ops.dashboard.app import app as dashboard_app
     HAS_NEW_DASHBOARD = True
 except ImportError:
     HAS_NEW_DASHBOARD = False
@@ -80,7 +80,7 @@ def main() -> None:
         import uvicorn
         log.info("dashboard.start_fastapi", port=DASHBOARD_SERVER_PORT)
         uvicorn.run(
-            "btc_5m_fv.ops.dashboard.app:app",
+            "polymarket_exec.ops.dashboard.app:app",
             host="127.0.0.1",
             port=DASHBOARD_SERVER_PORT,
             log_level="info",

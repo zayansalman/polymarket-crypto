@@ -56,7 +56,7 @@ def test_redacts_api_secret_and_passphrase(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_processor_scrubs_event_fields(key_env):
-    event = {"event": "boot_failed", "error": f"key={FAKE_KEY}", "module": "btc_live"}
+    event = {"event": "boot_failed", "error": f"key={FAKE_KEY}", "module": "live"}
     out = _redact_processor(None, "error", event)
     assert FAKE_KEY not in out["error"]
     assert out["event"] == "boot_failed"

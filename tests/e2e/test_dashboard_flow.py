@@ -17,7 +17,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient
 
-from btc_5m_fv.ops.dashboard.app import app
+from polymarket_exec.ops.dashboard.app import app
 
 
 @pytest.fixture
@@ -40,22 +40,21 @@ class TestFullPageLoad:
 
     def test_ems_panels_present(self, client: TestClient):
         text = client.get("/").text
-        for panel in ("STRATEGY", "LIVE MARKET", "PERFORMANCE / ALPHA",
-                      "TCA", "TRADE BLOTTER", "ems-grid", "ribbon"):
+        for panel in ("DECISION ENGINE", "LIVE MARKET", "PERFORMANCE / ALPHA",
+                      "TCA", "TRADE BLOTTER", "execution-grid", "ribbon"):
             assert panel in text
 
     def test_ems_content_container(self, client: TestClient):
         text = client.get("/").text
-        assert "ems-content" in text
+        assert "execution-content" in text
         assert "activity-content" in text
         assert "backtest-content" in text
 
-    def test_strategy_panel_shows_params(self, client: TestClient):
+    def test_strategy_panel_is_gone(self, client: TestClient):
+        # The v0 Strategy card was archived (2026-09-13).
         text = client.get("/").text
-        # Strategy panel surfaces the model + bands.
-        assert "Fair-Value" in text
-        assert "Edge band" in text
-        assert "Settlement" in text
+        assert "Edge band" not in text
+        assert "AUTO-PAUSE" not in text.upper().replace("AUTO-PAUSED", "")
 
 
 class TestButtonInteractivity:
@@ -85,7 +84,7 @@ class TestApiRoundTrip:
         client.post("/api/start")
         client.post("/api/stop")
         data = client.get("/api/data").json()
-        assert "ems" in data
+        assert "execution_view" in data
         assert "activity" in data
         assert "backtest" in data
 
@@ -94,7 +93,7 @@ class TestStaticAssets:
     def test_css_complete(self, client: TestClient):
         css = client.get("/static/style.css").text
         selectors = [
-            ":root", "body", ".topbar", ".ribbon", ".ems-grid", ".card",
+            ":root", "body", ".topbar", ".ribbon", ".execution-grid", ".card",
             ".card-h", ".stat", ".pill", ".gauge", ".book", ".spark",
             ".calib", ".blotter", ".tag", ".btn", ".sse-indicator", ".toast",
         ]
@@ -109,20 +108,34 @@ class TestStaticAssets:
 
 
 class TestVisualContract:
-    """Trading-terminal dark theme."""
+    """Institutional light theme — hairline grids, color reserved for signal."""
 
-    def test_dark_palette(self, client: TestClient):
+    def test_light_palette(self, client: TestClient):
         css = client.get("/static/style.css").text
-        assert "#0a0d13" in css       # --bg dark slate
-        assert "#ffa53c" in css       # --accent Bloomberg amber
+        assert "#ffffff" in css      # --bg
+        assert "#1b7a43" in css      # --pos
+        assert "#b3261e" in css      # --neg
+        assert "#ffa53c" not in css  # old Bloomberg amber accent must be gone
 
     def test_pnl_color_classes(self, client: TestClient):
         css = client.get("/static/style.css").text
         assert ".up" in css and ".down" in css
-        assert "--green:" in css and "--red:" in css
+        assert "--pos:" in css and "--neg:" in css
+
+    def test_no_rounded_corners_or_shadows(self, client: TestClient):
+        css = client.get("/static/style.css").text
+        import re
+        radii = re.findall(r"border-radius:\s*([^;]+);", css)
+        assert all(r.strip() in ("0", "0px", "0 0 0 0") for r in radii), radii
+        # The only shadow allowed is the header market selector's open-position
+        # glow (and its pulse keyframes) — a deliberate status signal.
+        shadow_lines = [ln for ln in css.splitlines() if "box-shadow" in ln]
+        assert all(
+            ln.startswith((".mkt-btn.glow", "@keyframes mkt-pulse")) for ln in shadow_lines
+        ), shadow_lines
 
     def test_monospace_numbers(self, client: TestClient):
-        assert "--mono:" in client.get("/static/style.css").text
+        assert "--font-mono:" in client.get("/static/style.css").text
 
     def test_pill_and_tag_variants(self, client: TestClient):
         css = client.get("/static/style.css").text

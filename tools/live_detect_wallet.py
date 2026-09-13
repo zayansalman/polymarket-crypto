@@ -1,24 +1,22 @@
-"""Detect the Polymarket funder wallet + signature type from a signer key (#34).
+"""Find your MetaMask Polymarket wallet and write it into .env (#34).
 
-For accounts created by connecting an existing wallet (e.g. MetaMask), the
-trading funds live in a deterministic proxy wallet controlled by that key —
-NOT in the EOA itself. This script derives every candidate the key could
-control (EOA, POLY_PROXY, Gnosis Safe), reads each one's on-chain collateral
-(pUSD) balance on Polygon, picks the funded one, and writes the matching
-POLYMARKET_FUNDER + POLYMARKET_SIGNATURE_TYPE into .env.
+A MetaMask-connected Polymarket account trades from a Gnosis Safe that your
+MetaMask key owns (signature type 2) — NOT from the MetaMask address itself.
+This derives that Safe address from the key, checks its on-chain collateral
+(pUSD) balance on Polygon, and writes POLYMARKET_FUNDER +
+POLYMARKET_SIGNATURE_TYPE=2 into .env.
 
-Deterministic, not guessed: the funded address's derivation IS its signature
-type (EOA=0, POLY_PROXY=1, GNOSIS_SAFE=2).
-
-Prereq: put your signer private key in .env as POLYMARKET_PRIVATE_KEY first
+Prereq: put your MetaMask private key in .env as POLYMARKET_PRIVATE_KEY
 (MetaMask: Account details -> Show private key). The key is read locally and
 never printed. Then:
 
-    .venv/bin/python tools/live_detect_wallet.py
+    python3 tools/live_detect_wallet.py
 """
 
 from __future__ import annotations
 
+import os
+import stat
 import sys
 from pathlib import Path
 
@@ -30,10 +28,59 @@ sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 from dotenv import load_dotenv  # noqa: E402
 
-from live_setup import _write_env_secure  # noqa: E402
-
 ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(ENV_PATH)
+
+# Keys this script manages in .env.
+_LIVE_KEYS = (
+    "POLYMARKET_PRIVATE_KEY",
+    "POLYMARKET_FUNDER",
+    "POLYMARKET_SIGNATURE_TYPE",
+    "TRADE_MAX_USD",
+    "PAPER_MIN_TRADE_USD",
+    "PAPER_MAX_TRADE_USD",
+)
+
+
+def _merge_env(text: str, updates: dict[str, str]) -> str:
+    """Update existing KEY= lines in place; append any new keys. Comments kept."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                out.append(f"{key}={updates[key]}")
+                seen.add(key)
+                continue
+        out.append(line)
+    for key in _LIVE_KEYS:
+        if key in updates and key not in seen:
+            out.append(f"{key}={updates[key]}")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _write_0600(path: Path, text: str) -> None:
+    """Write a secret file created 0600 from the start (no world-readable window)."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.write(fd, text.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # enforce 0600 even if pre-existing
+
+
+def _write_env_secure(updates: dict[str, str]) -> None:
+    """Write updates into .env (backing up first). Both files are 0600 — a
+    backup of a key file is itself a secret and must not be world-readable."""
+    existing = ENV_PATH.read_text(encoding="utf-8") if ENV_PATH.exists() else ""
+    if existing:
+        _write_0600(PROJECT_ROOT / ".env.bak", existing)
+    _write_0600(ENV_PATH, _merge_env(existing, updates))
+
+
 
 # Public Polygon RPCs (no key), tried in order — endpoints rotate auth/limits.
 POLYGON_RPCS = (
@@ -71,8 +118,6 @@ def _balance_of(address: str) -> float:
 
 
 def main() -> int:
-    import os
-
     key = os.getenv("POLYMARKET_PRIVATE_KEY", "").strip()
     if not key:
         print("Set POLYMARKET_PRIVATE_KEY in .env first "
@@ -82,62 +127,37 @@ def main() -> int:
         key = "0x" + key
 
     from eth_account import Account
-    from polymarket.environments import PRODUCTION
-    from polymarket._internal.wallet import (
-        derive_proxy_wallet_address,
-        derive_safe_wallet_address,
-    )
+    from polymarket._internal.environment import PRODUCTION_CONFIG
+    from polymarket._internal.wallet import derive_safe_wallet_address
 
     signer = Account.from_key(key).address
-    cfg = PRODUCTION.wallet_derivation
-    candidates = [
-        (0, signer, "EOA"),
-        (1, derive_proxy_wallet_address(signer, cfg), "POLY_PROXY (email/proxy)"),
-        (2, derive_safe_wallet_address(signer, cfg), "GNOSIS_SAFE (MetaMask/browser)"),
-    ]
+    funder = derive_safe_wallet_address(signer, PRODUCTION_CONFIG.wallet_derivation)
 
-    print(f"signer EOA (public): {signer}")
-    print("checking on-chain pUSD balance of each candidate wallet...\n")
-    funded = []
+    print(f"MetaMask address (public): {signer}")
+    print(f"Polymarket wallet (public): {funder}")
     try:
-        for sig_type, addr, label in candidates:
-            bal = _balance_of(addr)
-            marker = "  <-- FUNDED" if bal > 0 else ""
-            print(f"  type {sig_type} {label}: {addr}  ${bal:.2f}{marker}")
-            if bal > 0:
-                funded.append((sig_type, addr, label, bal))
+        bal = _balance_of(funder)
     except RuntimeError as e:
-        print(f"\nCould not read balances: {e}\nRe-run in a moment; .env unchanged.")
+        print(f"\nCould not read balance: {e}\nRe-run in a moment; .env unchanged.")
         return 1
-
-    if not funded:
-        print("\nNo candidate holds collateral. Either the wallet is unfunded, or "
-              "this is not the key that controls your Polymarket balance.")
-        return 1
-    if len(funded) > 1:
-        funded.sort(key=lambda x: -x[3])
-        print(f"\nMultiple funded candidates; picking the largest (${funded[0][3]:.2f}).")
-
-    sig_type, funder, label, bal = funded[0]
-    print(f"\nDetected wallet: {label}")
-    print(f"  FUNDER = {funder}")
-    print(f"  SIGNATURE_TYPE = {sig_type}")
     print(f"  balance = ${bal:.2f}")
+    if bal <= 0:
+        print("\nThis Polymarket wallet holds no USDC. Deposit on polymarket.com, or check "
+              "this is the MetaMask account you use there. .env unchanged.")
+        return 1
 
     _write_env_secure({
-        "BTC_BOT_MODE": "live",
         "POLYMARKET_PRIVATE_KEY": key,
         "POLYMARKET_FUNDER": funder,
-        "POLYMARKET_SIGNATURE_TYPE": str(sig_type),
-        "BTC_LIVE_MAX_TRADE_USD": "5",
-        "BTC_PAPER_MIN_TRADE_USD": "5",
-        "BTC_PAPER_MAX_TRADE_USD": "5",
+        "POLYMARKET_SIGNATURE_TYPE": "2",
+        "TRADE_MAX_USD": "5",
+        "PAPER_MIN_TRADE_USD": "5",
+        "PAPER_MAX_TRADE_USD": "5",
     })
     print("\n.env updated (funder + signature type written; key untouched; 0600).")
     print("\nNEXT:")
-    print("  1. Add this line to .env yourself (the conscious go-live step):")
-    print("        BTC_LIVE_CONFIRM=YES_I_UNDERSTAND")
-    print("  2. Verify: .venv/bin/python tools/live_preflight.py")
+    print("  1. Verify: python3 tools/live_preflight.py")
+    print("  2. Restart the dashboard, click LIVE, then press Start.")
     return 0
 
 

@@ -9,28 +9,28 @@ from typing import Any
 
 import gradio as gr
 
-from btc_bot.controller import get_status, request_start, request_stop
-from btc_bot.history import load_btc_history_stats
-from btc_bot.paper import load_paper_summary
+from polymarket_bot.controller import get_status, request_start, request_stop
+from polymarket_bot.history import load_btc_history_stats
+from polymarket_bot.paper import load_paper_summary
 from config import (
-    BTC_CHAINLINK_STREAM_URL,
+    CHAINLINK_STREAM_URL,
     DATA_DIR,
-    BTC_HISTORY_CSV_PATH,
-    BTC_PAPER_ENTRY_EDGE_MIN,
-    BTC_PAPER_MAX_TRADE_USD,
-    BTC_PAPER_MIN_CONFIDENCE,
-    BTC_PAPER_MIN_TRADE_USD,
-    BTC_PAPER_STOP_RETURN,
-    BTC_PAPER_TARGET_RETURN,
-    BTC_PAPER_TICK_SECONDS,
-    BTC_PAPER_TIME_EXIT_SECONDS,
+    HISTORY_CSV_PATH,
+    PAPER_ENTRY_EDGE_MIN,
+    PAPER_MAX_TRADE_USD,
+    PAPER_MIN_CONFIDENCE,
+    PAPER_MIN_TRADE_USD,
+    PAPER_STOP_RETURN,
+    PAPER_TARGET_RETURN,
+    PAPER_TICK_SECONDS,
+    PAPER_TIME_EXIT_SECONDS,
     DASHBOARD_SERVER_NAME,
     DASHBOARD_SERVER_PORT,
     DB_PATH,
 )
 from db import connect
 from logging_setup import get_logger
-from btc_bot.backtest import format_report
+from polymarket_bot.backtest import format_report
 
 log = get_logger("dashboard")
 
@@ -370,7 +370,6 @@ async def _load_feed(limit: int = 18) -> list[dict[str, Any]]:
             """
             SELECT created_at, event_type, message, details_json
             FROM notification_feed
-            WHERE event_type = 'system_start' OR event_type LIKE 'btc_%'
             ORDER BY created_at DESC
             LIMIT ?
             """,
@@ -494,9 +493,9 @@ def _paper_html() -> str:
         f"{_kpi_card('Last tick', _fmt_relative(paper.last_tick_at), paper.last_feed_source or 'no feed yet')}"
         f"{_kpi_card('Spot', 'n/a' if paper.last_spot_price is None else f'${paper.last_spot_price:,.2f}', paper.last_window_slug or 'no window yet')}"
         f"{_kpi_card('Fair Up', last_fair, f'market up {last_up}')}"
-        f"{_kpi_card('Edge', last_edge, f'min edge {BTC_PAPER_ENTRY_EDGE_MIN:.3f}')}"
+        f"{_kpi_card('Edge', last_edge, f'min edge {PAPER_ENTRY_EDGE_MIN:.3f}')}"
         f"{_kpi_card('Avg PnL', _money(paper.avg_pnl_usd, signed=True), f'avg hold {avg_hold}')}"
-        f"{_kpi_card('Sizing', f'${BTC_PAPER_MIN_TRADE_USD:.0f}-${BTC_PAPER_MAX_TRADE_USD:.0f}', f'min confidence {BTC_PAPER_MIN_CONFIDENCE:.0%}')}"
+        f"{_kpi_card('Sizing', f'${PAPER_MIN_TRADE_USD:.0f}-${PAPER_MAX_TRADE_USD:.0f}', f'min confidence {PAPER_MIN_CONFIDENCE:.0%}')}"
         "</div>"
         f"{_connectivity_html(paper.connectivity, status.state, status.mode)}"
         f"{_mode_split_html(paper)}"
@@ -511,7 +510,7 @@ def _history_markdown() -> str:
     if not stats.found:
         return (
             "### Historical Trade Baseline\n"
-            f"Optional CSV not found at `{BTC_HISTORY_CSV_PATH}`. The bot still runs; "
+            f"Optional CSV not found at `{HISTORY_CSV_PATH}`. The bot still runs; "
             "the CSV only helps explain why the lab sizes paper trades at $1-$5."
         )
     return (
@@ -528,7 +527,7 @@ def _history_markdown() -> str:
 def _brief_markdown() -> str:
     return (
         "### System Brief\n"
-        "This is a local BTC 5-minute binary fair-value strategy lab. It is useful "
+        "This is a local BTC 5-minute binary pricing-model strategy lab. It is useful "
         "as a personal paper bot and as a compact example of trading-system "
         "discipline: market discovery, feed labeling, confidence-based sizing, "
         "one-position risk control, structured event logs, and a dashboard kill "
@@ -555,13 +554,13 @@ def _settings_markdown() -> str:
     return (
         "### BTC 5m Paper Rules\n"
         f"- Market scope: BTC Up/Down 5-minute windows only.\n"
-        f"- Paper sizing: **${BTC_PAPER_MIN_TRADE_USD:.0f}-${BTC_PAPER_MAX_TRADE_USD:.0f}** by confidence.\n"
-        f"- Tick cadence: **{BTC_PAPER_TICK_SECONDS:.0f}s**.\n"
-        f"- Minimum confidence: **{BTC_PAPER_MIN_CONFIDENCE:.0%}**.\n"
-        f"- Minimum edge: **{BTC_PAPER_ENTRY_EDGE_MIN:.3f}**.\n"
-        f"- Target / stop return: **{BTC_PAPER_TARGET_RETURN:.0%} / {BTC_PAPER_STOP_RETURN:.0%}**.\n"
-        f"- Time exit: **{BTC_PAPER_TIME_EXIT_SECONDS}s**.\n"
-        f"- Settlement-aware reference target: {BTC_CHAINLINK_STREAM_URL}.\n\n"
+        f"- Paper sizing: **${PAPER_MIN_TRADE_USD:.0f}-${PAPER_MAX_TRADE_USD:.0f}** by confidence.\n"
+        f"- Tick cadence: **{PAPER_TICK_SECONDS:.0f}s**.\n"
+        f"- Minimum confidence: **{PAPER_MIN_CONFIDENCE:.0%}**.\n"
+        f"- Minimum edge: **{PAPER_ENTRY_EDGE_MIN:.3f}**.\n"
+        f"- Target / stop return: **{PAPER_TARGET_RETURN:.0%} / {PAPER_STOP_RETURN:.0%}**.\n"
+        f"- Time exit: **{PAPER_TIME_EXIT_SECONDS}s**.\n"
+        f"- Settlement-aware reference target: {CHAINLINK_STREAM_URL}.\n\n"
         "Required local env vars are optional for paper mode except path overrides. "
         "No private key is used by this build."
     )
@@ -571,7 +570,7 @@ def _backtest_markdown() -> str:
     report_path = DATA_DIR / "backtests" / "latest.json"
     if not report_path.exists():
         return (
-            "### BTC 5m Binary Fair Value Backtest\n"
+            "### BTC 5m Binary Pricing Model Backtest\n"
             "No local report yet. Run:\n\n"
             "```bash\n"
             "./.venv/bin/python tools/backtest_btc_strategy.py\n"
@@ -609,13 +608,13 @@ def _btc_stop_views() -> tuple[str, str, str, str, str]:
 
 def build_ui() -> gr.Blocks:
     initial = _btc_views()
-    with gr.Blocks(title="BTC 5m Binary Fair Value", css=CSS) as app:
+    with gr.Blocks(title="BTC 5m Binary Pricing Model", css=CSS) as app:
         gr.HTML(
             """
             <div class='hero'>
-              <h1>BTC 5m Binary Fair Value</h1>
+              <h1>BTC 5m Binary Pricing Model</h1>
               <p>Local paper-trading dashboard for Polymarket BTC Up/Down 5-minute markets.
-              Resolution-aware fair-value signal, bounded paper sizing, and operator controls.</p>
+              Resolution-aware pricing-model signal, bounded paper sizing, and operator controls.</p>
             </div>
             """
         )

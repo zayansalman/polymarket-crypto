@@ -4,7 +4,7 @@ Covers the four moving parts of issue #76:
   * the loop's auto-stop decision (`_loss_halt_stop_detail`),
   * the `/api/loss_halt/bypass` and `/api/loss_halt/reset` endpoints,
   * the one-shot stale-bypass migration, and
-  * the LOSS HALT panel (STATUS pill → bypass button, Reset button).
+  * the ribbon loss-halt control (typeable limit, Set, Reset, status).
 
 Each test runs against its own throwaway SQLite so the real journal is untouched.
 """
@@ -19,9 +19,9 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 
 import db as _db
-from btc_5m_fv.execution.gate import GateConfig, RiskGate, get_loss_halt_bypass
-from btc_5m_fv.ops.dashboard.panels import guardrails
-from btc_bot.paper import _loss_halt_stop_detail
+from polymarket_exec.execution.gate import GateConfig, RiskGate, get_loss_halt_bypass
+from polymarket_exec.ops.dashboard.panels import ribbon
+from polymarket_bot.paper import _loss_halt_stop_detail
 
 
 def _cfg(*, daily_loss_halt_usd: float = 10.0) -> GateConfig:
@@ -47,7 +47,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     """TestClient on an isolated DB. The lifespan runs init_db + the #76
     migration, so the bypass starts OFF (halt ON)."""
     monkeypatch.setattr(_db, "DB_PATH", tmp_path / "test_lh_ep.db")
-    from btc_5m_fv.ops.dashboard.app import app
+    from polymarket_exec.ops.dashboard.app import app
 
     with TestClient(app) as c:
         yield c
@@ -101,7 +101,7 @@ class TestLossHaltStopDetail:
 class TestPaperHaltPauseNotify:
     @pytest.mark.asyncio
     async def test_notifies_once_per_episode_and_rearms(self, isolated_db) -> None:
-        import btc_bot.paper as paper
+        import polymarket_bot.paper as paper
 
         paper._paper_halt_pause_notified = False
         g = RiskGate(_cfg(), is_live=False)
@@ -113,7 +113,7 @@ class TestPaperHaltPauseNotify:
         async with _db.connect() as conn:
             async with conn.execute(
                 "SELECT COUNT(*) AS n FROM notification_feed"
-                " WHERE event_type = 'btc_paper_halt_pause'"
+                " WHERE event_type = 'paper_halt_pause'"
             ) as cur:
                 assert (await cur.fetchone())["n"] == 1
 
@@ -124,7 +124,7 @@ class TestPaperHaltPauseNotify:
 
     @pytest.mark.asyncio
     async def test_never_fires_in_live_mode(self, isolated_db) -> None:
-        import btc_bot.paper as paper
+        import polymarket_bot.paper as paper
 
         paper._paper_halt_pause_notified = False
         g = RiskGate(_cfg(), is_live=True)
@@ -133,13 +133,13 @@ class TestPaperHaltPauseNotify:
         async with _db.connect() as conn:
             async with conn.execute(
                 "SELECT COUNT(*) AS n FROM notification_feed"
-                " WHERE event_type = 'btc_paper_halt_pause'"
+                " WHERE event_type = 'paper_halt_pause'"
             ) as cur:
                 assert (await cur.fetchone())["n"] == 0
 
     @pytest.mark.asyncio
     async def test_none_when_bypassed(self, isolated_db) -> None:
-        from btc_5m_fv.execution.gate import set_loss_halt_bypass
+        from polymarket_exec.execution.gate import set_loss_halt_bypass
 
         await set_loss_halt_bypass(True)
         g = RiskGate(_cfg(), is_live=True)
@@ -173,35 +173,25 @@ class TestLossHaltEndpoints:
         assert r.json()["bypass_loss_halt"] is False
         assert asyncio.run(get_loss_halt_bypass()) is False
 
-    def test_reset_running_clears_pause_keeps_tally(self, client: TestClient) -> None:
-        # While running, Reset clears the adaptive auto-pause (a live config the
-        # loop honours) but leaves the loss-halt tally to the loop (it owns it
-        # in memory). The operator's one-click "let me trade again".
-        asyncio.run(_db.set_config("btc_bot.state", "running"))
-        asyncio.run(_db.set_config("btc_risk.live_realized_pnl", "-8.0"))
-        asyncio.run(_db.set_config("btc_bot.auto_paused", "1"))
+    def test_reset_running_keeps_tally(self, client: TestClient) -> None:
+        # While running, Reset leaves the loss-halt tally to the loop (it owns
+        # it in memory).
+        asyncio.run(_db.set_config("polymarket_bot.state", "running"))
+        asyncio.run(_db.set_config("risk.live_realized_pnl", "-8.0"))
         r = client.post("/api/loss_halt/reset")
         body = r.json()
         assert body["status"] == "ok"
         assert body["halt_reset"] is False
-        assert asyncio.run(_db.get_config("btc_risk.live_realized_pnl")) == "-8.0"
-        assert asyncio.run(_db.get_config("btc_bot.auto_paused")) == "0"
-
-    def test_reset_clears_auto_pause_when_stopped(self, client: TestClient) -> None:
-        asyncio.run(_db.set_config("btc_bot.state", "stopped"))
-        asyncio.run(_db.set_config("btc_bot.auto_paused", "1"))
-        r = client.post("/api/loss_halt/reset")
-        assert r.json()["status"] == "ok"
-        assert asyncio.run(_db.get_config("btc_bot.auto_paused")) == "0"
+        assert asyncio.run(_db.get_config("risk.live_realized_pnl")) == "-8.0"
 
     def test_reset_zeroes_when_stopped(self, client: TestClient) -> None:
-        asyncio.run(_db.set_config("btc_bot.state", "stopped"))
-        asyncio.run(_db.set_config("btc_risk.live_realized_pnl", "-8.0"))
-        asyncio.run(_db.set_config("btc_risk.paper_realized_pnl", "-3.0"))
+        asyncio.run(_db.set_config("polymarket_bot.state", "stopped"))
+        asyncio.run(_db.set_config("risk.live_realized_pnl", "-8.0"))
+        asyncio.run(_db.set_config("risk.paper_realized_pnl", "-3.0"))
         r = client.post("/api/loss_halt/reset")
         assert r.json()["status"] == "ok"
-        assert float(asyncio.run(_db.get_config("btc_risk.live_realized_pnl"))) == 0.0
-        assert float(asyncio.run(_db.get_config("btc_risk.paper_realized_pnl"))) == 0.0
+        assert float(asyncio.run(_db.get_config("risk.live_realized_pnl"))) == 0.0
+        assert float(asyncio.run(_db.get_config("risk.paper_realized_pnl"))) == 0.0
 
     def test_reset_clears_trailing_halt_after_banked_peak(
         self, client: TestClient
@@ -210,11 +200,11 @@ class TestLossHaltEndpoints:
         leaves a banked peak holding the floor above 0 and the operator stays
         halted. Reset must also clear the peaks. Proven through a freshly loaded
         gate (what the loop sees on the next Start), not just the raw keys."""
-        asyncio.run(_db.set_config("btc_bot.state", "stopped"))
-        asyncio.run(_db.set_config("btc_risk.date", RiskGate._today()))
+        asyncio.run(_db.set_config("polymarket_bot.state", "stopped"))
+        asyncio.run(_db.set_config("risk.date", RiskGate._today()))
         # Banked +$30 peak, bled back to +$20 → floor +20, 20 <= 20 → HALTED.
-        asyncio.run(_db.set_config("btc_risk.live_realized_pnl", "20.0"))
-        asyncio.run(_db.set_config("btc_risk.live_peak_pnl", "30.0"))
+        asyncio.run(_db.set_config("risk.live_realized_pnl", "20.0"))
+        asyncio.run(_db.set_config("risk.live_peak_pnl", "30.0"))
 
         before = RiskGate(_cfg(), is_live=True)
         asyncio.run(before.load())
@@ -237,7 +227,7 @@ class TestLossHaltEndpoints:
 class TestBypassMigration:
     @pytest.mark.asyncio
     async def test_clears_stale_flag_once(self, isolated_db) -> None:
-        from btc_5m_fv.execution.gate import (
+        from polymarket_exec.execution.gate import (
             migrate_clear_stale_bypass_v76,
             set_loss_halt_bypass,
         )
@@ -248,7 +238,7 @@ class TestBypassMigration:
 
     @pytest.mark.asyncio
     async def test_does_not_wipe_later_deliberate_bypass(self, isolated_db) -> None:
-        from btc_5m_fv.execution.gate import (
+        from polymarket_exec.execution.gate import (
             migrate_clear_stale_bypass_v76,
             set_loss_halt_bypass,
         )
@@ -266,44 +256,41 @@ class TestBypassMigration:
 
 def _render(**over) -> str:
     args = dict(
-        day_spend=0.0,
-        bankroll_cap=30.0,
-        submitted_count=0,
-        submitted_notional=0.0,
-        day_pnl=0.0,
+        mode="paper",
+        state="stopped",
+        session_start=None,
         live_pnl=0.0,
         paper_pnl=0.0,
+        day_pnl=0.0,
+        open_pos=[],
+        closed_session=[],
+        tick=None,
+        last_live_at=None,
         loss_halt_usd=10.0,
-        state="stopped",
-        bot_detail="",
-        session_start=None,
-        paused=False,
-        pause_reason="",
-        blocked=[],
-        mode="paper",
         bypass_loss_halt=False,
     )
     args.update(over)
-    return guardrails.render(**args)
+    return ribbon.render(**args)
 
 
-class TestGuardrailsPanel:
-    def test_status_is_a_bypass_button(self) -> None:
-        html = _render(mode="live", bypass_loss_halt=True)
-        assert "/api/loss_halt/bypass" in html
-        assert ">BYPASS<" in html
-        assert "enabled:false" in html  # clicking BYPASS re-enables the halt
+class TestRibbonLossHalt:
+    def test_limit_is_typeable_with_set_and_reset(self) -> None:
+        html = _render(loss_halt_usd=25.0)
+        assert "id='halt-usd'" in html and "type='number'" in html
+        assert "value='25'" in html
+        assert "setLossHalt()" in html and ">Set<" in html
+        assert "resetLossHalt()" in html and ">Reset<" in html
 
-    def test_status_ok_click_enables_bypass(self) -> None:
-        html = _render(mode="live", live_pnl=-5.0)
-        assert ">OK<" in html
-        assert "enabled:true" in html  # clicking OK disables the halt
+    def test_bypass_shown_when_enabled(self) -> None:
+        assert ">BYPASS<" in _render(mode="live", bypass_loss_halt=True)
+
+    def test_ok_within_limit(self) -> None:
+        assert ">OK<" in _render(mode="live", live_pnl=-5.0)
 
     def test_status_halted_when_live_leg_breached(self) -> None:
-        html = _render(mode="live", live_pnl=-12.0)
-        assert ">HALTED<" in html
+        assert ">HALTED<" in _render(mode="live", live_pnl=-12.0)
 
-    def test_paper_losses_do_not_halt_live_panel(self) -> None:
+    def test_paper_losses_do_not_halt_live(self) -> None:
         # Live leg fine (-5), paper leg deep (-30): live mode shows OK, not HALTED.
         html = _render(mode="live", live_pnl=-5.0, paper_pnl=-30.0)
         assert ">OK<" in html
@@ -311,32 +298,15 @@ class TestGuardrailsPanel:
 
     def test_headroom_uses_live_leg_in_live(self) -> None:
         html = _render(mode="live", live_pnl=-4.0, paper_pnl=-30.0)
-        assert "Headroom (live)" in html
-        assert "$6.00" in html  # 10 - 4, paper -30 ignored
+        assert "headroom <span class=''>$6.00</span>" in html  # 10 - 4, paper -30 ignored
 
-    def test_reset_button_present_and_enabled_when_stopped(self) -> None:
-        html = _render(mode="live", state="stopped")
-        assert "/api/loss_halt/reset" in html
-        assert "Reset halt" in html
-
-    def test_reset_disabled_when_running_and_not_paused(self) -> None:
-        html = _render(mode="live", state="running", paused=False)
-        assert "Stop the bot to reset" in html
-
-    def test_reset_enabled_when_running_and_paused(self) -> None:
-        # An auto-pause IS clearable while running (#36) — the button must be
-        # live so the operator can resume without stopping the bot.
-        html = _render(mode="live", state="running", paused=True)
-        assert "/api/loss_halt/reset" in html
-        assert "Stop the bot to reset" not in html
-
-    def test_no_cannot_disable_text(self) -> None:
+    def test_no_dialogs_in_controls(self) -> None:
         html = _render(mode="live")
-        assert "cannot disable" not in html
+        assert "confirm(" not in html
 
 
 class TestGatePanelParity:
-    """The LOSS HALT panel verdict MUST match RiskGate enforcement for the same
+    """The ribbon loss-halt verdict MUST match RiskGate enforcement for the same
     inputs (#112). A divergence — a different comparison or peak derivation —
     would tell the operator they're OK while the loop has actually halted (or
     vice versa) on real money. This guards the two formulas against drift."""

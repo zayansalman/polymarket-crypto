@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "btc-5m-fv"
+name = "polymarket-crypto"
 version = "0.2.0"
-description = "BTC 5-minute binary fair-value trading system"
+description = "Local research and shadow/paper execution stack for Polymarket crypto binary markets"
 requires-python = ">=3.11"
 dependencies = [
     # http2 extra (h2) is REQUIRED, not optional: the Polymarket crypto-price
@@ -32,12 +32,12 @@ dependencies = [
 # match requirements.txt.
 test = ["pytest>=8.0", "pytest-asyncio>=0.24", "polars>=1.17", "huggingface-hub>=0.26", "numpy>=1.26"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
-# One-time live onboarding only (tools/live_setup.py): deposit-wallet deploy.
+# One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
 # Day-to-day trading uses py-clob-client-v2, a core dependency.
 setup = ["polymarket-client"]
 
 [tool.setuptools]
-packages = ["btc_5m_fv", "btc_bot"]
+packages = ["polymarket_exec", "polymarket_bot"]
 py-modules = ["db", "config", "logging_setup", "main", "dashboard"]
 
 [tool.ruff]
@@ -49,12 +49,17 @@ target-version = "py311"
 # sys.path before importing top-level modules (config, db, logging_setup) or
 # the package itself, so those imports intentionally follow the sys.path
 # bootstrap and cannot be hoisted to the top of the file.
-"btc_5m_fv/execution/live.py" = ["E402"]
-"btc_5m_fv/ops/dashboard/app.py" = ["E402"]
+"polymarket_exec/execution/live.py" = ["E402"]
+"polymarket_exec/ops/dashboard/app.py" = ["E402"]
 "tests/e2e/test_dashboard_flow.py" = ["E402"]
 "tests/unit/test_dashboard.py" = ["E402"]
 "tools/backtest_btc_strategy.py" = ["E402"]
 "tools/demo_snapshot.py" = ["E402"]
+"tools/copytrade_dashboard.py" = ["E402"]
+"tools/copytrade_live.py" = ["E402"]
+"tools/copytrade_onchain.py" = ["E402"]
+"tools/copytrade_shadow.py" = ["E402"]
+"tools/pairarb_shadow.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

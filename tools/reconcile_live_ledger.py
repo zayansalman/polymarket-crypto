@@ -1,7 +1,7 @@
 """Reconcile the live paper-ledger against the REAL Polymarket account (issue #102).
 
 The live executor books *assumed* fills/resolution/zero-fees (issue #103), so
-``btc_paper_positions(mode='live')`` drifts from what actually happened on the
+``paper_positions(mode='live')`` drifts from what actually happened on the
 venue. This tool corrects the historical ledger to ground truth pulled from the
 Polymarket **Data API** (public, keyed by the funder wallet — no private key,
 no orders).
@@ -158,7 +158,7 @@ def _newest_live_epoch(db_path: Path) -> int:
     """Unix-seconds of the most recent live position's opened_at (0 if none)."""
     conn = sqlite3.connect(db_path)
     row = conn.execute(
-        "SELECT MAX(opened_at) FROM btc_paper_positions WHERE mode='live'"
+        "SELECT MAX(opened_at) FROM paper_positions WHERE mode='live'"
     ).fetchone()
     conn.close()
     if not row or not row[0]:
@@ -175,7 +175,7 @@ def build_plan(db_path: Path, win: dict, open_val: dict) -> tuple[list[dict], li
     conn.row_factory = sqlite3.Row
     live = conn.execute(
         "SELECT position_id, window_slug, side, entry_price, exit_price, shares, "
-        "notional_usd, realized_pnl_usd, exit_reason FROM btc_paper_positions "
+        "notional_usd, realized_pnl_usd, exit_reason FROM paper_positions "
         "WHERE mode='live' AND state='closed' ORDER BY opened_at"
     ).fetchall()
     conn.close()
@@ -231,7 +231,7 @@ def apply_plan(
                 tag += f" RESOLUTION-DISAGREE db={c['db_pnl']:+.2f} real={c['real_pnl']:+.2f}"
             er = er + tag
         cur.execute(
-            "UPDATE btc_paper_positions SET entry_price=?, exit_price=?, shares=?, "
+            "UPDATE paper_positions SET entry_price=?, exit_price=?, shares=?, "
             "notional_usd=?, realized_pnl_usd=?, exit_reason=? WHERE position_id=?",
             (
                 c["real_entry"],
@@ -248,7 +248,7 @@ def apply_plan(
         if RECON_TAG not in er:
             er = er + f" | {RECON_TAG} PHANTOM-no-venue-fill"
         cur.execute(
-            "UPDATE btc_paper_positions SET state='void', realized_pnl_usd=0, "
+            "UPDATE paper_positions SET state='void', realized_pnl_usd=0, "
             "notional_usd=0, shares=0, exit_price=0, exit_reason=? WHERE position_id=?",
             (er, p["position_id"]),
         )
@@ -268,7 +268,7 @@ def main() -> None:
     g.add_argument("--dry-run", action="store_true", help="print the diff, write CSV, no DB writes")
     g.add_argument("--apply", action="store_true", help="apply the corrections to the DB")
     ap.add_argument("--db", type=Path, default=_config.DB_PATH)
-    ap.add_argument("--asof", default=None, help="ISO timestamp recorded in btc_recon.asof")
+    ap.add_argument("--asof", default=None, help="ISO timestamp recorded in recon.asof")
     ap.add_argument(
         "--force", action="store_true",
         help="apply even when the snapshot looks stale vs the ledger (skips the staleness guard)",
@@ -321,17 +321,17 @@ def main() -> None:
 
     asof = args.asof or datetime.now(UTC).isoformat()
     recon_keys = {
-        "btc_recon.real_btc_pnl_lifetime": btc_pnl,
-        "btc_recon.real_account_pnl_lifetime": acct_pnl,
-        "btc_recon.open_positions_value": open_total,
-        "btc_recon.corrected_live_pnl": round(real_sum, 4),
-        "btc_recon.phantoms_voided": len(phantoms),
-        "btc_recon.source": "polymarket-data-api",
-        "btc_recon.asof": asof,
-        "btc_recon.note": "live ledger reconciled to real fills/redemptions; phantoms voided (#102)",
+        "recon.real_btc_pnl_lifetime": btc_pnl,
+        "recon.real_account_pnl_lifetime": acct_pnl,
+        "recon.open_positions_value": open_total,
+        "recon.corrected_live_pnl": round(real_sum, 4),
+        "recon.phantoms_voided": len(phantoms),
+        "recon.source": "polymarket-data-api",
+        "recon.asof": asof,
+        "recon.note": "live ledger reconciled to real fills/redemptions; phantoms voided (#102)",
     }
     apply_plan(args.db, corrections, phantoms, recon_keys, asof)
-    print(f"\nAPPLIED to {args.db}. Wrote {len(recon_keys)} btc_recon.* keys.")
+    print(f"\nAPPLIED to {args.db}. Wrote {len(recon_keys)} recon.* keys.")
 
 
 if __name__ == "__main__":

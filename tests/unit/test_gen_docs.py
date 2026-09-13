@@ -137,15 +137,15 @@ def test_collect_env_knobs_canonical_and_sorted(tmp_path):
     cfg = (
         '"""config."""\n'
         "import os\n"
-        'A = os.environ.get("BTC_TRADE_MAX_USD", "5")\n'
-        'B = os.environ.get("BTC_LIVE_MAX_USD", "10")\n'
+        'A = os.environ.get("TRADE_MAX_USD", "5")\n'
+        'B = os.environ.get("LIVE_MAX_USD", "10")\n'
         'NOT_A_KNOB = os.environ.get("PATH", "")\n'
         'lowercase = "btc_not_upper"\n'
     )
     (tmp_path / "config.py").write_text(cfg)
     knobs = gd.collect_env_knobs(tmp_path)
-    assert "BTC_TRADE_MAX_USD" in knobs
-    assert "BTC_LIVE_MAX_USD" in knobs
+    assert "TRADE_MAX_USD" in knobs
+    assert "LIVE_MAX_USD" in knobs
     assert "PATH" not in knobs
     assert "btc_not_upper" not in knobs
     assert knobs == sorted(knobs)
@@ -157,13 +157,13 @@ def test_real_tree_wiring_truth():
     gd.annotate_importers(gd.REPO, mods)
     by = {m.path: m for m in mods}
     # The live loop and its signal math are WIRED.
-    assert by["btc_bot/paper.py"].status == "WIRED"
-    assert by["btc_bot/strategy.py"].status == "WIRED"
+    assert by["polymarket_bot/paper.py"].status == "WIRED"
+    assert by["polymarket_bot/strategy.py"].status == "WIRED"
     # The live risk gate + executor are WIRED.
-    assert by["btc_5m_fv/execution/gate.py"].status == "WIRED"
-    assert by["btc_5m_fv/execution/live.py"].status == "WIRED"
+    assert by["polymarket_exec/execution/gate.py"].status == "WIRED"
+    assert by["polymarket_exec/execution/live.py"].status == "WIRED"
     # Known dead-in-active-tree module is flagged.
-    assert by["btc_5m_fv/ops/controller.py"].status == "DEAD?"
+    assert by["polymarket_exec/ops/controller.py"].status == "DEAD?"
 
 
 def test_test_count_is_positive_int():
@@ -172,7 +172,7 @@ def test_test_count_is_positive_int():
 
 
 def test_entrypoint_importable():
-    assert gd.entrypoint_ok(gd.REPO) is True  # btc_5m_fv.ops.dashboard.app imports
+    assert gd.entrypoint_ok(gd.REPO) is True  # polymarket_exec.ops.dashboard.app imports
 
 
 def test_replace_block_is_idempotent():

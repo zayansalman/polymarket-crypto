@@ -1,6 +1,6 @@
 """Unit tests for the data-integrity layer (issues #21/#22).
 
-Covers the tie-rule fair value, executable-edge signal selection, the
+Covers the tie-rule pricing model, executable-edge signal selection, the
 Chainlink settlement connector (REST reference stabilization, fast
 settlement, REST spot poll), the WS feed frame handling, and the
 degraded-feed exit suppression. No external network calls.
@@ -13,12 +13,12 @@ import json
 import httpx
 import pytest
 
-from btc_5m_fv.connectors.chainlink_settlement import (
+from polymarket_exec.connectors.chainlink_settlement import (
     ChainlinkSettlementConnector,
     ChainlinkWsFeed,
     build_subscribe_message,
 )
-from btc_bot.strategy import (
+from polymarket_bot.strategy import (
     StrategyParams,
     fair_up_probability,
     signal_from_executable_edges,
@@ -245,7 +245,7 @@ async def test_get_recent_print_uses_open_of_offset_window():
 
 
 def test_band_reentry_suppressed_when_feed_degraded():
-    from btc_bot.paper import PaperSnapshot, _exit_reason
+    from polymarket_bot.paper import PaperSnapshot, _exit_reason
 
     snapshot = PaperSnapshot(
         created_at="2026-06-11T00:00:00+00:00",

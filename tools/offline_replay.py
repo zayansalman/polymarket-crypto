@@ -1,6 +1,6 @@
-"""Offline replay of the BTC 5-m fair-value strategy on HF Polymarket data.
+"""Offline replay of the BTC 5-m pricing-model strategy on HF Polymarket data.
 
-Issue #56. Replays ``btc_bot.strategy.fair_up_probability`` +
+Issue #56. Replays ``polymarket_bot.strategy.fair_up_probability`` +
 ``signal_from_executable_edges`` over the HF dataset
 ``aliplayer1/polymarket-crypto-updown`` to validate Brier / ROI / win-rate
 on ≫ the ~844 fills present in the live SQLite journal.
@@ -41,21 +41,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from btc_bot.strategy import (  # noqa: E402
+from polymarket_bot.strategy import (  # noqa: E402
     StrategyParams,
     fair_up_probability,
     signal_from_executable_edges,
     sigma_per_second,
 )
 from config import (  # noqa: E402
-    BTC_PAPER_ENTRY_EDGE_MAX,
-    BTC_PAPER_ENTRY_EDGE_MIN,
-    BTC_PAPER_ENTRY_MIN_REMAINING_SECONDS,
-    BTC_PAPER_MAX_TRADE_USD,
-    BTC_PAPER_MIN_CONFIDENCE,
-    BTC_PAPER_MIN_ENTRY_PRICE,
-    BTC_PAPER_MIN_TRADE_USD,
-    BTC_PRINT_GRANULARITY_USD,
+    PAPER_ENTRY_EDGE_MAX,
+    PAPER_ENTRY_EDGE_MIN,
+    PAPER_ENTRY_MIN_REMAINING_SECONDS,
+    PAPER_MAX_TRADE_USD,
+    PAPER_MIN_CONFIDENCE,
+    PAPER_MIN_ENTRY_PRICE,
+    PAPER_MIN_TRADE_USD,
+    PRINT_GRANULARITY_USD,
     DATA_DIR,
 )
 
@@ -181,13 +181,13 @@ class ReplayEntry:
 
 def _params_from_env() -> StrategyParams:
     return StrategyParams(
-        min_trade_usd=BTC_PAPER_MIN_TRADE_USD,
-        max_trade_usd=BTC_PAPER_MAX_TRADE_USD,
-        entry_edge_min=BTC_PAPER_ENTRY_EDGE_MIN,
-        min_confidence=BTC_PAPER_MIN_CONFIDENCE,
-        entry_min_remaining_seconds=BTC_PAPER_ENTRY_MIN_REMAINING_SECONDS,
-        entry_edge_max=BTC_PAPER_ENTRY_EDGE_MAX,
-        min_entry_price=BTC_PAPER_MIN_ENTRY_PRICE,
+        min_trade_usd=PAPER_MIN_TRADE_USD,
+        max_trade_usd=PAPER_MAX_TRADE_USD,
+        entry_edge_min=PAPER_ENTRY_EDGE_MIN,
+        min_confidence=PAPER_MIN_CONFIDENCE,
+        entry_min_remaining_seconds=PAPER_ENTRY_MIN_REMAINING_SECONDS,
+        entry_edge_max=PAPER_ENTRY_EDGE_MAX,
+        min_entry_price=PAPER_MIN_ENTRY_PRICE,
     )
 
 
@@ -197,7 +197,7 @@ def replay_market(
     market_prices: pl.DataFrame,
     params: StrategyParams,
 ) -> ReplayEntry | None:
-    """One-entry-per-window replay (matching ``BTC_EXIT_STYLE='settle'``).
+    """One-entry-per-window replay (matching ``EXIT_STYLE='settle'``).
 
     Walk the in-window mid-price ticks chronologically. For each:
     * spot = latest Chainlink print at-or-before that ts
@@ -251,7 +251,7 @@ def replay_market(
         sigma = sigma_per_second(recent[-30:])
 
         fair_up = fair_up_probability(
-            spot, reference, sigma, remaining, print_granularity=BTC_PRINT_GRANULARITY_USD
+            spot, reference, sigma, remaining, print_granularity=PRINT_GRANULARITY_USD
         )
         up_mid = float(row["up_price"])
         down_mid = float(row["down_price"])
@@ -296,7 +296,7 @@ def aggregate_metrics(entries: list[ReplayEntry]) -> dict:
     losses = n - wins
     # Binary payoff on Polymarket: shares = notional/entry_price; win → $1/share
     # gross, $0 if lose. PnL = (1/entry_price - 1) * notional on a win, else
-    # -notional. Matches `_metrics_from_trades` in btc_bot/backtest.py.
+    # -notional. Matches `_metrics_from_trades` in polymarket_bot/backtest.py.
     pnl_usd = 0.0
     notional_total = 0.0
     for e in entries:

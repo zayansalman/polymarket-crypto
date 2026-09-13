@@ -1,4 +1,4 @@
-"""SQLite storage for the BTC 5-minute binary fair-value strategy lab."""
+"""SQLite storage for the local Polymarket crypto trading lab."""
 from __future__ import annotations
 
 import json
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS config (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS btc_paper_ticks (
+CREATE TABLE IF NOT EXISTS paper_ticks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
   window_slug TEXT NOT NULL,
@@ -60,12 +60,12 @@ CREATE TABLE IF NOT EXISTS btc_paper_ticks (
   quote_source TEXT,
   gamma_up_price REAL
 );
-CREATE INDEX IF NOT EXISTS idx_btc_paper_ticks_created
-  ON btc_paper_ticks(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_btc_paper_ticks_window
-  ON btc_paper_ticks(window_slug);
+CREATE INDEX IF NOT EXISTS idx_paper_ticks_created
+  ON paper_ticks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_ticks_window
+  ON paper_ticks(window_slug);
 
-CREATE TABLE IF NOT EXISTS btc_paper_positions (
+CREATE TABLE IF NOT EXISTS paper_positions (
   position_id INTEGER PRIMARY KEY AUTOINCREMENT,
   opened_at TEXT NOT NULL,
   closed_at TEXT,
@@ -87,12 +87,12 @@ CREATE TABLE IF NOT EXISTS btc_paper_positions (
   feed_source TEXT,
   quote_source TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_btc_paper_positions_state
-  ON btc_paper_positions(state);
-CREATE INDEX IF NOT EXISTS idx_btc_paper_positions_opened
-  ON btc_paper_positions(opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_positions_state
+  ON paper_positions(state);
+CREATE INDEX IF NOT EXISTS idx_paper_positions_opened
+  ON paper_positions(opened_at DESC);
 
-CREATE TABLE IF NOT EXISTS btc_live_orders (
+CREATE TABLE IF NOT EXISTS live_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
   window_slug TEXT,
@@ -112,12 +112,12 @@ CREATE TABLE IF NOT EXISTS btc_live_orders (
   -- of live (issue #64). All rows that predate the migration are 'live'.
   mode TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_btc_live_orders_created
-  ON btc_live_orders(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_btc_live_orders_status
-  ON btc_live_orders(status);
+CREATE INDEX IF NOT EXISTS idx_live_orders_created
+  ON live_orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_live_orders_status
+  ON live_orders(status);
 
-CREATE TABLE IF NOT EXISTS btc_model_shadow_positions (
+CREATE TABLE IF NOT EXISTS model_shadow_positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT,
   window_slug TEXT,
@@ -138,11 +138,50 @@ CREATE TABLE IF NOT EXISTS btc_model_shadow_positions (
   quote_source TEXT,
   feed_source TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_btc_model_shadow_positions_window_model
-  ON btc_model_shadow_positions(window_slug, model_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_shadow_positions_window_model
+  ON model_shadow_positions(window_slug, model_id);
+
+-- Issue #185: daily (24h-window) altcoin Up/Down shadow scanner. A separate
+-- table from model_shadow_positions on purpose: it tracks ONE asset-scan
+-- decision per day-window (not several competing models per window), and a
+-- window_slug already uniquely identifies one (asset, day) pair for this
+-- market family, so the idempotency key is window_slug alone.
+CREATE TABLE IF NOT EXISTS daily_shadow_positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  window_slug TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  side TEXT NOT NULL,
+  entry_price REAL NOT NULL,
+  notional_usd REAL NOT NULL,
+  shares REAL NOT NULL,
+  fair_prob REAL,
+  edge REAL,
+  confidence REAL,
+  reason TEXT,
+  state TEXT NOT NULL,
+  outcome TEXT,
+  settlement_price REAL,
+  resolved_at TEXT,
+  realized_pnl_usd REAL,
+  sigma_per_second REAL,
+  drift_per_second REAL,
+  -- Settlement is self-contained (recomputed from Binance, not from
+  -- Polymarket's own resolution status — a live check found a resolved
+  -- market in this family stops being returned by the same discovery query
+  -- used to find it while open). Stamped at record time so a later tick
+  -- never needs to re-resolve the market to settle it.
+  reference_price REAL,
+  resolves_at TEXT,
+  binance_symbol TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_shadow_positions_window
+  ON daily_shadow_positions(window_slug);
+CREATE INDEX IF NOT EXISTS idx_daily_shadow_positions_asset
+  ON daily_shadow_positions(asset);
 """
 
-BTC_LIVE_ORDERS_COLUMN_MIGRATIONS = {
+LIVE_ORDERS_COLUMN_MIGRATIONS = {
     "mode": "TEXT",
     # Issue #137: the CLOB placement response's status, promoted from
     # details_json so maker/taker attribution is queryable without JSON
@@ -156,14 +195,14 @@ BTC_LIVE_ORDERS_COLUMN_MIGRATIONS = {
 # the regime-attribution instrument (tools/regime_attribution.py) can stratify
 # by volatility and basis, not just time-of-day and edge. Additive + nullable —
 # rows recorded before this migration stay NULL and are skipped for those axes.
-BTC_SHADOW_COLUMN_MIGRATIONS = {
+SHADOW_COLUMN_MIGRATIONS = {
     "spot_at_decision": "REAL",
     "reference_at_decision": "REAL",
     "sigma_per_second": "REAL",
     "drift_per_second": "REAL",
 }
 
-BTC_POSITION_COLUMN_MIGRATIONS = {
+POSITION_COLUMN_MIGRATIONS = {
     "market_question": "TEXT",
     "exit_price": "REAL",
     "shares": "REAL",
@@ -183,14 +222,14 @@ BTC_POSITION_COLUMN_MIGRATIONS = {
     "strategy_style": "TEXT",
     # 'live' | 'paper' — recorded at insert time from whether the live
     # executor was attached. Legacy rows are backfilled by joining
-    # btc_live_orders on window_slug.
+    # live_orders on window_slug.
     "mode": "TEXT",
 }
 
 # Issue #22: executable top-of-book quotes journaled per tick. Rows without
 # quote_source were priced off stale Gamma outcomePrices and are excluded
 # from dashboard KPIs and the paper summary.
-BTC_TICK_COLUMN_MIGRATIONS = {
+TICK_COLUMN_MIGRATIONS = {
     "up_best_bid": "REAL",
     "up_best_ask": "REAL",
     "up_bid_size": "REAL",
@@ -202,6 +241,62 @@ BTC_TICK_COLUMN_MIGRATIONS = {
     "quote_source": "TEXT",
     "gamma_up_price": "REAL",
 }
+
+
+# --- Issue #185 rebrand migration -------------------------------------------
+# The BTC-5m-era table names and config-key namespace are renamed below. Both
+# migrations are idempotent (safe to run on every boot) and additive: they
+# only touch a table/row that still carries the OLD name, so a DB that has
+# already been migrated — or one that never had the old names at all — is a
+# no-op. This carries an operator's existing accumulated history (paper/live
+# rows, risk-gate counters) forward under the new names instead of silently
+# starting fresh.
+_TABLE_RENAMES = {
+    "btc_paper_ticks": "paper_ticks",
+    "btc_paper_positions": "paper_positions",
+    "btc_live_orders": "live_orders",
+    "btc_model_shadow_positions": "model_shadow_positions",
+}
+
+# Config-key namespace prefixes renamed under #185. Deliberately excludes the
+# already-orphaned ``btc_bot.*`` prefix (superseded by ``polymarket_bot.*``
+# during the #169/#184 package rename, nothing reads it any more) and the
+# ``btc_live.*`` prefix, which polymarket_exec.execution.gate's legacy
+# fallback intentionally keeps reading under its original literal name.
+_CONFIG_KEY_PREFIX_RENAMES = {
+    "btc_risk.": "risk.",
+    "btc_runtime.": "runtime.",
+    "btc_model.": "model.",
+    "btc_recon.": "recon.",
+}
+
+
+async def _rename_legacy_tables(db: aiosqlite.Connection) -> None:
+    async with db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ) as cur:
+        existing = {row["name"] for row in await cur.fetchall()}
+    for old, new in _TABLE_RENAMES.items():
+        if old in existing and new not in existing:
+            await db.execute(f"ALTER TABLE {old} RENAME TO {new}")
+
+
+async def _rename_legacy_config_keys(db: aiosqlite.Connection) -> None:
+    async with db.execute("SELECT key FROM config") as cur:
+        keys = [row["key"] for row in await cur.fetchall()]
+    for old_prefix, new_prefix in _CONFIG_KEY_PREFIX_RENAMES.items():
+        for key in keys:
+            if not key.startswith(old_prefix):
+                continue
+            new_key = new_prefix + key[len(old_prefix):]
+            await db.execute(
+                """
+                UPDATE config SET key = ?
+                 WHERE key = ?
+                   AND NOT EXISTS (SELECT 1 FROM config WHERE key = ?)
+                """,
+                (new_key, key, new_key),
+            )
 
 
 def utc_now_iso() -> str:
@@ -221,12 +316,14 @@ async def connect() -> AsyncIterator[aiosqlite.Connection]:
 async def init_db() -> None:
     async with connect() as db:
         await db.execute("PRAGMA journal_mode=WAL")
+        await _rename_legacy_tables(db)
         await db.executescript(SCHEMA)
-        await _migrate_columns(db, "btc_paper_positions", BTC_POSITION_COLUMN_MIGRATIONS)
-        await _migrate_columns(db, "btc_paper_ticks", BTC_TICK_COLUMN_MIGRATIONS)
-        await _migrate_columns(db, "btc_live_orders", BTC_LIVE_ORDERS_COLUMN_MIGRATIONS)
+        await _rename_legacy_config_keys(db)
+        await _migrate_columns(db, "paper_positions", POSITION_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "paper_ticks", TICK_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "live_orders", LIVE_ORDERS_COLUMN_MIGRATIONS)
         await _migrate_columns(
-            db, "btc_model_shadow_positions", BTC_SHADOW_COLUMN_MIGRATIONS
+            db, "model_shadow_positions", SHADOW_COLUMN_MIGRATIONS
         )
         await _backfill_position_mode(db)
         await _backfill_live_order_mode(db)
@@ -243,24 +340,24 @@ async def _backfill_position_mode(db: aiosqlite.Connection) -> None:
     """
     await db.execute(
         """
-        UPDATE btc_paper_positions
+        UPDATE paper_positions
            SET mode = 'live'
          WHERE mode IS NULL
            AND window_slug IN (
-               SELECT window_slug FROM btc_live_orders
+               SELECT window_slug FROM live_orders
                 WHERE intent = 'ENTRY' AND status = 'SUBMITTED'
            )
         """
     )
     await db.execute(
-        "UPDATE btc_paper_positions SET mode = 'paper' WHERE mode IS NULL"
+        "UPDATE paper_positions SET mode = 'paper' WHERE mode IS NULL"
     )
 
 
 async def _backfill_live_order_mode(db: aiosqlite.Connection) -> None:
-    """Every pre-migration row in btc_live_orders is real CLOB activity → 'live'."""
+    """Every pre-migration row in live_orders is real CLOB activity → 'live'."""
     await db.execute(
-        "UPDATE btc_live_orders SET mode = 'live' WHERE mode IS NULL"
+        "UPDATE live_orders SET mode = 'live' WHERE mode IS NULL"
     )
 
 
@@ -273,7 +370,7 @@ async def _backfill_placement_status(db: aiosqlite.Connection) -> None:
     """
     await db.execute(
         """
-        UPDATE btc_live_orders
+        UPDATE live_orders
            SET placement_status = json_extract(details_json, '$.response.status')
          WHERE placement_status IS NULL
            AND details_json IS NOT NULL
@@ -335,7 +432,7 @@ async def journal_live_order(
     details: dict[str, Any] | None = None,
     mode: str = "live",
 ) -> None:
-    """Append one order/fill/cancel attempt to the btc_live_orders journal.
+    """Append one order/fill/cancel attempt to the live_orders journal.
 
     ``mode`` is 'live' for real CLOB activity and 'paper' for paper-side
     BLOCKED rows surfaced by the shared RiskGate (issue #64).
@@ -357,7 +454,7 @@ async def journal_live_order(
     async with connect() as db:
         await db.execute(
             """
-            INSERT INTO btc_live_orders(
+            INSERT INTO live_orders(
               created_at, window_slug, token_id, intent, side, price, size,
               notional_usd, order_type, status, clob_order_id, error,
               details_json, mode, placement_status

@@ -9,14 +9,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from btc_5m_fv.core.types import (
+from polymarket_exec.core.types import (
     MarketWindow,
     Side,
     Signal,
     SignalAction,
     Tick,
 )
-from btc_5m_fv.storage.recorder import MarketDataRecorder
+from polymarket_exec.storage.recorder import MarketDataRecorder
 
 
 # ---------------------------------------------------------------------------

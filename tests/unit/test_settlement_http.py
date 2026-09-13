@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from btc_bot import paper
+from polymarket_bot import paper
 
 
 def test_settlement_client_enables_http2(monkeypatch) -> None:

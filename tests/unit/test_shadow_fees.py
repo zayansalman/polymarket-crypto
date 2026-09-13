@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from btc_bot.shadow.fees import (
+from polymarket_bot.shadow.fees import (
     breakeven_winrate,
     net_pnl_per_share,
     taker_fee_per_share,

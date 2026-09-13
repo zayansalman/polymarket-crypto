@@ -8,7 +8,7 @@ inside a closed, human-gated loop.
 ## The loop
 
 1. **Mine** — on a schedule (e.g. nightly), an agent reads the trade journal
-   (`btc_paper_positions`, `btc_paper_ticks`, `btc_live_orders`) and the
+   (`paper_positions`, `paper_ticks`, `live_orders`) and the
    recorded book/Chainlink archive, and finds where PnL concentrates:
    by hour-of-day, volatility regime, entry-price band, claimed-edge band,
    side (Up/Down), time-to-roll at entry, fill quality (live vs paper).
@@ -28,7 +28,7 @@ inside a closed, human-gated loop.
    per-half stability). Everything else is logged and dropped.
 
 5. **Approve** — the operator decides. Approved changes update config
-   (e.g. `BTC_PAPER_ENTRY_EDGE_MAX`); nothing auto-applies to live.
+   (e.g. `PAPER_ENTRY_EDGE_MAX`); nothing auto-applies to live.
 
 **AI proposes, human disposes.** The loop never changes a live setting on its
 own — that is the line between adaptive research and curve-fitting yourself
@@ -45,17 +45,18 @@ firewall.
 
 - Enough live fills to measure the paper-vs-live fill gap (the one thing the
   archive can't simulate). Target: ≥ ~50 live settles.
-- The adaptive risk controller (#36, shipped) already provides the safety
-  floor (edge-decay auto-pause) this loop's experiments run beneath.
+- The adaptive risk controller (#36) that provided an edge-decay auto-pause
+  was archived with the v0 strategy on 2026-09-13 (`docs/archive/v0-strategy.md`).
 
 ## Status
 
 Designed, not built. Build after the first live soak yields real fills.
 
-A shipped, human-gated **v0** of steps 2–5 already exists for the backtest grid:
-`btc_bot/params_propose.py` runs `btc_bot.backtest.build_report`, picks the
+*Archived 2026-09-13 with the v0 strategy (`docs/archive/v0-strategy.md`); kept
+here as history.* A human-gated **v0** of steps 2–5 existed for the backtest grid:
+`polymarket_bot/params_propose.py` runs `polymarket_bot.backtest.build_report`, picks the
 recommended params, and writes them to `$DATA_DIR/params_proposed.json` for
-operator review — it never auto-applies. `btc_bot/params_apply.py` then promotes
+operator review — it never auto-applies. `polymarket_bot/params_apply.py` then promotes
 proposed → active (`params_active.json`, which the live bot reloads each window
 roll) only when invoked with `--confirm`. This is the "AI proposes, human
 disposes" pattern in miniature over the existing grid search; the full loop above

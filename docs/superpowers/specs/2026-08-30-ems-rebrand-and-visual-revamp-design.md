@@ -1,0 +1,218 @@
+# Polymarket EMS — rebrand & visual revamp
+
+Status: approved (visual direction validated interactively via artifact mockup,
+final iteration: https://claude.ai/code/artifact/554eff48-de6a-4fb2-9653-924a8a25ca30)
+
+## Context
+
+The dashboard currently brands itself "Pricing EMS" / "BTC·5M PRICING EMS", left
+over from before the project was renamed `polymarket-crypto` and the BTC-only
+5m strategy was closed out (2026-08-29) in favor of the daily-altcoin scanner.
+The visual theme ("Bloomberg-EMS palette": dark, amber accent) is also
+considered dated and generic ("looks vibe-coded, what everyone does on
+LinkedIn").
+
+Goal: rename the brand to "Polymarket EMS" throughout the codebase, and
+replace the visual theme with an institutional OMS/EMS-style design (dense
+data grids, hairline borders, monospace numerics, color reserved for signal)
+modeled on real trading-desk tools (Bloomberg AIM/EMSX, Eze, Charles River)
+rather than a consumer SaaS dashboard aesthetic.
+
+## Goals
+
+1. Rename "Pricing EMS" / "EMS" branding and internal identifiers to
+   "Polymarket EMS" everywhere, including code identifiers.
+2. Replace the dashboard's visual system with the approved institutional
+   light-mode design across all panels.
+3. Add live cell-flash ticking (EMSX-style) on price/PnL/risk-state cells
+   fed by the existing SSE stream.
+
+## Non-goals
+
+- No layout or information-architecture changes. Same 9 panels, same
+  grid arrangement, same ribbon → guardrails/controls/strategy/market/
+  decision-engine/performance/tca/blotter → activity/backtest structure.
+  This is a reskin, not a redesign of what's shown where.
+- No frontend framework or build-step migration. Stays FastAPI + Jinja2
+  shell + Python-generated HTML per panel + vanilla JS/SSE polling.
+- No dark mode in the shipped product. The mockup's light/dark toggle was
+  a comparison tool only — dark mode is dropped entirely, not shipped
+  behind a toggle, not left as dead CSS.
+- No new panels or features beyond what's already in flight elsewhere
+  (e.g. the daily-altcoin panel is already built; only its skin changes).
+
+## 1. Rebrand — "EMS everywhere"
+
+Rename scope is "everywhere" (confirmed): both the user-facing string and
+internal code identifiers, not just display text.
+
+**User-visible text:**
+- `templates/base.html:6` — `<title>Pricing EMS · Polymarket Crypto</title>`
+  → `<title>Polymarket EMS</title>`
+- `templates/base.html:13` — topbar brand `PRICING <b>EMS</b>` +
+  stale subtitle `<span class="sub">Polymarket · BTC Up/Down 5m</span>`
+  → brand becomes `POLYMARKET <b>EMS</b>`; the `.sub` tagline is **dropped**
+  entirely (the approved mockup's topbar has no subtitle — brand, state
+  pill, operational controls, timestamp only). Existing functional
+  elements in this topbar (mode toggle LIVE/PAPER, start/stop/refresh
+  buttons, loss-halt controls) are preserved, only restyled per §2.
+- `panels/ribbon.py:97` — `BTC·5M PRICING <b>EMS</b>` → `POLYMARKET <b>EMS</b>`
+  (drop the stale `BTC·5M` prefix same as above).
+
+**Internal identifiers (mechanical rename, care needed — not pure
+find/replace since `ems` is also a common short token):**
+- `polymarket_exec/ops/dashboard/ems.py` → rename module to `execution_view.py`
+  (or similar — avoid re-using "ems" as the module name given the brand
+  itself is "EMS"; pick a name describing what the module does, e.g. it
+  orchestrates the main view). `ems_html()` → `execution_view_html()`.
+- `app.py`: `from ...ems import ems_html` → updated import; `_ems_safe()` →
+  `_execution_view_safe()`; the `/api/data` and `/api/stream` JSON payload
+  key `"ems"` → `"execution_view"` (breaking change to the JSON shape —
+  `dashboard.js` must be updated in the same change); error string
+  `"EMS view error: ..."` → `"Execution view error: ..."`.
+- CSS: `.ems` / `.ems-grid` classes in `static/style.css` and all files
+  under `panels/` → renamed to match the new visual system's class names
+  (see §2) rather than mechanically renamed — this CSS is being rewritten
+  anyway.
+- `templates/dashboard.html`: `<div id="ems-content">` → `id="execution-content"`;
+  comment updated.
+- `dashboard.js`: `ems-content` div reference and any `ems` JS variable →
+  `execution-content` / renamed variable, and the SSE payload key change
+  above must be applied here too.
+- `panels/__init__.py`, `panels/_shared.py` (comment "Bloomberg-EMS
+  palette" — rewrite, this theme is being replaced), `panels/market.py`,
+  `panels/controls.py`, `panels/daily_altcoin.py` — comments referencing
+  "EMS grid"/"the EMS" updated to match new terminology.
+- Tests: `tests/unit/test_dashboard.py` (11 hits), `tests/e2e/test_dashboard_flow.py`
+  (6 hits) assert on `ems-grid`, `ems-content`, `data["ems"]` etc. — update
+  all assertions to match the renamed ids/classes/JSON key.
+
+**Lower priority (docs/history, update opportunistically, not blocking):**
+`docs/CODE_MAP.md`, `docs/FILE_MAP.md` (regenerated by `tools/gen_docs.py`
+anyway — do not hand-edit, just re-run the generator), `CHANGELOG.md`,
+`tasks/lessons.md`, `tasks/todo.md`, archived task docs. These are
+historical record, not live product surface — leave archived entries as
+they are (they describe what was true at the time), only add a new
+CHANGELOG entry for this change.
+
+## 2. Visual design system (light mode only)
+
+Source of truth: the approved artifact mockup. Token values below are
+transcribed from it exactly.
+
+**Color tokens:**
+```
+--bg:            #ffffff
+--bg-alt:        #fafafa   /* zebra rows, header bars */
+--bg-page:       #eceef0   /* page canvas behind the terminal panel */
+--border:        #d7dade
+--border-strong: #b9bec4
+--text:          #14171c
+--muted:         #6b7078
+--label:         #8a8f97   /* uppercase column/field labels */
+--pos:           #1b7a43   /* buy / gain / OK-adjacent positive */
+--neg:           #b3261e   /* sell / loss */
+--warn:          #9a6b00   /* watch / pending */
+```
+Breach/rejected states use `--neg` at `font-weight:700` (see `td.breach`
+in the mockup), not a separate color — reserve a distinct color for
+"rejected" only if operators report the single-red-shade breach/loss
+distinction is ambiguous in practice.
+
+**Typography:** no imported/curated web fonts. System stacks only:
+```
+--font-ui:   "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
+--font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+```
+All numeric values (prices, sizes, PnL, percentages, timestamps) use
+`--font-mono` with `font-variant-numeric: tabular-nums`. Labels/prose use
+`--font-ui`.
+
+**Layout conventions:**
+- Structure via `<table>` grids with hairline (`1px solid var(--border)`)
+  cell borders, not cards with padding/shadow/radius. `border-radius: 0`
+  throughout — no rounded corners anywhere.
+- No box-shadow anywhere.
+- Panes/sections separated by border lines (`border-right`/`border-bottom`),
+  not by background elevation steps — avoid the "page bg / card bg / alt
+  bg" soft-layering pattern common to consumer dashboards.
+- Column headers: `10px`, uppercase, `letter-spacing: 0.06–0.07em`,
+  `color: var(--label)`.
+- Zebra striping on table body rows (`nth-child(even)` → `--bg-alt`) for
+  scan density.
+- A compact single-row status bar (equity, session PnL, win rate, edge
+  capture, Sharpe, feed status) replaces any "big KPI card" treatment —
+  label above, `13px` bold tabular-nums value below, separated by
+  vertical hairlines, not separate boxed cards.
+- Normal/OK status values render in `--muted` (unemphasized); only
+  abnormal states (`WATCH`, `PENDING`, `REJECTED`/breach) get color and
+  `font-weight: 600–700`. Color is earned by abnormality, not decoration.
+
+**Signal color usage rule:** color is reserved strictly for BUY/SELL side,
+PnL sign, and guardrail/order status. Everything else (chrome, borders,
+labels, headers, brand text) is grayscale. There is no decorative "accent
+color" — this is the core difference from the rejected consumer-dashboard
+directions.
+
+## 3. Live cell-flash ticking
+
+Cells whose underlying value updates on each SSE push flash briefly then
+fade, matching EMSX's live-update convention:
+
+```css
+@keyframes flash-pos { 0% { background-color: color-mix(in srgb, var(--pos) 50%, transparent); } 100% { background-color: transparent; } }
+@keyframes flash-neg { 0% { background-color: color-mix(in srgb, var(--neg) 50%, transparent); } 100% { background-color: transparent; } }
+@keyframes flash-warn { 0% { background-color: color-mix(in srgb, var(--warn) 50%, transparent); } 100% { background-color: transparent; } }
+.flash-pos, .flash-neg, .flash-warn { animation-duration: 700ms; animation-timing-function: ease-out; }
+@media (prefers-reduced-motion: reduce) { .flash-pos, .flash-neg, .flash-warn { animation: none; } }
+```
+
+**Real implementation differs from the mockup's simulated random interval.**
+The mockup used `setInterval` + `Math.random()` to fake ticking for the
+pitch. The real dashboard already has genuine per-field updates arriving
+via the existing SSE stream (`GET /api/stream`, 5s poll per
+`docs/CODE_MAP.md`/`app.py`). The real trigger must be: on each SSE
+message, diff the incoming values for flash-eligible fields (blotter row
+prices, session PnL, guardrail values/status) against the previously
+rendered DOM values; for any field whose value actually changed, apply
+`flash-pos`/`flash-neg`/`flash-warn` (sign of the change, or semantic
+state for guardrails) to that cell; for unchanged fields, do nothing. This
+requires `dashboard.js`'s existing SSE handler (which currently does a
+blanket `innerHTML` swap of `#ems-content` per docs/CODE_MAP notes) to
+move to more granular per-field DOM patching, at least for the
+flash-eligible fields — a full-panel `innerHTML` replacement on every SSE
+tick would blow away the mid-flight CSS animation and also cannot detect
+"did this value change" once the old DOM is already gone. This is the one
+place where the revamp touches interaction/data-flow logic rather than
+pure visual styling — flag it in the implementation plan as the highest-
+risk piece of this otherwise low-risk reskin.
+
+## 4. Tech constraints (confirmed)
+
+- Keep FastAPI + Jinja2Templates + Python-generated per-panel HTML +
+  vanilla JS + SSE. No npm, no bundler, no component framework.
+- No dark mode ships. Remove any dark-mode CSS/toggle carried over from
+  the mockup exploration before merging.
+
+## 5. Scope of application
+
+Apply the token system and table/grid conventions from §2 across all 9
+panel modules (`ribbon`, `guardrails`, `controls`, `strategy`, `market`,
+`decision_engine`, `performance`, `tca`, `blotter`, `daily_altcoin`) plus
+the secondary section (Activity Log, Backtest/Recorded Archive cards) and
+`app.py`'s own inline HTML builders (`_kpi_card`, `_position_cards`, etc.).
+Each panel's existing data/content stays the same — only the HTML
+structure and CSS classes it emits change to match §2's grid/table
+conventions instead of the current card-based markup.
+
+`panels/_shared.py` is flagged dead code (0 importers) in the generated
+`docs/CODE_MAP.md` inventory — verify this before the revamp touches it;
+if genuinely dead, delete rather than reskin it.
+
+## 6. Testing
+
+- Update `tests/unit/test_dashboard.py` and `tests/e2e/test_dashboard_flow.py`
+  assertions for every renamed id/class/JSON key (§1).
+- Add a test (or extend an existing one) asserting the SSE flash-diffing
+  logic only flashes fields whose value actually changed between two
+  consecutive `/api/stream` payloads, not every field on every tick.

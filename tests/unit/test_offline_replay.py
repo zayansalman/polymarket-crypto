@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from btc_bot.strategy import StrategyParams
+from polymarket_bot.strategy import StrategyParams
 from tools.offline_replay import (
     ReplayEntry,
     aggregate_metrics,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from btc_5m_fv.ops.telemetry import FeedHealthTracker, LatencyTracker
+from polymarket_exec.ops.telemetry import FeedHealthTracker, LatencyTracker
 
 
 # ---------------------------------------------------------------------------

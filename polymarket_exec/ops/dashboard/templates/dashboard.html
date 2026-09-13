@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{# ───────── Activity log (blocked entries included) — above execution view ───────── #}
+<section class="card">
+  <div class="card-h">ACTIVITY LOG</div>
+  <div id="activity-content" class="feed-wrap">{{ activity | safe }}</div>
+</section>
+
+{# ───────── Execution view (status ribbon + strategy/market/perf/TCA/blotter) ───────── #}
+<div id="execution-content">
+  {{ execution_view | safe }}
+</div>
+
+{# ───────── Secondary: backtest archive ───────── #}
+<div class="secondary">
+  <section class="card">
+    <div class="card-h">BACKTEST · RECORDED ARCHIVE</div>
+    <div id="backtest-content" class="backtest-report">{{ backtest | safe }}</div>
+  </section>
+</div>
+
+{% endblock %}

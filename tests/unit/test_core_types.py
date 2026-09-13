@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 from dataclasses import FrozenInstanceError
 
-from btc_5m_fv.core.exceptions import (
+from polymarket_exec.core.exceptions import (
     BtcBotError,
     ConfigurationError,
     FeedError,
     MarketDiscoveryError,
     RiskBreach,
 )
-from btc_5m_fv.core.types import (
+from polymarket_exec.core.types import (
     BacktestMetrics,
     BacktestParams,
     BtcBotStatus,
@@ -451,7 +451,7 @@ class TestBacktestMetrics:
 
 
 class TestExceptions:
-    def test_btc_bot_error_is_base(self) -> None:
+    def test_polymarket_bot_error_is_base(self) -> None:
         with pytest.raises(BtcBotError):
             raise BtcBotError("base error")
 

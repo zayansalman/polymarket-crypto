@@ -9,13 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from btc_bot.backtest import build_report, format_report, save_report
-from config import BTC_HISTORY_CSV_PATH, DATA_DIR
+from polymarket_bot.backtest import build_report, format_report, save_report
+from config import HISTORY_CSV_PATH, DATA_DIR
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--history", type=Path, default=BTC_HISTORY_CSV_PATH)
+    parser.add_argument("--history", type=Path, default=HISTORY_CSV_PATH)
     parser.add_argument("--output", type=Path, default=DATA_DIR / "backtests" / "latest.json")
     args = parser.parse_args()
 

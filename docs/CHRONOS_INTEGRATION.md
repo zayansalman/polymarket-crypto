@@ -1,6 +1,6 @@
 # Layer 3 — Chronos Time-Series Ensemble (design)
 
-**Status:** sketch only. Module stub at `btc_bot/chronos_signal.py`. No Hugging
+**Status:** sketch only. Module stub at `polymarket_bot/chronos_signal.py`. No Hugging
 Face dependency added. Disabled by default. Live activation requires explicit
 operator approval AND an OOS replay-archive validation step that is not yet
 built.
@@ -8,7 +8,7 @@ built.
 ## Why
 
 Layer 1 (isotonic calibration) reduced Brier from 0.275 to 0.242 on the existing
-log-normal fair-value model — a real lift. Layer 3 asks: is there a second,
+log-normal pricing model — a real lift. Layer 3 asks: is there a second,
 independent probability source that can be ensembled with the calibrated
 baseline to push Brier further?
 
@@ -82,7 +82,7 @@ Until all four are satisfied, the live bot path is unchanged.
 
 ## File layout (planned)
 
-- `btc_bot/chronos_signal.py` — the module: `predict(window_closes, reference_price)`,
+- `polymarket_bot/chronos_signal.py` — the module: `predict(window_closes, reference_price)`,
   `apply_ensemble(fair_up_cal, fair_up_chronos, *, weight_cal, weight_chronos)`,
   `is_active()` / `load_activation()`. **Implemented as a stub today** —
   `predict()` returns `None` (no signal), so `apply_ensemble()` is identity and

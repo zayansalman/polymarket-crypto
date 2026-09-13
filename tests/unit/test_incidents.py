@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from btc_5m_fv.ops.incidents import IncidentManager, IncidentState, RunbookActions
+from polymarket_exec.ops.incidents import IncidentManager, IncidentState, RunbookActions
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ class TestRunbookActions:
     async def test_action_for_unexpected_position_count(self) -> None:
         """UNEXPECTED_POSITION_COUNT should reference positions table."""
         action = RunbookActions.action_for(IncidentState.UNEXPECTED_POSITION_COUNT)
-        assert "btc_paper_positions" in action
+        assert "paper_positions" in action
 
     @pytest.mark.asyncio
     async def test_action_for_db_write_error(self) -> None:

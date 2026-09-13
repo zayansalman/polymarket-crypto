@@ -1,4 +1,4 @@
-# Agent Instructions — BTC 5m Binary Fair Value
+# Agent Instructions — Polymarket Crypto
 
 > This file is the agent constitution for **both Codex and Claude Code** (and any
 > other coding agent). It is the single source of scope and rules for this repo.
@@ -9,12 +9,12 @@
   It is the routing doc — "I want to change X → edit Y" — and it explains the
   two-tree structure below.
 - **Two coupled code trees, both LIVE:**
-  - **`btc_bot/`** — the live trading loop + signal math (`paper.py:run_paper_loop`
+  - **`polymarket_bot/`** — the live trading loop + signal math (`paper.py:run_paper_loop`
     is *the* loop; `strategy.py` is the live signal math).
-  - **`btc_5m_fv/`** — execution gates, live CLOB executor, connectors, FastAPI
+  - **`polymarket_exec/`** — execution gates, live CLOB executor, connectors, FastAPI
     dashboard, recorder, backtest harness.
-  - They are **bidirectionally coupled**: the dashboard imports `btc_bot.*`;
-    `btc_bot` imports back into `btc_5m_fv.{execution,connectors}`. Top-level
+  - They are **bidirectionally coupled**: the dashboard imports `polymarket_bot.*`;
+    `polymarket_bot` imports back into `polymarket_exec.{execution,connectors}`. Top-level
     `config.py` / `db.py` / `logging_setup.py` are the shared foundation.
 - **Machine-generated facts** (module inventory, wired-vs-dead status, test count)
   live in **[docs/FILE_MAP.md](docs/FILE_MAP.md)** and in `<!-- GENERATED -->`
@@ -23,24 +23,61 @@
 
 ## Active Scope
 
-This repository is a local BTC 5-minute binary fair-value strategy lab.
+This repository is a local Polymarket crypto binary-markets research and
+paper-trading lab. Two strategies are wired and run simultaneously:
 
-The primary active product behavior is:
+1. **BTC 5-minute Up/Down** (`polymarket_bot/paper.py:run_paper_loop`) — the
+   original line; its active *development* closed 2026-08-29 (#182), but the
+   loop itself is still the default paper-trading path, started/stopped by
+   the dashboard's ▶ Start / Stop controls (see below). **No strategy is
+   loaded:** the v0 strategy (entry gates, auto-pause, param tuner,
+   calibration, model picker) was archived 2026-09-13 —
+   [docs/archive/v0-strategy.md](docs/archive/v0-strategy.md). The loop runs
+   and journals market data but takes no entries until a new strategy is
+   plugged into `paper.py:_build_snapshot`.
+2. **Daily altcoin Up/Down scanner** (`polymarket_bot/daily/scanner.py`,
+   issue #185) — scans Polymarket's daily (24h-window) Up/Down family across
+   a tracked set of thinner altcoin markets (doge/sol/xrp/bnb/eth by
+   default, `config.DAILY_ASSETS`) and shadow-trades a flat $10 paper
+   position on whichever asset shows the strongest signal. **Paper-only, no
+   live gate exists for it at all** — unlike the BTC loop, it has no
+   Start/Stop control: it auto-runs as soon as the dashboard process boots
+   (`polymarket_exec/ops/dashboard/app.py`'s lifespan) and keeps running
+   for the process's lifetime. Its own dashboard panel
+   (`panels/daily_altcoin.py`) shows current position(s), settled PnL, and a
+   plain-language explanation of the mechanism.
+
+The primary active product behavior for the BTC loop specifically is:
 
 1. Operator opens the local dashboard.
 2. Operator presses **▶ Start**.
-3. The bot paper trades BTC 5-minute Up/Down markets (default mode).
+3. The loop runs on BTC 5-minute Up/Down markets (paper by default) and
+   enters only once a strategy is loaded (none is today).
 4. Operator presses **Stop** to halt new entries and close open simulated
    positions.
 
 Live trading is also built and multi-gated (see the live rule below); it stays
-off unless the operator explicitly arms every gate.
+off unless the operator explicitly arms every gate **and** this file names an
+authorized live-trading market (none is currently authorized — see Absolute
+Rules). This includes the daily altcoin scanner: it has no live path built at
+all, so there is nothing to arm for it.
 
 ## Scope Fence (in scope / out of scope)
 
 In scope:
 
 - Discover current BTC 5-minute Up/Down Polymarket markets.
+- **Research/shadow-only exploration is open by default** — any market, any
+  timeframe, any venue instrument may be investigated, backtested, or shadow-run
+  as long as it places no real orders. No fresh operator carve-out is needed to
+  start a new research direction; the market/timeframe restriction below binds
+  the **live trading path** only. Example: two-sided maker quoting across the
+  venue's 5-minute Up/Down crypto family (btc/eth/sol/xrp/doge/bnb) —
+  `polymarket_bot/pairarb/`, shadow only, placed no orders (#182, widened
+  2026-08-14, closed 2026-08-29).
+- Daily (24h-window) Up/Down markets across doge/sol/xrp/bnb/eth —
+  `polymarket_bot/daily/`, shadow only, no live path exists, always-on
+  (#185, started 2026-08-30).
 - Use a settlement-aligned BTC reference feed for signal and paper fills.
 - Show the Chainlink Data Streams reference in the dashboard.
 - Compute a fair Up probability and edge versus market price.
@@ -59,23 +96,33 @@ In scope:
 Out of scope:
 
 - Flipping the live gate or placing live orders on behalf of the operator.
-- Any non-BTC market.
-- Any timeframe other than 5-minute Up/Down.
+- **Any market, on the live trading path (real capital).** No market/timeframe
+  is currently authorized for live trading: 5-minute BTC work closed 2026-08-29
+  (#182) and no replacement category has been chosen or built. Research/shadow
+  work on any market/timeframe remains in scope — see the research/shadow-only
+  line above. Live trading resumes only once this file is explicitly updated
+  naming a newly authorized market.
 - Remote deployment / exposing the dashboard beyond localhost by default.
 
 ## Absolute Rules
 
-- BTC 5-minute Up/Down markets only.
+- **Live trading (real capital) is not currently authorized for any market.**
+  5-minute BTC work closed 2026-08-29 (#182); no replacement category is chosen
+  or built. Research and shadow-only work on any market/timeframe remains in
+  scope by default — see Scope Fence above.
 - One open BTC paper position at a time.
-- **Live trading is BUILT and multi-gated** (`btc_5m_fv/execution/live.py:LiveExecutor`).
-  It runs only with `BTC_BOT_MODE=live` **AND** `BTC_LIVE_CONFIRM=YES_I_UNDERSTAND`
-  **AND** a private key **AND** a coherent wallet. **Agents NEVER flip the gate or
-  place live orders; the operator launches.** Default is paper.
+- **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
+  It runs only when the operator **clicks LIVE in the dashboard**
+  **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
+  presses Start. There is no env confirm phrase; an env `BOT_MODE=live` default alone
+  never trades. **Agents NEVER flip the gate or place live orders; the operator
+  launches.** Default is paper.
 - Do not read, print, log, commit, echo, or expose private keys.
 - The dashboard must stay local by default at `127.0.0.1:7860`.
 - Start means trade (paper unless every live gate is armed); Stop means stop.
-- Current optimized paper profile keeps a 4.5 percentage-point edge floor,
-  uses a 60-second late-entry cutoff, and sizes $1-$5 by confidence.
+- No strategy is loaded in the trading loop (v0 archived 2026-09-13). Whatever
+  strategy is plugged in next, its entries still pass the live-path safety gates
+  (`RiskGate`: loss halt, caps, slippage, kill switch) — those stay hard.
 - No silent failures. Feed, market, state, or execution-loop errors must appear
   in structured logs or dashboard state.
 - Keep modules small and boundaries clear.
@@ -88,7 +135,7 @@ Out of scope:
 - Python 3.11.
 - Async I/O with `httpx` and `aiosqlite`.
 - The live dashboard is a **FastAPI (uvicorn) app** at
-  `btc_5m_fv/ops/dashboard/app.py`. The top-level Gradio `dashboard.py` is a
+  `polymarket_exec/ops/dashboard/app.py`. The top-level Gradio `dashboard.py` is a
   **dead, never-taken fallback** (`HAS_NEW_DASHBOARD` is always true) — do not
   treat it as the live UI.
 - `structlog` JSON logs.
@@ -102,7 +149,7 @@ Out of scope:
 ```
 
 This boots the **FastAPI dashboard** (uvicorn serving
-`btc_5m_fv/ops/dashboard/app.py`), not Gradio.
+`polymarket_exec/ops/dashboard/app.py`), not Gradio.
 
 Dashboard:
 
@@ -119,8 +166,8 @@ Optional snapshot:
 ## Live module status (generated)
 
 <!-- BEGIN GENERATED:summary -->
-- **Trees:** `btc_bot/` = live loop + signal math; `btc_5m_fv/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
-- **Entry:** `python main.py` → FastAPI `btc_5m_fv/ops/dashboard/app.py`; loop starts on operator ▶ Start → `btc_bot/controller.py:request_start`.
-- **Tests:** 828.
-- **Built-but-dead (do not edit expecting runtime effect):** `btc_5m_fv/backtest/conditional.py`, `btc_5m_fv/backtest/harness.py`, `btc_5m_fv/connectors/base.py`, `btc_5m_fv/connectors/binance.py`, `btc_5m_fv/connectors/chainlink.py`, `btc_5m_fv/connectors/polymarket.py`, `btc_5m_fv/ops/controller.py`, `btc_5m_fv/ops/dashboard/panels/_shared.py`, `btc_5m_fv/storage/replay.py`, `btc_5m_fv/strategy/signal.py`, `btc_bot/chronos_signal.py`.
+- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
+- **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
+- **Tests:** 946.
+- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

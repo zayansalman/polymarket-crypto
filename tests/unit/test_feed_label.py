@@ -12,7 +12,7 @@ strings the loop journals in production (verified against the live ledger).
 """
 from __future__ import annotations
 
-from btc_bot.paper import _feed_label, _parse_feed_source
+from polymarket_bot.paper import _feed_label, _parse_feed_source
 
 
 class TestParseFeedSource:

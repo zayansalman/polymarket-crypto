@@ -13,8 +13,9 @@ import pytest
 import pytest_asyncio
 
 import db as _db
-import btc_bot.paper as paper
-from btc_5m_fv.execution.live import LiveExecutor
+import polymarket_bot.paper as paper
+from polymarket_bot import runtime_knobs as _knobs
+from polymarket_exec.execution.live import LiveExecutor
 
 
 @pytest_asyncio.fixture
@@ -73,13 +74,13 @@ _POS = {
 
 def test_settle_style_holds_through_target_and_stop_marks():
     # +20% mark would be TARGET, -20% would be STOP under scalp; settle holds.
-    assert paper.BTC_EXIT_STYLE == "settle"  # repo default
+    assert _knobs.cached("exit_style") == "settle"  # repo default
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.60) is None
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.40) is None
 
 
 def test_scalp_style_still_scalps(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(paper, "BTC_EXIT_STYLE", "scalp")
+    monkeypatch.setitem(_knobs._cache, "exit_style", "scalp")
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.60) == "TARGET"
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.40) == "STOP"
 
@@ -95,22 +96,22 @@ async def test_one_entry_per_window(test_db, monkeypatch: pytest.MonkeyPatch):
     snap = _snapshot()
     await paper._maybe_open_position(snap)
     async with paper.connect() as db:
-        async with db.execute("SELECT COUNT(*) AS n FROM btc_paper_positions") as cur:
+        async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 1
         # Close it; settle style must still refuse a second entry this window.
-        await db.execute("UPDATE btc_paper_positions SET state = 'closed'")
+        await db.execute("UPDATE paper_positions SET state = 'closed'")
         await db.commit()
     await paper._maybe_open_position(snap)
     async with paper.connect() as db:
-        async with db.execute("SELECT COUNT(*) AS n FROM btc_paper_positions") as cur:
+        async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 1
     # A new window is a fresh signal.
     await paper._maybe_open_position(_snapshot(window_slug="btc-updown-5m-1781160300"))
     async with paper.connect() as db:
-        async with db.execute("SELECT COUNT(*) AS n FROM btc_paper_positions") as cur:
+        async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 2
         async with db.execute(
-            "SELECT strategy_style FROM btc_paper_positions LIMIT 1"
+            "SELECT strategy_style FROM paper_positions LIMIT 1"
         ) as cur:
             assert (await cur.fetchone())["strategy_style"] == "settle"
 
@@ -151,7 +152,7 @@ async def test_record_settlement_win(test_db, tmp_path: Path):
     assert ex._position_open is False
     async with _db.connect() as conn:
         async with conn.execute(
-            "SELECT intent, status, price, size FROM btc_live_orders"
+            "SELECT intent, status, price, size FROM live_orders"
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
     assert rows and rows[-1]["intent"] == "SETTLEMENT" and rows[-1]["price"] == 1.0
@@ -189,7 +190,7 @@ async def test_settled_close_places_no_exit_order(
     snap = _snapshot()
     async with paper.connect() as db:
         await db.execute(
-            "INSERT INTO btc_paper_positions(opened_at, window_slug, side, state,"
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state,"
             " entry_price, notional_usd, shares, quote_source, strategy_style)"
             " VALUES (?, ?, 'Up', 'open', 0.5, 3.0, 6.0, 'clob', 'settle')",
             (snap.created_at, snap.window_slug),
@@ -201,7 +202,7 @@ async def test_settled_close_places_no_exit_order(
     executor.submit_exit.assert_not_called()
     async with paper.connect() as db:
         async with db.execute(
-            "SELECT state, exit_price, realized_pnl_usd FROM btc_paper_positions"
+            "SELECT state, exit_price, realized_pnl_usd FROM paper_positions"
         ) as cur:
             row = dict(await cur.fetchone())
     assert row["state"] == "closed"
@@ -212,7 +213,7 @@ async def test_settled_close_places_no_exit_order(
 async def _insert_settle_pos(snap) -> None:
     async with paper.connect() as db:
         await db.execute(
-            "INSERT INTO btc_paper_positions(opened_at, window_slug, side, state,"
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state,"
             " entry_price, notional_usd, shares, quote_source, strategy_style)"
             " VALUES (?, ?, 'Up', 'open', 0.5, 3.0, 6.0, 'clob', 'settle')",
             (snap.created_at, snap.window_slug),
@@ -239,7 +240,7 @@ async def test_settled_close_uses_real_held_size(
     )
     async with paper.connect() as db:
         async with db.execute(
-            "SELECT realized_pnl_usd FROM btc_paper_positions"
+            "SELECT realized_pnl_usd FROM paper_positions"
         ) as cur:
             row = dict(await cur.fetchone())
     assert row["realized_pnl_usd"] == pytest.approx(2.0)  # 4 * (1.0 - 0.5)
@@ -260,7 +261,7 @@ async def test_settled_close_phantom_books_zero(
     )
     async with paper.connect() as db:
         async with db.execute(
-            "SELECT realized_pnl_usd FROM btc_paper_positions"
+            "SELECT realized_pnl_usd FROM paper_positions"
         ) as cur:
             row = dict(await cur.fetchone())
     assert row["realized_pnl_usd"] == pytest.approx(0.0)
@@ -296,7 +297,7 @@ async def test_settled_live_close_skips_paper_counter(
 
 
 def test_edge_above_cap_is_rejected():
-    from btc_bot.strategy import StrategyParams, signal_from_executable_edges
+    from polymarket_bot.strategy import StrategyParams, signal_from_executable_edges
 
     params = StrategyParams(
         min_trade_usd=1.0, max_trade_usd=5.0, entry_edge_min=0.045,
@@ -311,7 +312,7 @@ def test_edge_above_cap_is_rejected():
 
 
 def test_longshot_entry_below_min_price_is_rejected():
-    from btc_bot.strategy import StrategyParams, signal_from_executable_edges
+    from polymarket_bot.strategy import StrategyParams, signal_from_executable_edges
 
     params = StrategyParams(
         min_trade_usd=1.0, max_trade_usd=5.0, entry_edge_min=0.045,
@@ -326,7 +327,7 @@ def test_longshot_entry_below_min_price_is_rejected():
 
 
 def test_modest_edge_favorite_passes_filters():
-    from btc_bot.strategy import StrategyParams, signal_from_executable_edges
+    from polymarket_bot.strategy import StrategyParams, signal_from_executable_edges
 
     params = StrategyParams(
         min_trade_usd=1.0, max_trade_usd=5.0, entry_edge_min=0.045,
@@ -341,40 +342,66 @@ def test_modest_edge_favorite_passes_filters():
 
 
 # ---------------------------------------------------------------------------
-# Retired active-model fallback (#142 roster surgery)
+# No strategy loaded (v0 archived 2026-09-13)
 # ---------------------------------------------------------------------------
 
 
+def _stub_market_inputs(monkeypatch: pytest.MonkeyPatch, *, spot: float | None) -> None:
+    """Healthy book + feed for one window with a modest favourite edge on Up —
+    inside the archived v0 edge band, so the old gates would have entered."""
+    now = paper._now()
+    market = {
+        "window_start_ts": now - 120,
+        "slug": f"btc-updown-5m-{now - 120}",
+        "question": "BTC up?",
+        "outcomePrices": "[\"0.40\", \"0.60\"]",
+        "clobTokenIds": "[\"up-token\", \"down-token\"]",
+    }
+    books = {
+        "up-token": paper.BookTop(best_bid=0.54, best_ask=0.55, bid_size=50.0, ask_size=50.0),
+        "down-token": paper.BookTop(best_bid=0.44, best_ask=0.46, bid_size=50.0, ask_size=50.0),
+    }
+    monkeypatch.setattr(paper, "_fetch_current_market", AsyncMock(return_value=market))
+    monkeypatch.setattr(
+        paper, "_fetch_clob_book", AsyncMock(side_effect=lambda _c, token: books[token])
+    )
+    monkeypatch.setattr(paper, "_chainlink_spot_and_closes", lambda: (spot, []))
+    monkeypatch.setattr(paper, "_rest_spot_fallback", AsyncMock(return_value=None))
+    monkeypatch.setattr(paper, "_get_window_reference", AsyncMock(return_value=60_000.0))
+    monkeypatch.setattr(
+        paper, "_sigma_with_fallback", AsyncMock(return_value=(0.00002, "chainlink_ws"))
+    )
+
+
 @pytest.mark.asyncio
-async def test_retired_active_model_falls_back_to_default_loudly_once(test_db):
-    """A persisted selection pointing at a retired model (the operator's last
-    pick was down_skeptic_drift_v6, binned in #142) must trade the v0 native
-    path and notify exactly once per process — never crash, never silently
-    keep 'trading' a model that no longer exists."""
-    paper._unknown_model_notified.clear()
-    await _db.set_config("btc_model.active", "down_skeptic_drift_v6")
+async def test_no_strategy_loaded_never_signals_an_entry(test_db, monkeypatch):
+    from polymarket_bot.strategy import signal_from_executable_edges
 
-    first = await paper._resolve_active_model()
-    second = await paper._resolve_active_model()
+    _stub_market_inputs(monkeypatch, spot=60_004.5)
 
-    assert first == "fair_value_v0"
-    assert second == "fair_value_v0"
-    async with _db.connect() as conn:
-        async with conn.execute(
-            "SELECT COUNT(*) AS n FROM notification_feed"
-            " WHERE event_type = 'btc_model_fallback'"
-        ) as cur:
-            assert (await cur.fetchone())["n"] == 1
+    snap = await paper._build_snapshot(MagicMock())
+
+    # The archived v0 gates would have entered Up on exactly this tick.
+    old_side, _, old_notional, _ = signal_from_executable_edges(
+        edge_up=snap.fair_up_prob - 0.55,
+        edge_down=(1 - snap.fair_up_prob) - 0.46,
+        remaining_seconds=snap.remaining_seconds,
+        up_ask=0.55,
+        down_ask=0.46,
+        params=paper._strategy_params(),
+    )
+    assert old_side == "Up" and old_notional > 0
+    # The loop, with no strategy loaded, does not.
+    assert snap.signal_side is None
+    assert snap.notional_usd == 0.0
+    assert snap.reason == paper.NO_STRATEGY_REASON
 
 
 @pytest.mark.asyncio
-async def test_current_roster_models_resolve_unchanged(test_db):
-    paper._unknown_model_notified.clear()
-    await _db.set_config("btc_model.active", "cushion_fresh_v7")
-    assert await paper._resolve_active_model() == "cushion_fresh_v7"
-    async with _db.connect() as conn:
-        async with conn.execute(
-            "SELECT COUNT(*) AS n FROM notification_feed"
-            " WHERE event_type = 'btc_model_fallback'"
-        ) as cur:
-            assert (await cur.fetchone())["n"] == 0
+async def test_degraded_feed_reason_still_wins_over_no_strategy(test_db, monkeypatch):
+    _stub_market_inputs(monkeypatch, spot=None)
+
+    snap = await paper._build_snapshot(MagicMock())
+
+    assert snap.signal_side is None
+    assert snap.reason.startswith("skip: settlement feed degraded")

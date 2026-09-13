@@ -6,7 +6,7 @@ price. These pin the pure resize function used by the paper/live loop.
 """
 from __future__ import annotations
 
-from btc_bot.paper import _share_sized_notional
+from polymarket_bot.paper import _share_sized_notional
 
 
 class TestShareSizedNotional:

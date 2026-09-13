@@ -1,7 +1,7 @@
 """Maker/taker placement telemetry (#137): derivation + backfill.
 
 The CLOB placement response has always been journaled verbatim in
-``btc_live_orders.details_json``; its ``response.status`` is the maker/taker
+``live_orders.details_json``; its ``response.status`` is the maker/taker
 signal ('matched' = crossed at placement → taker fee paid; 'live' = rested on
 the book → maker if later filled, fee-free). #137 promotes it to a queryable
 ``placement_status`` column: derived at insert time in ``journal_live_order``
@@ -28,7 +28,7 @@ async def journal_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 async def _rows(db) -> list[dict]:
     async with db.connect() as conn:
         async with conn.execute(
-            "SELECT * FROM btc_live_orders ORDER BY id"
+            "SELECT * FROM live_orders ORDER BY id"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
@@ -76,14 +76,14 @@ async def test_backfill_lifts_status_from_legacy_json(journal_db) -> None:
     legacy = json.dumps({"response": {"status": "matched", "success": True}})
     async with journal_db.connect() as conn:
         await conn.execute(
-            "INSERT INTO btc_live_orders "
+            "INSERT INTO live_orders "
             "(created_at, intent, side, status, details_json, mode, placement_status) "
             "VALUES ('2026-06-20T00:00:00+00:00','ENTRY','Up','SUBMITTED',?, 'live', NULL)",
             (legacy,),
         )
         # A row with junk JSON must survive the backfill untouched.
         await conn.execute(
-            "INSERT INTO btc_live_orders "
+            "INSERT INTO live_orders "
             "(created_at, intent, side, status, details_json, mode, placement_status) "
             "VALUES ('2026-06-20T00:01:00+00:00','ENTRY','Up','SUBMITTED','not json', 'live', NULL)",
         )
@@ -101,7 +101,7 @@ async def test_backfill_does_not_overwrite_existing_status(journal_db) -> None:
     """Idempotence: an already-populated placement_status is never rewritten."""
     async with journal_db.connect() as conn:
         await conn.execute(
-            "INSERT INTO btc_live_orders "
+            "INSERT INTO live_orders "
             "(created_at, intent, side, status, details_json, mode, placement_status) "
             "VALUES ('2026-06-20T00:00:00+00:00','ENTRY','Up','SUBMITTED',?, 'live','live')",
             (json.dumps({"response": {"status": "matched"}}),),

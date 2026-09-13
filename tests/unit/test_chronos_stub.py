@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from btc_bot import chronos_signal as cs
+from polymarket_bot import chronos_signal as cs
 
 
 @pytest.fixture

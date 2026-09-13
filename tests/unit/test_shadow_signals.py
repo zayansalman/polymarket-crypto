@@ -1,6 +1,6 @@
 """Unit tests for the shadow forward-tester candidate signals.
 
-Covers the candidate strategies in :mod:`btc_bot.shadow.signals`
+Covers the candidate strategies in :mod:`polymarket_bot.shadow.signals`
 (post-#142 roster: v2 champion + v7 challenger; v3/v4/v5/v6 retired):
 
 * ``cushion_favorite_v2`` — None when v0 declines, None when the cushion is
@@ -9,26 +9,26 @@ Covers the candidate strategies in :mod:`btc_bot.shadow.signals`
   claimed edges capped at 0.065.
 
 The signals are pure, so every case is a hand-built
-:class:`~btc_bot.shadow.types.SnapshotView` plus a small local
-:class:`~btc_bot.strategy.StrategyParams`. We deliberately build our own
-params (not the ``btc_5m_fv`` conftest fixture) because the candidates reuse
-``btc_bot.strategy.signal_from_executable_edges``, which takes the
-``btc_bot.strategy`` flavour of ``StrategyParams``.
+:class:`~polymarket_bot.shadow.types.SnapshotView` plus a small local
+:class:`~polymarket_bot.strategy.StrategyParams`. We deliberately build our own
+params (not the ``polymarket_exec`` conftest fixture) because the candidates reuse
+``polymarket_bot.strategy.signal_from_executable_edges``, which takes the
+``polymarket_bot.strategy`` flavour of ``StrategyParams``.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from btc_bot import strategy
-from btc_bot.shadow.signals import (
+from polymarket_bot import strategy
+from polymarket_bot.shadow.signals import (
     cushion_favorite_v2,
     cushion_fresh_v7,
     cushion_fresh_v7_f45,
     cushion_fresh_v7_f45_spread,
-    fair_value_fresh_v8,
+    pricing_fresh_v8,
 )
-from btc_bot.shadow.types import ShadowSignal, SnapshotView
+from polymarket_bot.shadow.types import ShadowSignal, SnapshotView
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ class TestCushionFavoriteV2:
             up_ask=0.55, fair_up=0.70,  # edge 0.15 (> v7's cap)
         )
         assert cushion_favorite_v2(view, params) is None  # cushion too thin
-        sig = fair_value_fresh_v8(view, params)
+        sig = pricing_fresh_v8(view, params)
         assert isinstance(sig, ShadowSignal)
         assert sig.side == "Up"
         assert sig.edge == pytest.approx(0.15)
@@ -184,12 +184,12 @@ class TestCushionFavoriteV2:
             remaining_seconds=120, spot=50000.0, reference=49980.0,
             up_ask=0.55, fair_up=0.70,
         )
-        assert fair_value_fresh_v8(view, params) is None
+        assert pricing_fresh_v8(view, params) is None
 
     def test_v8_none_when_v0_declines(self, params: strategy.StrategyParams) -> None:
         """Thin edge -> v0 declines -> v8 declines (freshness adds no trades)."""
         view = _view(remaining_seconds=250, up_ask=0.69, fair_up=0.70)
-        assert fair_value_fresh_v8(view, params) is None
+        assert pricing_fresh_v8(view, params) is None
 
     def test_signal_when_both_pass_down(self, params: strategy.StrategyParams) -> None:
         """v0 enters Down (spot below reference) and the cushion clears -> Down."""

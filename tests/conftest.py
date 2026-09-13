@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the btc_5m_fv test suite."""
+"""Shared pytest fixtures for the polymarket_exec test suite."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from btc_5m_fv.core.interfaces import (
+from polymarket_exec.core.interfaces import (
     AbstractExecutionManager,
     AbstractMarketConnector,
     AbstractPriceConnector,
 )
-from btc_5m_fv.core.types import (
+from polymarket_exec.core.types import (
     BacktestParams,
     MarketWindow,
     OrderState,
@@ -27,7 +27,32 @@ from btc_5m_fv.core.types import (
     StrategyParams,
     Tick,
 )
-from btc_5m_fv.ops.telemetry import FeedHealthTracker, LatencyTracker
+from polymarket_exec.ops.telemetry import FeedHealthTracker, LatencyTracker
+
+
+# ---------------------------------------------------------------------------
+# Real-money isolation (autouse)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_real_live_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may inherit the operator's .env private key or LIVE consent.
+
+    config.py loads .env at import, and several dashboard tests hit /api/start
+    on the real app — without this a local run could build a real
+    LiveExecutor. Tests that need an armed gate set a dummy key explicitly.
+    """
+    import config as _config
+
+    monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "")
+    # No wallet either: keeps dashboard renders off the network (wallet stat).
+    monkeypatch.setattr(_config, "POLYMARKET_FUNDER", "")
+    try:
+        from polymarket_bot import controller as _controller
+    except Exception:  # noqa: BLE001 — bot package optional in some envs
+        return
+    monkeypatch.setattr(_controller, "_live_consent", False)
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +425,7 @@ def closed_position(sample_order: PaperOrder) -> PaperPosition:
 
 
 # ---------------------------------------------------------------------------
-# Price series fixtures for fair-value tests
+# Price series fixtures for pricing-model tests
 # ---------------------------------------------------------------------------
 
 

@@ -17,9 +17,9 @@ import pytest_asyncio
 
 import config as _config
 import db as _db
-import btc_bot.controller as controller
-import btc_bot.paper as paper
-from btc_5m_fv.execution.live import LiveOrderResult
+import polymarket_bot.controller as controller
+import polymarket_bot.paper as paper
+from polymarket_exec.execution.live import LiveOrderResult
 
 
 @pytest_asyncio.fixture
@@ -75,7 +75,7 @@ def _mock_executor() -> MagicMock:
 
 async def _open_positions(bot_db) -> list[dict]:
     async with bot_db.connect() as conn:
-        async with conn.execute("SELECT * FROM btc_paper_positions") as cur:
+        async with conn.execute("SELECT * FROM paper_positions") as cur:
             return [dict(r) for r in await cur.fetchall()]
 
 
@@ -316,15 +316,14 @@ async def test_kill_switch_skips_new_entries_in_tick(
 async def test_live_loop_refuses_without_gates(
     bot_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_config, "BTC_BOT_MODE", "live")
+    monkeypatch.setattr(_config, "BOT_MODE", "live")
     monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "")
-    monkeypatch.setattr(_config, "BTC_LIVE_CONFIRM", "")
 
     await paper.run_paper_loop(threading.Event())
 
     assert paper._live_executor is None
-    assert await _db.get_config("btc_bot.state") == "stopped"
-    detail = await _db.get_config("btc_bot.detail")
+    assert await _db.get_config("polymarket_bot.state") == "stopped"
+    detail = await _db.get_config("polymarket_bot.detail")
     assert "refused" in detail.lower()
     assert "paper mode" in detail  # explicit "did NOT fall back" message
 
@@ -333,9 +332,9 @@ async def test_live_loop_refuses_without_gates(
 async def test_controller_start_refuses_live_without_gates(
     bot_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_config, "BTC_BOT_MODE", "live")
+    monkeypatch.setattr(_config, "BOT_MODE", "live")
     monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "")
-    monkeypatch.setattr(_config, "BTC_LIVE_CONFIRM", "")
+    monkeypatch.setattr(controller, "_live_consent", True)  # operator clicked LIVE
     runner = MagicMock()
     monkeypatch.setattr(controller, "_ensure_runner_started", runner)
 
@@ -343,7 +342,7 @@ async def test_controller_start_refuses_live_without_gates(
 
     runner.assert_not_called()  # nothing starts — no silent paper fallback
     assert status.state == "stopped"
-    assert "REFUSED" in status.detail
+    assert "POLYMARKET_PRIVATE_KEY" in status.detail
 
 
 @pytest.mark.asyncio
@@ -352,8 +351,8 @@ async def test_controller_start_runs_paper_by_default(
 ) -> None:
     # Pin paper explicitly so the test is deterministic regardless of an
     # operator .env that opts into live locally.
-    monkeypatch.setattr(controller, "BTC_BOT_MODE", "paper")
-    monkeypatch.setattr(_config, "BTC_BOT_MODE", "paper")
+    monkeypatch.setattr(controller, "BOT_MODE", "paper")
+    monkeypatch.setattr(_config, "BOT_MODE", "paper")
     runner = MagicMock()
     monkeypatch.setattr(controller, "_ensure_runner_started", runner)
     monkeypatch.setattr(controller, "_is_runner_alive", lambda: True)
@@ -366,10 +365,10 @@ async def test_controller_start_runs_paper_by_default(
 
 
 def test_config_mode_choices_reject_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BTC_BOT_MODE", "yolo")
-    assert _config._env_choice("BTC_BOT_MODE", "paper", {"paper", "live"}) == "paper"
-    monkeypatch.setenv("BTC_BOT_MODE", "live")
-    assert _config._env_choice("BTC_BOT_MODE", "paper", {"paper", "live"}) == "live"
+    monkeypatch.setenv("BOT_MODE", "yolo")
+    assert _config._env_choice("BOT_MODE", "paper", {"paper", "live"}) == "paper"
+    monkeypatch.setenv("BOT_MODE", "live")
+    assert _config._env_choice("BOT_MODE", "paper", {"paper", "live"}) == "live"
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +379,7 @@ def test_config_mode_choices_reject_unknown(monkeypatch: pytest.MonkeyPatch) -> 
 def _dash_module():
     import importlib
 
-    return importlib.import_module("btc_5m_fv.ops.dashboard.app")
+    return importlib.import_module("polymarket_exec.ops.dashboard.app")
 
 
 def test_dashboard_paper_copy_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

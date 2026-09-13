@@ -15,7 +15,7 @@ import pytest
 import pytest_asyncio
 
 import db as _db
-from btc_5m_fv.execution.gate import EntryRequest, GateConfig, RiskGate
+from polymarket_exec.execution.gate import EntryRequest, GateConfig, RiskGate
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -199,7 +199,7 @@ class TestLossHaltBypassBothModes:
 
     @pytest.mark.asyncio
     async def test_live_gate_respects_bypass_flag(self) -> None:
-        from btc_5m_fv.execution.gate import set_loss_halt_bypass
+        from polymarket_exec.execution.gate import set_loss_halt_bypass
 
         await set_loss_halt_bypass(True)  # operator hits the toggle
         live = RiskGate(_cfg(daily_loss_halt_usd=10.0), is_live=True)
@@ -215,7 +215,7 @@ class TestLossHaltBypassBothModes:
 
     @pytest.mark.asyncio
     async def test_paper_gate_respects_bypass_flag(self) -> None:
-        from btc_5m_fv.execution.gate import set_loss_halt_bypass
+        from polymarket_exec.execution.gate import set_loss_halt_bypass
 
         await set_loss_halt_bypass(True)
         paper = RiskGate(_cfg(daily_loss_halt_usd=10.0), is_live=False)
@@ -226,7 +226,7 @@ class TestLossHaltBypassBothModes:
 
     @pytest.mark.asyncio
     async def test_bypass_off_halts_live(self) -> None:
-        from btc_5m_fv.execution.gate import set_loss_halt_bypass
+        from polymarket_exec.execution.gate import set_loss_halt_bypass
 
         await set_loss_halt_bypass(False)
         live = RiskGate(_cfg(daily_loss_halt_usd=10.0), is_live=True)
@@ -252,7 +252,7 @@ class TestLossHaltBreached:
 
     @pytest.mark.asyncio
     async def test_false_when_bypassed(self) -> None:
-        from btc_5m_fv.execution.gate import set_loss_halt_bypass
+        from polymarket_exec.execution.gate import set_loss_halt_bypass
 
         await set_loss_halt_bypass(True)
         live = RiskGate(_cfg(daily_loss_halt_usd=10.0), is_live=True)
@@ -330,8 +330,8 @@ class TestTrailingHighWaterMarkHalt:
         from datetime import UTC, datetime
 
         today = datetime.now(UTC).date().isoformat()
-        await _db.set_config("btc_risk.date", today)
-        await _db.set_config("btc_risk.live_realized_pnl", repr(8.0))
+        await _db.set_config("risk.date", today)
+        await _db.set_config("risk.live_realized_pnl", repr(8.0))
         gate = RiskGate(_cfg(daily_loss_halt_usd=10.0), is_live=True)
         await gate.load()
         assert gate.halt_peak == pytest.approx(8.0)
@@ -348,7 +348,7 @@ class TestTrailingHighWaterMarkHalt:
 
     @pytest.mark.asyncio
     async def test_bypass_overrides_trailing_halt(self) -> None:
-        from btc_5m_fv.execution.gate import set_loss_halt_bypass
+        from polymarket_exec.execution.gate import set_loss_halt_bypass
 
         await set_loss_halt_bypass(True)
         gate = RiskGate(_cfg(daily_loss_halt_usd=10.0), is_live=True)
@@ -386,7 +386,7 @@ class TestRuntimeMaxTradeOverride:
 
     @pytest.mark.asyncio
     async def test_override_lowers_cap(self) -> None:
-        from btc_5m_fv.execution.gate import set_runtime_max_trade_usd
+        from polymarket_exec.execution.gate import set_runtime_max_trade_usd
 
         gate = RiskGate(_cfg(max_trade_usd=5.0))
         await set_runtime_max_trade_usd(2.0)
@@ -397,7 +397,7 @@ class TestRuntimeMaxTradeOverride:
 
     @pytest.mark.asyncio
     async def test_override_raises_cap_for_both_modes(self) -> None:
-        from btc_5m_fv.execution.gate import set_runtime_max_trade_usd
+        from polymarket_exec.execution.gate import set_runtime_max_trade_usd
 
         # The runtime cap applies in both modes (paper and live).
         paper = RiskGate(_cfg(max_trade_usd=3.0), is_live=False)
@@ -415,7 +415,7 @@ class TestRuntimeMaxTradeOverride:
 
     @pytest.mark.asyncio
     async def test_override_cleared_falls_back_to_env(self) -> None:
-        from btc_5m_fv.execution.gate import set_runtime_max_trade_usd
+        from polymarket_exec.execution.gate import set_runtime_max_trade_usd
 
         gate = RiskGate(_cfg(max_trade_usd=5.0))
         await set_runtime_max_trade_usd(2.0)
@@ -428,7 +428,7 @@ class TestRuntimeMaxTradeOverride:
 
     @pytest.mark.asyncio
     async def test_set_get_round_trip(self) -> None:
-        from btc_5m_fv.execution.gate import (
+        from polymarket_exec.execution.gate import (
             get_runtime_max_trade_usd,
             set_runtime_max_trade_usd,
         )
@@ -444,7 +444,7 @@ class TestRuntimeMaxTradeOverride:
         import db as _db
 
         gate = RiskGate(_cfg(max_trade_usd=5.0))
-        await _db.set_config("btc_runtime.max_trade_usd", "not-a-number")
+        await _db.set_config("runtime.max_trade_usd", "not-a-number")
         await gate.refresh_runtime_limits()
         assert gate.runtime_max_trade_usd is None
         assert gate.effective_max_trade_usd == 5.0
@@ -455,7 +455,7 @@ class TestRuntimeTradeShares:
 
     @pytest.mark.asyncio
     async def test_set_get_round_trip(self) -> None:
-        from btc_5m_fv.execution.gate import (
+        from polymarket_exec.execution.gate import (
             get_runtime_trade_shares,
             set_runtime_trade_shares,
         )
@@ -468,7 +468,7 @@ class TestRuntimeTradeShares:
 
     @pytest.mark.asyncio
     async def test_refresh_derives_effective_cap(self) -> None:
-        from btc_5m_fv.execution.gate import set_runtime_trade_shares
+        from polymarket_exec.execution.gate import set_runtime_trade_shares
 
         gate = RiskGate(_cfg(max_trade_usd=5.0))
         await set_runtime_trade_shares(8.0)
@@ -481,7 +481,7 @@ class TestRuntimeTradeShares:
 
     @pytest.mark.asyncio
     async def test_shares_take_precedence_over_dollar_override(self) -> None:
-        from btc_5m_fv.execution.gate import (
+        from polymarket_exec.execution.gate import (
             set_runtime_max_trade_usd,
             set_runtime_trade_shares,
         )
@@ -494,7 +494,7 @@ class TestRuntimeTradeShares:
 
     @pytest.mark.asyncio
     async def test_cleared_shares_fall_back_to_dollar_override(self) -> None:
-        from btc_5m_fv.execution.gate import (
+        from polymarket_exec.execution.gate import (
             set_runtime_max_trade_usd,
             set_runtime_trade_shares,
         )

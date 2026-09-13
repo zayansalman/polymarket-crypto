@@ -1,6 +1,6 @@
 """Slow-market forecasting-skill pilot: journal + scoring (issue #162).
 
-Implements the pre-registered pilot in ``docs/PIVOT_2026-07.md`` §4: log a
+Implements the pre-registered pilot in ``docs/archive/PIVOT_2026-07.md`` §4: log a
 probability forecast on a slow Polymarket market, snapshot the executable
 quotes alongside it, and — once markets resolve — score forecasting skill
 against the market itself.
@@ -47,7 +47,7 @@ DEFAULT_DB = ROOT / "data" / "forecast_journal.db"
 
 # Polymarket Fee Structure V2 (2026-03-30): taker fee rate by category.
 # Crypto is present only to REFUSE it loudly — the pilot pre-registration
-# excludes it (docs/PIVOT_2026-07.md §4).
+# excludes it (docs/archive/PIVOT_2026-07.md §4).
 CATEGORY_FEE = {
     "geopolitics": 0.0,
     "world": 0.0,
@@ -171,7 +171,7 @@ def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
     if category == "crypto":
         sys.exit(
             "REFUSED: the pilot pre-registration excludes crypto (see "
-            "docs/PIVOT_2026-07.md §4 — that game was measured and lost)."
+            "docs/archive/PIVOT_2026-07.md §4 — that game was measured and lost)."
         )
     if category not in CATEGORY_FEE:
         sys.exit(f"unknown category {category!r}; one of {sorted(CATEGORY_FEE)}")
@@ -308,7 +308,7 @@ def cmd_report(conn: sqlite3.Connection, _args: argparse.Namespace) -> None:
         pnl_ok = bool(pnls) and mean_ci(pnls)[1] > 0
         if skill_ok and pnl_ok:
             print("VERDICT: PASSES the pre-registered bar (Brier skill > 0 AND "
-                  "PnL CI > 0) — fund small per docs/PIVOT_2026-07.md")
+                  "PnL CI > 0) — fund small per docs/archive/PIVOT_2026-07.md")
         else:
             print("VERDICT: FAILS the pre-registered bar — no demonstrated "
                   "skill; do not fund (close option C)")

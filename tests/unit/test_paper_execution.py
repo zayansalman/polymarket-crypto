@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from btc_5m_fv.core.types import (
+from polymarket_exec.core.types import (
     ExitReason,
     MarketWindow,
     OrderState,
@@ -19,7 +19,7 @@ from btc_5m_fv.core.types import (
     SignalAction,
     Tick,
 )
-from btc_5m_fv.execution.paper import PaperExecutionManager
+from polymarket_exec.execution.paper import PaperExecutionManager
 
 
 # ---------------------------------------------------------------------------

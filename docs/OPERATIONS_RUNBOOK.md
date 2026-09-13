@@ -1,6 +1,8 @@
 # Operations Runbook
 
-This runbook is for the local BTC 5-minute binary fair-value strategy lab. The goal is to
+This runbook is for the local Polymarket crypto binary-markets strategy lab
+(currently-wired path is inherited BTC 5-minute — see AGENTS.md for status).
+The goal is to
 make operation boring: visible state, bounded risk, and fast Stop behavior.
 Paper mode is the default; live mode is strictly opt-in (see "Going live").
 
@@ -50,63 +52,30 @@ Expected:
 Live mode places REAL orders with REAL funds on the Polymarket CLOB. Read this
 whole section before flipping the switch.
 
-### Getting a key and funder (the real flow — there is NO key export)
+### Wallet setup (MetaMask)
 
-The Polymarket product has no "export private key" feature. API trading uses
-a wallet **you** control. The documented options:
-
-| You have | signature type | key | funder |
-|---|---|---|---|
-| Nothing yet (recommended) | `3` (deposit wallet) | fresh EOA key, generated locally | relayer-deployed deposit wallet owned by that key |
-| A browser wallet (MetaMask etc.) | `0` (EOA) | from your wallet app | the EOA itself (needs POL for gas + on-chain approvals) |
-| A Gnosis Safe | `2` | the Safe owner key | the Safe address |
-| An email-login UI account | n/a for API | — | move the funds out instead (withdraw) |
-
-**Path A — you already have a funded Polymarket account (connected wallet, e.g. MetaMask):**
-Use it in place; no fund movement, no deploy, no approvals (your proxy is
-already set up from trading in the UI). The trading funds live in a
-deterministic proxy controlled by your wallet key, so the funder and
-signature type are auto-detected from the key:
+Live trading uses the MetaMask account you already trade with on Polymarket.
+Its funds sit in a Polymarket wallet (a Gnosis Safe your MetaMask key owns,
+signature type 2) — no fund movement, no deploy, no approvals.
 
 ```bash
-# 1. Put your signer key in .env (MetaMask: Account details -> Show private key):
+# 1. Put your MetaMask key in .env (MetaMask: Account details -> Show private key):
 #       POLYMARKET_PRIVATE_KEY=0x...
-# 2. Detect the funder proxy + signature type from on-chain balances:
-./.venv/bin/python tools/live_detect_wallet.py
+# 2. Find your Polymarket wallet and write it into .env:
+python3 -m pip install --pre polymarket-client   # one-time
+python3 tools/live_detect_wallet.py
 ```
 
-It derives every wallet the key could control (EOA / POLY_PROXY / Gnosis
-Safe), reads each one's on-chain pUSD balance, and writes the funded one's
-address + matching signature type into `.env`. **Security:** that key
-controls your entire wallet, not just the trading balance — only use a key
-whose wallet holds nothing you are not willing to expose on this machine.
-
-**Path B — start fresh with an isolated deposit wallet (type 3)**, fully
-scripted (the bot's key then controls only what you move to it):
-
-```bash
-# one-time: official py-sdk handles deposit-wallet deploy + gasless approvals
-./.venv/bin/pip install --pre polymarket-client
-./.venv/bin/python tools/live_setup.py
-```
-
-The script generates a key if `.env` has none, mints a Builder API Key from
-that key (used only for the gasless deploy, then discarded), deploys the
-deterministic deposit wallet, and writes the config straight into `.env`
-(perms `0600`). The private key is **never printed** — it cannot leak into
-scrollback or logs. There is no separate approval step: the collateral
-allowance is set automatically the first time the bot connects to a funded
-wallet (`update_balance_allowance`). `BTC_LIVE_CONFIRM` is deliberately not
-written — you add that line yourself as the final go-live step.
-
-**Funding:** send USDC/pUSD on Polygon to the printed funder address. Funds
-sitting in an existing Polymarket UI account move with **Withdraw → paste
-the funder address** — no key export needed anywhere.
+It derives your Polymarket wallet from the key, checks its on-chain USDC
+balance, and writes `POLYMARKET_FUNDER` + `POLYMARKET_SIGNATURE_TYPE=2`.
+**Security:** the key controls your whole MetaMask wallet, not just the
+Polymarket balance — keep only what you're willing to expose on this machine.
+`.env` and `.env.bak` are gitignored and written `0600`.
 
 ### Launch steps
 
-1. Run `tools/live_setup.py` (above) and put its output block in `.env`
-   (never commit it). The key is never logged and never journaled.
+1. Do the MetaMask wallet setup above (never commit `.env`). The key is
+   never logged and never journaled.
 
 2. Preflight — verifies the gate, credential derivation, CLOB reachability,
    and that the funder balance is actually visible to the CLOB:
@@ -117,41 +86,40 @@ the funder address** — no key export needed anywhere.
 
    Do not launch on a NO-GO.
 
-3. Arm live mode by setting **BOTH** env vars, then start the app and press
-   **Start** on the dashboard:
+3. Start the app, click **LIVE** in the header toggle (no dialog — the click
+   is the consent), then press **Start**:
 
    ```bash
-   export BTC_BOT_MODE=live
-   export BTC_LIVE_CONFIRM=YES_I_UNDERSTAND
    ./.venv/bin/python main.py
    ```
 
-   > **Both vars are required.** Setting only `BTC_LIVE_CONFIRM` leaves the bot
-   > paper-trading while the UI may read armed — `BTC_BOT_MODE=live` is what
-   > actually routes orders to the live executor (see `btc_bot/controller.py`,
-   > `btc_bot/paper.py`). The private key + funder from step 1 and a clean config
-   > parse are the remaining gates; any missing one makes Start refuse.
+   > **The LIVE click is the consent.** There is no env confirm phrase, and an
+   > env `BOT_MODE=live` default alone never trades — Start refuses a live boot
+   > the operator didn't select in the dashboard (`polymarket_bot/controller.py`).
+   > LIVE is always clickable; hover it to see whether it's armed. The private
+   > key + funder from step 1 and a clean config parse are the remaining gates;
+   > any missing one makes Start refuse.
 
 4. Verify the dashboard says **LIVE — orders are real** and the activity feed
-   shows `btc_live_started`. If any boot gate is missing, Start refuses with
+   shows `live_started`. If any boot gate is missing, Start refuses with
    an explicit error and nothing runs — live never silently falls back to paper.
 
 ### Hard risk limits (enforced in code before every order)
 
 | Limit | Env var | Default |
 | --- | --- | --- |
-| Max notional per trade | `BTC_LIVE_MAX_TRADE_USD` | $3 |
+| Max notional per trade | `TRADE_MAX_USD` | $3 |
 | Open positions | (fixed) | 1 |
-| Daily realized-loss halt | `BTC_LIVE_DAILY_LOSS_HALT_USD` | $10 (UTC day, persisted) |
-| Daily bankroll cap (sum of buys) | `BTC_LIVE_BANKROLL_CAP_USD` | **disabled** when blank/unset/≤0; positive number = cap (UTC day, persisted) |
-| Entry slippage guard (ask vs signal) | `BTC_LIVE_MAX_ENTRY_SLIPPAGE` | 0.02 |
-| Exit fill wait before cancel/retry | `BTC_LIVE_EXIT_FILL_TIMEOUT_SECONDS` | 10s |
+| Daily realized-loss halt | `TRADE_DAILY_LOSS_HALT_USD` | $10 (UTC day, persisted) |
+| Daily bankroll cap (sum of buys) | `TRADE_BANKROLL_CAP_USD` | **disabled** when blank/unset/≤0; positive number = cap (UTC day, persisted) |
+| Entry slippage guard (ask vs signal) | `TRADE_MAX_ENTRY_SLIPPAGE` | 0.02 |
+| Exit fill wait before cancel/retry | `LIVE_EXIT_FILL_TIMEOUT_SECONDS` | 10s |
 
 The daily loss halt is on by default but is now operator-controllable from the
 dashboard — see **Loss-halt operator controls (#76)** below. As of #76 the live
 halt fires on the **live (real-money) leg only**; paper-study losses no longer
 halt live trading. The daily bankroll cap is **opt-in** as of
-v0.4.4: leave `BTC_LIVE_BANKROLL_CAP_USD` blank/unset and the cap gate is
+v0.4.4: leave `TRADE_BANKROLL_CAP_USD` blank/unset and the cap gate is
 bypassed (the spend counter still increments so the dashboard can show daily
 throughput). When set to a positive dollar amount it behaves as before —
 persisted in SQLite, restart-safe within the UTC day. Realized PnL feeds the
@@ -178,16 +146,16 @@ live realized −$12.40 ≤ −$10.00. Bot stopped & flattened — Reset the hal
 Start to resume."* Operator workflow after a halt: **Reset halt → Start**.
 Pressing Start without resetting re-trips on the first tick and stops again.
 
-Every bypass/reset is journaled to `notification_feed` (`btc_loss_halt_bypass`,
-`btc_loss_halt_reset`, `btc_loss_halt_stop`). On the first dashboard boot after
+Every bypass/reset is journaled to `notification_feed` (`loss_halt_bypass`,
+`loss_halt_reset`, `loss_halt_stop`). On the first dashboard boot after
 this change, a one-shot migration clears any stale paper-era bypass flag so live
 starts halt-ON.
 
-A malformed risk-limit env value (e.g. `BTC_LIVE_MAX_TRADE_USD=O.50`) makes
+A malformed risk-limit env value (e.g. `TRADE_MAX_USD=O.50`) makes
 live boot REFUSE with the exact parse error instead of silently falling back
 to the looser default.
 
-Blocked attempts are journaled to the `btc_live_orders` table with status
+Blocked attempts are journaled to the `live_orders` table with status
 `BLOCKED` — check it if the bot seems quiet.
 
 Note: Polymarket enforces a minimum order size (typically 5 shares). With a $3
@@ -201,7 +169,7 @@ Every live boot, BEFORE any trading:
 1. **All resting CLOB orders on the account are cancelled** (`cancel_all`).
    Use a dedicated bot wallet — manual orders from the same wallet would be
    cancelled too.
-2. Any **open ledger position is re-adopted** from the `btc_live_orders`
+2. Any **open ledger position is re-adopted** from the `live_orders`
    journal (token, entry price, exchange-confirmed fill size) so the normal
    exit path flattens it. Open rows with no live order behind them (paper
    artifacts, never-filled entries) are closed harmlessly with reason
@@ -244,10 +212,10 @@ Drill this once before going live so you know it works.
 
   ```bash
   sqlite3 data/btc_5m_binary_fair_value.db \
-    "UPDATE btc_paper_positions SET state='closed', exit_reason='MANUAL' WHERE state='open'"
+    "UPDATE paper_positions SET state='closed', exit_reason='MANUAL' WHERE state='open'"
   ```
 
-### Settlement and redemption (BTC_EXIT_STYLE=settle, the default)
+### Settlement and redemption (EXIT_STYLE=settle, the default)
 
 Settle-style positions ride to window resolution and never place exit
 orders. The engine reads the Chainlink settlement (Up iff close ≥ open),
@@ -261,7 +229,7 @@ frees the position slot.
   new entries.
 - Losing tokens expire worthless; nothing to do.
 - Legacy scalp behavior (intra-window TARGET/STOP/BAND exits, always flat
-  before resolution) is available with `BTC_EXIT_STYLE=scalp` — note it
+  before resolution) is available with `EXIT_STYLE=scalp` — note it
   soaked **negative** under honest fills and exists for experiments only.
 
 ### Live audit trail
@@ -270,7 +238,7 @@ Every order, cancel, and blocked attempt lands in SQLite:
 
 ```bash
 sqlite3 data/btc_5m_binary_fair_value.db \
-  "SELECT created_at, intent, side, price, size, status, error FROM btc_live_orders ORDER BY id DESC LIMIT 20"
+  "SELECT created_at, intent, side, price, size, status, error FROM live_orders ORDER BY id DESC LIMIT 20"
 ```
 
 ## Data
