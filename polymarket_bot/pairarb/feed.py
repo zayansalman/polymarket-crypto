@@ -108,7 +108,6 @@ async def onchain_fills(
                     )
                 while True:
                     raw = await ws.recv()
-                    seen = time.time()
                     msg = json.loads(raw)
                     log = (msg.get("params") or {}).get("result")
                     if not log:

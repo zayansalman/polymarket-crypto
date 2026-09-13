@@ -123,7 +123,9 @@ def test_market_prices_none_when_book_empty():
 
 @pytest.mark.asyncio
 async def test_discover_daily_markets_only_returns_tracked_assets():
-    sol_slug = "solana-up-or-down-on-august-30-2026"
+    # Discovery looks up TODAY's slug, so the fixture must too — a hardcoded
+    # date only passed on that one day.
+    sol_slug = _todays_slug("solana", datetime.now(UTC))
     client = _FakeGammaClient(
         {sol_slug: _gamma_market(slug=sol_slug, end_date="2026-08-30T16:00:00Z")}
     )

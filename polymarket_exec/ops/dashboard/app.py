@@ -85,8 +85,6 @@ try:
     from polymarket_bot.paper import load_paper_summary  # type: ignore[import-untyped]
     from polymarket_bot.backtest import format_report  # type: ignore[import-untyped]
     from polymarket_exec.execution.live import (  # type: ignore[import-untyped]
-        LiveBootRefused,
-        assert_live_boot_allowed,
         live_boot_problems,
     )
 
