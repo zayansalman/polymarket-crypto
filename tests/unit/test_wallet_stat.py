@@ -13,7 +13,7 @@ def _ribbon(wallet: dict | None) -> str:
     return ribbon.render(
         mode="paper", state="stopped", session_start=None,
         live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
-        open_pos=[], closed_session=[], tick=None, last_live_at=None,
+        open_pos=[], closed_session=[], tick=None,
         wallet=wallet,
     )
 
