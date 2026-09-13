@@ -906,7 +906,7 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
     if _risk_gate is not None:
         notional = _share_sized_notional(
             side, notional, up_book.best_ask, down_book.best_ask,
-            _risk_gate.runtime_trade_shares,
+            _risk_gate.trade_shares,
         )
 
     candidate_edges = [e for e in (edge_up, edge_down) if e is not None]

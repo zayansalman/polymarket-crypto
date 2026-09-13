@@ -74,19 +74,19 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 959.
+- **Tests:** 975.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
 <!-- BEGIN GENERATED:inventory -->
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 27 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 28 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
 | `db.py` | WIRED | 14 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 9 | Structured JSON logging with structlog. Module + trade_id context. |
+| `logging_setup.py` | WIRED | 10 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 11 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 12 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
 | `polymarket_bot/chronos_signal.py` | DEAD? | 0 | Layer 3 — Chronos time-series ensemble (stub). |
 | `polymarket_bot/controller.py` | WIRED | 2 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
@@ -97,7 +97,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
-| `polymarket_bot/market_selection.py` | WIRED | 3 | Operator market selection: which crypto asset + window timeframe to trade. |
+| `polymarket_bot/market_selection.py` | WIRED | 4 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
 | `polymarket_bot/pairarb/feed.py` | WIRED | 1 | Fill feed for the copier — one interface, two transports (#182). |
 | `polymarket_bot/pairarb/fills.py` | WIRED | 1 | Back-of-queue maker fill simulation and window settlement (#182). |
@@ -128,18 +128,19 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/connectors/chainlink_settlement.py` | WIRED | 1 | Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21). |
 | `polymarket_exec/connectors/polymarket.py` | DEAD? | 0 | Polymarket connector — discovers the current BTC 5-minute binary market window. |
 | `polymarket_exec/connectors/registry.py` | WIRED | 1 | Connector registry — manages the lifecycle and discovery of all connectors. |
+| `polymarket_exec/connectors/updown_quote.py` | WIRED | 2 | Live top-of-book quote for the current window of any crypto Up/Down market. |
 | `polymarket_exec/core/__init__.py` | pkg | 0 | Core domain types, interfaces, and exceptions. |
 | `polymarket_exec/core/exceptions.py` | WIRED | 4 | Custom exception hierarchy for the BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/core/interfaces.py` | WIRED | 10 | Abstract base classes for all pluggable system components. |
 | `polymarket_exec/core/types.py` | WIRED | 10 | All domain types and enums for the BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/execution/__init__.py` | pkg | 0 | Paper and live execution managers. |
-| `polymarket_exec/execution/gate.py` | WIRED | 4 | Venue-independent pre-trade risk gate (issue #64). |
+| `polymarket_exec/execution/gate.py` | WIRED | 5 | Venue-independent pre-trade risk gate (issue #64). |
 | `polymarket_exec/execution/live.py` | WIRED | 7 | Live execution on the Polymarket CLOB via py-clob-client. |
 | `polymarket_exec/execution/paper.py` | WIRED | 1 | Paper execution manager — explicit order lifecycle with SQLite persistence. |
 | `polymarket_exec/execution/risk.py` | WIRED | 1 | Venue-independent risk service — pre-trade and post-trade risk controls. |
 | `polymarket_exec/ops/__init__.py` | pkg | 0 | Operator controls and telemetry. |
 | `polymarket_exec/ops/controller.py` | DEAD? | 0 | Unified bot controller — tick loop using execution manager + risk service. |
-| `polymarket_exec/ops/dashboard/__init__.py` | pkg | 0 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
+| `polymarket_exec/ops/dashboard/__init__.py` | pkg | 2 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/ops/dashboard/app.py` | WIRED | 2 | FastAPI dashboard for the local Polymarket crypto trading lab. |
 | `polymarket_exec/ops/dashboard/execution_view.py` | WIRED | 1 | Execution view orchestrator (#37). |
 | `polymarket_exec/ops/dashboard/panels/__init__.py` | pkg | 2 | Dashboard panels. |
@@ -147,7 +148,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/ops/dashboard/panels/_shared.py` | DEAD? | 0 | Shared rendering primitives for dashboard panels. |
 | `polymarket_exec/ops/dashboard/panels/_wallet.py` | WIRED | 1 | Polymarket wallet size for the EMS ribbon: cash + open positions value. |
 | `polymarket_exec/ops/dashboard/panels/blotter.py` | WIRED | 1 | Trade blotter: open positions on top, last 12 closed below, mode chip per row. |
-| `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Operator runtime controls (#50, #89): live-editable risk knobs. |
+| `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
 | `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: one row per upstream feed — what it feeds, source, delay, status. |
@@ -157,6 +158,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/ops/dashboard/panels/ribbon.py` | WIRED | 1 | Top status ribbon: wallet, P&L, open-position (live) P&L, loss-halt control. |
 | `polymarket_exec/ops/dashboard/panels/settings.py` | WIRED | 1 | Settings panel: every dashboard-editable runtime knob (#206). |
 | `polymarket_exec/ops/dashboard/panels/tca.py` | WIRED | 1 | TCA panel: quoted spread, half-spread, edge capture, Brier calibration. |
+| `polymarket_exec/ops/dashboard/quote_feed.py` | WIRED | 2 | Background quote poller for the dashboard's order-size ticket. |
 | `polymarket_exec/ops/incidents.py` | WIRED | 1 | Incident state machine and operator runbooks for the BTC 5m pricing-model system. |
 | `polymarket_exec/ops/telemetry.py` | WIRED | 1 | Feed health telemetry and latency tracking for the BTC 5m pricing-model system. |
 | `polymarket_exec/storage/__init__.py` | pkg | 0 | Persistence layer — database, recording, and replay. |

@@ -113,12 +113,23 @@ async def _lifespan(app: FastAPI):
     daily_stop_event = asyncio.Event()
     daily_task = asyncio.create_task(_run_daily_scanner(daily_stop_event))
 
+    # Order-size ticket quotes: polls the selected market's book only while a
+    # dashboard is open (demand-driven), independent of the trading loop.
+    from polymarket_exec.ops.dashboard import quote_feed
+
+    quote_stop_event = asyncio.Event()
+    quote_task = asyncio.create_task(quote_feed.run_forever(quote_stop_event))
+
     yield
 
-    daily_stop_event.set()
-    daily_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await daily_task
+    for stop_event, task in (
+        (daily_stop_event, daily_task),
+        (quote_stop_event, quote_task),
+    ):
+        stop_event.set()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +172,10 @@ templates = Jinja2Templates(directory=str(dashboard_dir / "templates"))
 # browser otherwise caches /static/dashboard.js across server restarts, leaving
 # new functions (e.g. setActiveModel) undefined on a stale page.
 try:
-    _STATIC_VERSION = str(int((dashboard_dir / "static" / "dashboard.js").stat().st_mtime))
+    _STATIC_VERSION = str(int(max(
+        (dashboard_dir / "static" / name).stat().st_mtime
+        for name in ("dashboard.js", "style.css")
+    )))
 except OSError:
     _STATIC_VERSION = "1"
 
