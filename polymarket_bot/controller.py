@@ -170,20 +170,27 @@ async def set_mode(mode: str) -> BtcBotStatus:
     is persisted. The runner is NOT auto-started — the operator must press
     Start. This keeps mode-switching free of surprise live-order side effects.
 
-    Live is gated exactly like a boot: if the gate fails the mode is NOT
-    changed and an error is raised.
+    The switch itself is never blocked: LIVE is always selectable. The live
+    boot gate guards real orders at Start (``request_start``) and again at
+    executor build (``build_live_executor``) — an unarmed LIVE selection
+    simply refuses to start, with the reason in the status detail.
     """
     if mode not in ("paper", "live"):
         raise ValueError(f"unknown mode {mode!r}")
-    if mode == "live":
-        # Refuse the switch up front if live can't legally run.
-        assert_live_boot_allowed()
     await request_stop()
     await set_config("polymarket_bot.requested_mode", mode)
     now = datetime.now(UTC).isoformat(timespec="seconds")
     detail = (
         f"Mode set to {mode.upper()}. Bot is stopped — press Start to begin."
     )
+    if mode == "live":
+        try:
+            assert_live_boot_allowed()
+        except LiveBootRefused as e:
+            detail = (
+                f"Mode set to LIVE — not armed: {e} "
+                "Start will refuse until this is fixed."
+            )
     await set_config("polymarket_bot.mode", mode)
     await set_config("polymarket_bot.updated_at", now)
     await set_config("polymarket_bot.detail", detail)
