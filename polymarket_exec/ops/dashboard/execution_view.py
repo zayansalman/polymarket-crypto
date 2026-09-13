@@ -20,11 +20,26 @@ from polymarket_exec.ops.dashboard.panels import (
     decision_engine,
     guardrails,
     market,
+    market_selector,
     performance,
     ribbon,
     strategy,
     tca,
 )
+
+
+async def market_selector_html() -> str:
+    """Render the topbar asset/timeframe selector with open-position glow."""
+    from polymarket_bot import market_selection
+
+    return market_selector.render(
+        selection=await market_selection.get_selection(),
+        open_pnl=market_selector.open_market_pnl(
+            open_pos=await data.open_positions(_config.EXIT_STYLE),
+            daily_open=await data.daily_positions(state="open"),
+            tick=await data.latest_tick(),
+        ),
+    )
 
 
 async def execution_view_html() -> str:

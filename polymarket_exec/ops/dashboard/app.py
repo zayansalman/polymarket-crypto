@@ -64,7 +64,10 @@ from config import (  # type: ignore[import-untyped]
 )
 from db import connect, init_db  # type: ignore[import-untyped]
 from logging_setup import get_logger  # type: ignore[import-untyped]
-from polymarket_exec.ops.dashboard.execution_view import execution_view_html  # type: ignore[import-untyped]
+from polymarket_exec.ops.dashboard.execution_view import (  # type: ignore[import-untyped]
+    execution_view_html,
+    market_selector_html,
+)
 
 log = get_logger("dashboard")
 
@@ -547,6 +550,15 @@ async def _execution_view_safe() -> str:
         return f"<div class='execution-view'><div class='card'>Execution view error: {escape(str(e))}</div></div>"
 
 
+async def _market_selector_safe() -> str:
+    """Render the topbar market selector; a render error must not break the page."""
+    try:
+        return await market_selector_html()
+    except Exception as e:  # noqa: BLE001
+        log.warning("market_selector_render_failed", error=str(e))
+        return ""
+
+
 async def _get_activity_data() -> str:
     return await _activity_html()
 
@@ -577,6 +589,7 @@ async def dashboard(request: Request) -> Any:
         "dashboard.html",
         {
             "execution_view": await _execution_view_safe(),
+            "market_selector": await _market_selector_safe(),
             "activity": await _get_activity_data(),
             "backtest": _get_backtest_data(),
             "mode": mode,
@@ -803,6 +816,30 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
         )
         log.info("btc.runtime_config_set", key=key, value=model)
         return {"status": "ok", "key": key, "value": model}
+    if key == "market":
+        from polymarket_bot import market_selection
+
+        value = (body or {}).get("value") or {}
+        if not isinstance(value, dict):
+            return {"status": "error", "detail": "value must be {asset, timeframe}"}
+        asset = str(value.get("asset", ""))
+        timeframe = str(value.get("timeframe", ""))
+        try:
+            sel = await market_selection.set_selection(asset, timeframe)
+        except ValueError as e:
+            return {"status": "error", "detail": str(e)}
+        await notify(
+            "runtime_config",
+            f"Operator selected market {sel.asset.upper()} {sel.timeframe} (paper+live)",
+            {"key": key, "value": {"asset": sel.asset, "timeframe": sel.timeframe}},
+        )
+        log.info("btc.runtime_config_set", key=key, asset=sel.asset, timeframe=sel.timeframe)
+        return {
+            "status": "ok",
+            "key": key,
+            "value": {"asset": sel.asset, "timeframe": sel.timeframe},
+            "loop_supported": sel.loop_supported,
+        }
     return {"status": "error", "detail": f"unknown runtime key {key!r}"}
 
 
@@ -823,6 +860,7 @@ async def api_data() -> dict[str, Any]:
     """Get current dashboard data as JSON."""
     return {
         "execution_view": await _execution_view_safe(),
+        "market_selector": await _market_selector_safe(),
         "activity": await _get_activity_data(),
         "backtest": _get_backtest_data(),
         "runtime": await _runtime_state(),
@@ -839,6 +877,7 @@ async def api_stream(request: Request) -> StreamingResponse:
             try:
                 data = {
                     "execution_view": await _execution_view_safe(),
+                    "market_selector": await _market_selector_safe(),
                     "activity": await _get_activity_data(),
                     "backtest": _get_backtest_data(),
                     "runtime": await _runtime_state(),

@@ -99,3 +99,61 @@ class TestRuntimeConfigEndpoint:
             "/api/runtime-config", json={"key": "trade_shares", "value": "x"}
         )
         assert r.json()["status"] == "error"
+
+
+class TestMarketSelection:
+    def test_default_is_btc_5m(self, client: TestClient) -> None:
+        from polymarket_bot import market_selection as ms
+
+        sel = asyncio.run(ms.get_selection())
+        assert (sel.asset, sel.timeframe) == ("btc", "5m")
+        assert sel.loop_supported
+
+    def test_set_market_persists(self, client: TestClient) -> None:
+        from polymarket_bot import market_selection as ms
+
+        r = client.post(
+            "/api/runtime-config",
+            json={"key": "market", "value": {"asset": "eth", "timeframe": "1h"}},
+        )
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["value"] == {"asset": "eth", "timeframe": "1h"}
+        assert body["loop_supported"] is False
+        sel = asyncio.run(ms.get_selection())
+        assert (sel.asset, sel.timeframe) == ("eth", "1h")
+
+    def test_rejects_unknown_market(self, client: TestClient) -> None:
+        for bad in ({"asset": "ltc", "timeframe": "5m"}, {"asset": "btc", "timeframe": "2m"}, "btc"):
+            r = client.post("/api/runtime-config", json={"key": "market", "value": bad})
+            assert r.json()["status"] == "error"
+
+    def test_page_renders_selector(self, client: TestClient) -> None:
+        html = client.get("/").text
+        assert "id=\"market-selector\"" in html
+        assert "data-asset='eth'" in html
+        assert "data-timeframe='1h'" in html
+
+
+class TestMarketSelectorGlow:
+    def test_glow_by_open_position_pnl(self) -> None:
+        from polymarket_bot.market_selection import MarketSelection
+        from polymarket_exec.ops.dashboard.panels import market_selector as mks
+
+        slug = "btc-updown-5m-1757750400"
+        tick = {"window_slug": slug, "up_best_bid": 0.60, "up_best_ask": 0.62}
+        pos = [{"window_slug": slug, "side": "UP", "entry_price": 0.50, "shares": 5}]
+        pnl = mks.open_market_pnl(open_pos=pos, daily_open=[{"asset": "doge"}], tick=tick)
+        assert pnl[("btc", "5m")] == pytest.approx(0.55)
+        assert pnl[("doge", "1d")] is None
+
+        html = mks.render(selection=MarketSelection("btc", "5m"), open_pnl=pnl)
+        assert "active glow-pos' data-asset='btc'" in html
+        assert "active glow-pos' data-timeframe='5m'" in html
+        assert "glow-flat' data-asset='doge'" in html
+
+        pos[0]["entry_price"] = 0.70
+        pnl = mks.open_market_pnl(open_pos=pos, daily_open=[], tick=tick)
+        assert "glow-neg' data-asset='btc'" in mks.render(
+            selection=MarketSelection("btc", "5m"), open_pnl=pnl
+        )
