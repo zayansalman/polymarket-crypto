@@ -131,6 +131,9 @@ def render(
     else:
         status_cls, status_label = "up", "OK"
     headroom_cls = "down" if headroom < halt * 0.4 else ""
+    # One readout: the limit and what's left of it. Past the floor (halted, or
+    # bypassed and still losing) nothing is left — show $0, not a negative.
+    left = s.money(max(0.0, headroom))
     leg = "live" if is_live else "paper"
     halt_title = (
         f"{leg} leg · P&L {s.money(halt_pnl, True)} · peak {s.money(peak, True)} · "
@@ -148,7 +151,7 @@ def render(
         "<button class='gr-btn' onclick='resetLossHalt()'>Reset</button>"
         "</div>"
         f"<div class='stat-s'><b class='halt-status {status_cls}'>{status_label}</b> · "
-        f"headroom <span class='{headroom_cls}'>${headroom:,.2f}</span></div>"
+        f"<span class='{headroom_cls}'>{left}</span> left of {s.money(halt)}</div>"
         "</div>"
     )
 
