@@ -32,9 +32,6 @@ def render(
     mode_pnl = live_pnl if is_live else paper_pnl
     session_pnl = sum(c["realized_pnl_usd"] or 0.0 for c in closed_session)
 
-    run_pill = (
-        f"<span class='pill {'on' if state == 'running' else 'off'}'>{state.upper()}</span>"
-    )
 
     # Real liveness comes from (a) when the loop last journaled a tick, and
     # (b) what feed_source that tick recorded for each upstream. Each chip
@@ -59,7 +56,6 @@ def render(
         return f"<span class='feed {'on' if ok else 'warn'}'>{label}</span>"
 
     chips = [
-        tick_chip,
         _chip("SPOT", (parts.get("spot") or "").startswith("chainlink")),
         _chip("REF", (parts.get("ref") or "").startswith("chainlink")),
         _chip("VOL", parts.get("vol") == "chainlink_ws"),
@@ -89,14 +85,18 @@ def render(
     )
     kill_chip = "<span class='pill live'>KILL ARMED</span>" if kill_armed else ""
 
+    # Run state lives in the topbar Start/Stop buttons; the ribbon only
+    # surfaces the exceptional pause / kill conditions.
+    alert_chips = f"{pause_chip}{kill_chip}"
     return (
         "<div class='ribbon'>"
-        f"<div class='ribbon-id'>{run_pill}{pause_chip}{kill_chip}</div>"
-        "<div class='ribbon-stats'>"
+        + (f"<div class='ribbon-id'>{alert_chips}</div>" if alert_chips else "")
+        + "<div class='ribbon-stats'>"
         f"{s.stat('Equity Δ (session)', s.money(session_pnl, True) if closed_session else '—', s.cls(session_pnl), flash='pnl')}"
         f"{s.stat('P&L (today)', s.money(mode_pnl, True), s.cls(mode_pnl), flash='pnl')}"
         f"{s.stat('Open Risk', s.money(sum(p['notional_usd'] or 0 for p in open_pos)), '', f'{len(open_pos)} pos')}"
         f"{s.stat('Halt Headroom', s.money(headroom), 'down' if headroom < halt * 0.4 else '')}"
+        f"<div class='feeds tick-box'>{tick_chip}</div>"
         f"<div class='feeds'>{feeds}</div>"
         f"{s.stat('Uptime', s.ago(session_start))}"
         "</div></div>"

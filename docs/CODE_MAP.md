@@ -73,7 +73,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 934.
+- **Tests:** 946.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
@@ -82,10 +82,10 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 |---|---|---|---|
 | `config.py` | WIRED | 59 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 2 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 38 | SQLite storage for the local Polymarket crypto trading lab. |
+| `db.py` | WIRED | 39 | SQLite storage for the local Polymarket crypto trading lab. |
 | `logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 10 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 12 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/adaptive.py` | WIRED | 3 | Adaptive risk controller (#36): edge-decay auto-pause + calibration. |
 | `polymarket_bot/backtest.py` | WIRED | 5 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
 | `polymarket_bot/calibration.py` | WIRED | 3 | Probability calibration for the side-relative model output (#37). |
@@ -99,6 +99,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
+| `polymarket_bot/market_selection.py` | WIRED | 3 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
 | `polymarket_bot/pairarb/feed.py` | WIRED | 2 | Fill feed for the copier — one interface, two transports (#182). |
 | `polymarket_bot/pairarb/fills.py` | WIRED | 1 | Back-of-queue maker fill simulation and window settlement (#182). |
@@ -154,6 +155,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → gates → final banner + tail. |
 | `polymarket_exec/ops/dashboard/panels/guardrails.py` | WIRED | 1 | Risk guardrails: daily spend, loss-halt, bot state, recent BLOCKED entries. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
+| `polymarket_exec/ops/dashboard/panels/market_selector.py` | WIRED | 1 | Topbar market selector: asset buttons over timeframe buttons. |
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |
 | `polymarket_exec/ops/dashboard/panels/ribbon.py` | WIRED | 1 | Top status ribbon: mode/state pills, daily PnL split, feed liveness chips. |
 | `polymarket_exec/ops/dashboard/panels/strategy.py` | WIRED | 1 | Strategy panel: active params, proposed-vs-applied delta, calibration. |

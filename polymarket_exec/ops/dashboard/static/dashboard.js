@@ -85,7 +85,11 @@ function setMode(mode) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.status === 'error') {
-        showToast('Mode switch refused: ' + (data.detail || ''), 'error');
+        showToast('Mode switch failed: ' + (data.detail || ''), 'error');
+      } else if (/not armed/.test(data.detail || '')) {
+        // LIVE is always selectable; an unarmed selection just can't Start yet.
+        showToast(data.detail, 'error');
+        setTimeout(function() { window.location.reload(); }, 3000);
       } else {
         showToast('Mode → ' + (data.mode || mode).toUpperCase(), 'success');
         setTimeout(function() { window.location.reload(); }, 600);
@@ -190,6 +194,30 @@ function setActiveModel() {
     .catch(function(err) { showToast('Switch failed: ' + err.message, 'error'); });
 }
 
+function setMarket(kind, value) {
+  var sel = document.querySelector('.mkt-sel');
+  if (!sel) return;
+  var active = function(k) {
+    var b = sel.querySelector('.mkt-btn.active[data-' + k + ']');
+    return b ? b.getAttribute('data-' + k) : '';
+  };
+  var next = { asset: active('asset'), timeframe: active('timeframe') };
+  next[kind] = value;
+  fetch('/api/runtime-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'market', value: next })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status !== 'ok') {
+        showToast('Market select failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+      refreshAll();
+    })
+    .catch(function(err) { showToast('Market select failed: ' + err.message, 'error'); });
+}
+
 function handleRefresh() {
   setButtonsDisabled(true);
   showToast('Refreshing...', 'info');
@@ -257,6 +285,12 @@ function updateDashboard(data) {
       stopBtn.classList.toggle('is-inactive', !running);
       stopBtn.title = running ? 'Stop the bot' : 'Bot is stopped';
     }
+  }
+
+  // Topbar market selector (selection + open-position glow)
+  if (data.market_selector !== undefined) {
+    var mktEl = document.getElementById('market-selector');
+    if (mktEl) mktEl.innerHTML = data.market_selector || '';
   }
 
   // Execution view (status ribbon + strategy/market/perf/TCA/blotter)

@@ -64,7 +64,10 @@ from config import (  # type: ignore[import-untyped]
 )
 from db import connect, init_db  # type: ignore[import-untyped]
 from logging_setup import get_logger  # type: ignore[import-untyped]
-from polymarket_exec.ops.dashboard.execution_view import execution_view_html  # type: ignore[import-untyped]
+from polymarket_exec.ops.dashboard.execution_view import (  # type: ignore[import-untyped]
+    execution_view_html,
+    market_selector_html,
+)
 
 log = get_logger("dashboard")
 
@@ -547,6 +550,15 @@ async def _execution_view_safe() -> str:
         return f"<div class='execution-view'><div class='card'>Execution view error: {escape(str(e))}</div></div>"
 
 
+async def _market_selector_safe() -> str:
+    """Render the topbar market selector; a render error must not break the page."""
+    try:
+        return await market_selector_html()
+    except Exception as e:  # noqa: BLE001
+        log.warning("market_selector_render_failed", error=str(e))
+        return ""
+
+
 async def _get_activity_data() -> str:
     return await _activity_html()
 
@@ -571,32 +583,36 @@ def _get_settings_data() -> str:
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request) -> Any:
     """Main dashboard page."""
-    mode, live_available, live_hint = await _mode_context()
+    mode, live_hint = await _mode_context()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
             "execution_view": await _execution_view_safe(),
+            "market_selector": await _market_selector_safe(),
             "activity": await _get_activity_data(),
             "backtest": _get_backtest_data(),
             "mode": mode,
-            "live_available": live_available,
             "live_hint": live_hint,
             "static_version": _STATIC_VERSION,
         },
     )
 
 
-async def _mode_context() -> tuple[str, bool, str]:
-    """(active mode, is live selectable, hint) for the mode toggle."""
+async def _mode_context() -> tuple[str, str]:
+    """(active mode, LIVE button hint) for the mode toggle.
+
+    LIVE is never disabled — the hint only reports whether it is armed. The
+    boot gate blocks real orders at Start, not the mode switch.
+    """
     if not _BTC_BOT_AVAILABLE:
-        return BOT_MODE, False, "polymarket_bot unavailable"
+        return BOT_MODE, "polymarket_bot unavailable"
     mode = await current_mode()
     try:
         assert_live_boot_allowed()
-        return mode, True, "Switch to LIVE — real CLOB orders"
+        return mode, "Switch to LIVE — real CLOB orders"
     except LiveBootRefused as e:
-        return mode, False, str(e)
+        return mode, f"LIVE not armed — Start will refuse: {e}"
 
 
 @app.post("/api/mode")
@@ -614,8 +630,6 @@ async def api_mode(request: Request) -> dict[str, str]:
     try:
         status = await set_mode(mode)
         return {"status": status.state, "mode": status.mode, "detail": status.detail}
-    except LiveBootRefused as e:
-        return {"status": "error", "detail": f"LIVE refused: {e}"}
     except Exception as e:  # noqa: BLE001
         log.exception("btc.set_mode_failed", error=str(e))
         return {"status": "error", "detail": f"Mode switch failed: {e}"}
@@ -803,6 +817,30 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
         )
         log.info("btc.runtime_config_set", key=key, value=model)
         return {"status": "ok", "key": key, "value": model}
+    if key == "market":
+        from polymarket_bot import market_selection
+
+        value = (body or {}).get("value") or {}
+        if not isinstance(value, dict):
+            return {"status": "error", "detail": "value must be {asset, timeframe}"}
+        asset = str(value.get("asset", ""))
+        timeframe = str(value.get("timeframe", ""))
+        try:
+            sel = await market_selection.set_selection(asset, timeframe)
+        except ValueError as e:
+            return {"status": "error", "detail": str(e)}
+        await notify(
+            "runtime_config",
+            f"Operator selected market {sel.asset.upper()} {sel.timeframe} (paper+live)",
+            {"key": key, "value": {"asset": sel.asset, "timeframe": sel.timeframe}},
+        )
+        log.info("btc.runtime_config_set", key=key, asset=sel.asset, timeframe=sel.timeframe)
+        return {
+            "status": "ok",
+            "key": key,
+            "value": {"asset": sel.asset, "timeframe": sel.timeframe},
+            "loop_supported": sel.loop_supported,
+        }
     return {"status": "error", "detail": f"unknown runtime key {key!r}"}
 
 
@@ -823,6 +861,7 @@ async def api_data() -> dict[str, Any]:
     """Get current dashboard data as JSON."""
     return {
         "execution_view": await _execution_view_safe(),
+        "market_selector": await _market_selector_safe(),
         "activity": await _get_activity_data(),
         "backtest": _get_backtest_data(),
         "runtime": await _runtime_state(),
@@ -839,6 +878,7 @@ async def api_stream(request: Request) -> StreamingResponse:
             try:
                 data = {
                     "execution_view": await _execution_view_safe(),
+                    "market_selector": await _market_selector_safe(),
                     "activity": await _get_activity_data(),
                     "backtest": _get_backtest_data(),
                     "runtime": await _runtime_state(),

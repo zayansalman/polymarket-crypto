@@ -11,12 +11,12 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">POLYMARKET CRYPTO <b>EMS</b></div>
+      <div id="market-selector">{{ market_selector|safe }}</div>
       <div class="controls">
         <div class="mode-toggle" title="Switch execution mode">
           <button class="mode-opt paper {{ 'active' if mode == 'paper' else '' }}"
                   onclick="setMode('paper')">PAPER</button>
           <button class="mode-opt live {{ 'active' if mode == 'live' else '' }}"
-                  {{ 'disabled' if not live_available else '' }}
                   title="{{ live_hint }}" onclick="setMode('live')">LIVE</button>
         </div>
         <div class="sse-indicator" title="Live connection">
