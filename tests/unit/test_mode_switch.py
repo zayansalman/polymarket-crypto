@@ -168,8 +168,8 @@ def _stub_closes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("executor", "expected"),
-    [(None, ["paper"]), (object(), ["paper", "live"])],
-    ids=["no-executor-skips-live", "executor-flattens-live"],
+    [(None, ["paper"]), (object(), ["live"])],
+    ids=["no-executor-skips-live", "executor-flattens-live-only"],
 )
 async def test_force_close_touches_live_rows_only_with_executor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_controller: None,

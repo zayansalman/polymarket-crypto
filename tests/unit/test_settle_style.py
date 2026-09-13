@@ -195,7 +195,7 @@ async def test_settled_close_places_no_exit_order(
             (snap.created_at, snap.window_slug),
         )
         await db.commit()
-    pos = dict(_POS)
+    pos = dict(_POS, mode="live")
     closed = await paper._close_position(pos, snap, 1.0, "WINDOW_ROLL", settled=True)
     assert closed is True
     executor.submit_exit.assert_not_called()
@@ -235,7 +235,7 @@ async def test_settled_close_uses_real_held_size(
     snap = _snapshot()
     await _insert_settle_pos(snap)
     await paper._close_position(
-        dict(_POS), snap, 1.0, "WINDOW_ROLL", settled=True, settled_held=4.0
+        dict(_POS, mode="live"), snap, 1.0, "WINDOW_ROLL", settled=True, settled_held=4.0
     )
     async with paper.connect() as db:
         async with db.execute(
@@ -256,7 +256,7 @@ async def test_settled_close_phantom_books_zero(
     snap = _snapshot()
     await _insert_settle_pos(snap)
     await paper._close_position(
-        dict(_POS), snap, 1.0, "WINDOW_ROLL", settled=True, settled_held=0.0
+        dict(_POS, mode="live"), snap, 1.0, "WINDOW_ROLL", settled=True, settled_held=0.0
     )
     async with paper.connect() as db:
         async with db.execute(
@@ -285,7 +285,7 @@ async def test_settled_live_close_skips_paper_counter(
     snap = _snapshot()
     await _insert_settle_pos(snap)
     await paper._close_position(
-        dict(_POS), snap, 1.0, "WINDOW_ROLL", settled=True, settled_held=6.0
+        dict(_POS, mode="live"), snap, 1.0, "WINDOW_ROLL", settled=True, settled_held=6.0
     )
     gate.record_realized_pnl.assert_not_called()
 

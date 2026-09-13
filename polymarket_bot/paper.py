@@ -106,6 +106,11 @@ _calibrator: _calibration.IsotonicCalibrator | _calibration.IdentityCalibrator |
 # one loud notification per model per process, then silent v0 fallback.
 _unknown_model_notified: set[str] = set()
 
+# Open ledger rows of the OTHER mode last surfaced by this loop run, as
+# (loop_mode, position_ids). Notify fires only when this changes, never every
+# tick; the dashboard detail line reads it. Reset at each loop start.
+_foreign_open: tuple[str, tuple[int, ...]] | None = None
+
 # --- Loop heartbeat + generation (#147 watchdog) --------------------------
 # The heartbeat is stamped at loop entry and after EVERY iteration (including
 # failed ticks); a stalled age while the bot should be running means the loop
@@ -430,12 +435,13 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
     back to paper. The controller passes the ``mode`` Start decided on; when
     omitted it is read from the runtime selector (falling back to BOT_MODE).
     """
-    global _live_executor, _chainlink_feed, _risk_gate, _loop_generation
+    global _live_executor, _chainlink_feed, _risk_gate, _loop_generation, _foreign_open
     # Watchdog bookkeeping (#147): claim a fresh generation and stamp the
     # heartbeat before any await, so a stall during startup is also visible.
     _loop_generation += 1
     my_generation = _loop_generation
     _beat()
+    _foreign_open = None  # each run surfaces other-mode open rows afresh
     # Runtime mode selector (dashboard) overrides the env default; live still
     # passes the same boot gate. Falls back to BOT_MODE when unset.
     if mode is None:
@@ -601,30 +607,108 @@ async def paper_tick_once() -> PaperSnapshot:
     return snapshot
 
 
+def _loop_mode() -> str:
+    """The ledger mode this loop owns: 'live' iff a LiveExecutor is attached.
+
+    Ownership rule for EVERY ledger-closing path (tick exits, window-roll and
+    settlement closes, force close): a loop closes only rows of its own mode.
+    A paper close of a LIVE row books it flat at a fictional price (PnL into
+    the paper halt counter) while real tokens stay on Polymarket and the next
+    live boot finds nothing to re-adopt; a live executor acting on a PAPER row
+    places a real order for simulated shares. The other mode's rows stay open
+    and are surfaced instead.
+    """
+    return "live" if _live_executor is not None else "paper"
+
+
+def _row_mode(pos: dict[str, Any]) -> str:
+    # NULL only predates the mode column; init_db backfills it to 'paper'
+    # unless the journal proves a live entry, so NULL reads as paper.
+    return pos.get("mode") or "paper"
+
+
+def _owns(pos: dict[str, Any]) -> bool:
+    """Chokepoint guard: refuse (loudly) to close a row of the other mode."""
+    if _row_mode(pos) == _loop_mode():
+        return True
+    log.error(
+        "ledger.close_refused_other_mode",
+        position_id=pos.get("position_id"),
+        row_mode=_row_mode(pos),
+        loop_mode=_loop_mode(),
+    )
+    return False
+
+
+async def _load_open_positions() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Open ledger rows split into (owned by this loop, the other mode's)."""
+    async with connect() as db:
+        async with db.execute(
+            "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    owner = _loop_mode()
+    owned = [r for r in rows if _row_mode(r) == owner]
+    foreign = [r for r in rows if _row_mode(r) != owner]
+    return owned, foreign
+
+
+def _foreign_positions_message(loop_mode: str, count: int) -> str:
+    if loop_mode == "paper":
+        return (
+            f"{count} LIVE position(s) OPEN in the ledger but this loop is PAPER — "
+            "left untouched. Real tokens may remain on Polymarket: flatten there "
+            "(check live_orders), or Start LIVE to re-adopt."
+        )
+    return (
+        f"{count} PAPER position(s) OPEN in the ledger — this LIVE loop never "
+        "trades them. They are closed on Stop."
+    )
+
+
+async def _surface_foreign_positions(foreign: list[dict[str, Any]]) -> None:
+    """Log + notify the other mode's open rows once per change, never every tick."""
+    global _foreign_open
+    loop_mode = _loop_mode()
+    ids = tuple(int(p["position_id"]) for p in foreign)
+    previous, _foreign_open = _foreign_open, (loop_mode, ids)
+    if _foreign_open == previous:
+        return
+    if not ids:
+        if previous is not None and previous[1]:
+            log.info("ledger.other_mode_positions_cleared", loop_mode=loop_mode)
+        return
+    other = "live" if loop_mode == "paper" else "paper"
+    message = _foreign_positions_message(loop_mode, len(ids))
+    # A LIVE row nobody manages is real, unhedged exposure; a stray paper row isn't.
+    log_fn = log.error if other == "live" else log.warning
+    log_fn("ledger.other_mode_positions_open", loop_mode=loop_mode, position_ids=list(ids))
+    await notify(
+        f"{other}_positions_left_open",
+        message,
+        {"count": len(ids), "position_ids": list(ids), "loop_mode": loop_mode},
+    )
+
+
 async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
-    """Close all open positions; returns how many actually closed.
+    """Close this loop's open positions; returns how many actually closed.
 
     In live mode a position only counts as closed when the executor confirmed
     the flatten — failed live exits keep their ledger rows OPEN so they are
     retried (or escalated to the operator) instead of stranding real tokens.
 
-    Without a live executor, LIVE rows are never touched: a paper close would
-    mark them flat at a fictional price while real tokens stay on the exchange.
+    Only rows of this loop's mode are touched (see ``_loop_mode``): without a
+    live executor LIVE rows stay open; with one, PAPER rows stay open (the
+    controller closes them once the runner has exited).
     """
-    async with connect() as db:
-        async with db.execute(
-            "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
-        ) as cur:
-            positions = [dict(r) for r in await cur.fetchall()]
-    if _live_executor is None:
-        live_rows = [p for p in positions if p.get("mode") == "live"]
-        if live_rows:
-            log.warning(
-                "force_close.live_rows_left_open",
-                count=len(live_rows),
-                reason="no live executor — flatten on Polymarket",
-            )
-        positions = [p for p in positions if p.get("mode") != "live"]
+    positions, foreign = await _load_open_positions()
+    if foreign:
+        # The controller reports/notifies these itself on Stop — log only.
+        log.warning(
+            "force_close.other_mode_rows_left_open",
+            loop_mode=_loop_mode(),
+            count=len(foreign),
+        )
     if not positions:
         return 0
     async with _make_settlement_client() as client:
@@ -646,7 +730,7 @@ async def count_open_positions(mode: str | None = None) -> int:
     sql = "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
     params: tuple[str, ...] = ()
     if mode is not None:
-        sql += " AND mode = ?"
+        sql += " AND COALESCE(mode, 'paper') = ?"  # NULL reads as paper (_row_mode)
         params = (mode,)
     async with connect() as db:
         async with db.execute(sql, params) as cur:
@@ -1329,12 +1413,14 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
             reason=pause_reason,
         )
         return
+    # One open position at a time PER MODE. The limit counts only rows this
+    # loop owns — the same rows its exits manage. An other-mode row can never
+    # be closed by this loop, so counting it would block entries indefinitely
+    # (a stranded LIVE row would freeze the paper study; a stray paper row
+    # would freeze live), and paper would stop being "what live would do".
+    if await count_open_positions(mode=_loop_mode()):
+        return
     async with connect() as db:
-        async with db.execute(
-            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
-        ) as cur:
-            if (await cur.fetchone())["n"]:
-                return
         if _knobs.cached('exit_style') == "settle":
             # One entry per window, ever (issue #28): re-entering the same
             # window after an exit pays the spread again for the same signal
@@ -1390,8 +1476,8 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
 
     executor = _live_executor
     if executor is not None:
-        # The ledger is authoritatively flat here (the open-row check above
-        # returned none). A live ledger row closes only after a confirmed
+        # The live ledger is authoritatively flat here (the open-row check
+        # above returned none). A live ledger row closes only after a confirmed
         # venue flatten, so heal any phantom in-memory open-state the executor
         # may still hold (e.g. left by an interrupted stop/restart) — otherwise
         # its singleton gate blocks every entry with "max 1" (issue #91).
@@ -1476,7 +1562,7 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
 async def _insert_position_row(
     snapshot: PaperSnapshot, entry_price: float, notional: float, shares: float
 ) -> int:
-    mode = "live" if _live_executor is not None else "paper"
+    mode = _loop_mode()
     async with connect() as db:
         cur = await db.execute(
             """
@@ -1533,11 +1619,8 @@ async def _update_position_terms(
 async def _close_due_positions(
     snapshot: PaperSnapshot, client: httpx.AsyncClient
 ) -> None:
-    async with connect() as db:
-        async with db.execute(
-            "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
-        ) as cur:
-            positions = [dict(r) for r in await cur.fetchall()]
+    positions, foreign = await _load_open_positions()
+    await _surface_foreign_positions(foreign)
 
     for pos in positions:
         if pos["window_slug"] != snapshot.window_slug:
@@ -1575,6 +1658,10 @@ async def _close_rolled_position(
     (pricing the OLD position off the NEW window's quote) was fiction.
     While settlement is not yet readable the row is held and retried.
     """
+    if not _owns(pos):
+        # Before record_settlement: a paper row's outcome must never be booked
+        # into the live executor's counters.
+        return False
     if _live_executor is not None and _knobs.cached('exit_style') != "settle":
         advisory = _current_price_for_side(snapshot, pos["side"])
         if advisory is None:
@@ -1700,13 +1787,15 @@ async def _record_and_settle_shadow(
 async def _close_position(
     pos: dict[str, Any],
     snapshot: PaperSnapshot,
-    exit_price: float,
+    exit_price: float | None,
     reason: str,
     settled: bool = False,
     settled_held: float | None = None,
     settled_pnl: float | None = None,
 ) -> bool:
     """Close one position; returns True when the ledger row was closed.
+
+    Rows of the other mode are refused (see ``_loop_mode``).
 
     Live mode only closes the row when the executor CONFIRMED the flatten
     (or confirmed the entry never filled). A blocked/failed/unfilled live
@@ -1719,6 +1808,8 @@ async def _close_position(
     already registered the outcome via ``record_settlement`` — no exit order
     is placed and the row closes at the settlement payout.
     """
+    if not _owns(pos):
+        return False
     executor = _live_executor
     entry_price = float(pos["entry_price"])
     prior_pnl = float(pos["realized_pnl_usd"] or 0.0)
@@ -1782,6 +1873,18 @@ async def _close_position(
         )
         pnl = prior_pnl + realized
     else:
+        if exit_price is None:
+            # No bid → no executable paper exit. Hold the row (retried next
+            # tick / next Stop) instead of raising, which would abort the rest
+            # of a multi-row force close.
+            log.warning(
+                "paper_exit.held_no_bid",
+                position_id=pos["position_id"],
+                window_slug=pos["window_slug"],
+                side=pos["side"],
+                exit_reason=reason,
+            )
+            return False
         pnl = float(pos["shares"]) * (exit_price - entry_price)
         # Paper closes feed the SAME daily-loss-halt counter live closes do
         # (issue #64). Without this, paper losses don't advance the halt and
@@ -1879,6 +1982,11 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
         )
     else:
         header = "BTC paper loop running. No real orders are placed.\n\n"
+    if _foreign_open is not None and _foreign_open[0] == _loop_mode() and _foreign_open[1]:
+        # Persistent dashboard warning (the notify fires once per change).
+        header += (
+            f"WARNING: {_foreign_positions_message(_foreign_open[0], len(_foreign_open[1]))}\n\n"
+        )
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
