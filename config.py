@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -16,9 +17,19 @@ load_dotenv()
 CONFIG_PARSE_ERRORS: list[str] = []
 
 
+# Every env name config.py reads, recorded by _env_str. The legacy-name check
+# at the bottom compares against this real read set, not a hand-kept list.
+_ENV_NAMES_READ: set[str] = set()
+
+
+def _env_str(name: str, default: str = "") -> str:
+    _ENV_NAMES_READ.add(name)
+    return os.getenv(name, default)
+
+
 def _env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-    if value is None or value == "":
+    value = _env_str(name)
+    if value == "":
         return default
     try:
         return float(value)
@@ -28,8 +39,8 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None or value == "":
+    value = _env_str(name)
+    if value == "":
         return default
     try:
         return int(value)
@@ -40,8 +51,8 @@ def _env_int(name: str, default: int) -> int:
 
 def _env_optional_float(name: str) -> float | None:
     """Risk-limit-style env var: blank / unset / ≤0 → None (gate disabled)."""
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
+    value = _env_str(name)
+    if value.strip() == "":
         return None
     try:
         v = float(value)
@@ -52,26 +63,26 @@ def _env_optional_float(name: str) -> float | None:
 
 
 def _env_choice(name: str, default: str, allowed: set[str]) -> str:
-    value = os.getenv(name, default).strip().lower()
+    value = _env_str(name, default).strip().lower()
     return value if value in allowed else default
 
 
 REPO_ROOT = Path(__file__).parent.resolve()
 
-DATA_DIR = Path(os.getenv("DATA_DIR", "./data")).expanduser().resolve()
+DATA_DIR = Path(_env_str("DATA_DIR", "./data")).expanduser().resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = Path(
-    os.getenv("DB_PATH", str(DATA_DIR / "btc_5m_binary_fair_value.db"))
+    _env_str("DB_PATH", str(DATA_DIR / "btc_5m_binary_fair_value.db"))
 ).expanduser().resolve()
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-DASHBOARD_SERVER_NAME = os.getenv("DASHBOARD_SERVER_NAME", "127.0.0.1")
-DASHBOARD_SERVER_PORT = int(os.getenv("DASHBOARD_SERVER_PORT", "7860"))
+DASHBOARD_SERVER_NAME = _env_str("DASHBOARD_SERVER_NAME", "127.0.0.1")
+DASHBOARD_SERVER_PORT = int(_env_str("DASHBOARD_SERVER_PORT", "7860"))
 
 # Market-data mirror of the spot API: api.binance.com is unreachable from some
 # networks, while data-api.binance.vision serves the same /api/v3 endpoints.
-BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
+BINANCE_API_BASE = _env_str("BINANCE_API_BASE", "https://data-api.binance.vision")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 CHAINLINK_STREAM_URL = "https://data.chain.link/streams/btc-usd-cexprice-streams"
 MARKET_TIMEFRAME_MINUTES = 5
@@ -81,10 +92,10 @@ MARKET_TIMEFRAME_MINUTES = 5
 # Binance (measured basis: Chainlink ~ $50.7 BELOW Binance, std $3.8). The
 # reference open, live spot, and sigma all come from these two endpoints;
 # Binance remains only as a volatility-shape fallback and for backtest tooling.
-POLYMARKET_CRYPTO_PRICE_API = os.getenv(
+POLYMARKET_CRYPTO_PRICE_API = _env_str(
     "POLYMARKET_CRYPTO_PRICE_API", "https://polymarket.com/api/crypto/crypto-price"
 )
-POLYMARKET_LIVE_DATA_WS = os.getenv(
+POLYMARKET_LIVE_DATA_WS = _env_str(
     "POLYMARKET_LIVE_DATA_WS", "wss://ws-live-data.polymarket.com"
 )
 # Seconds after which the latest Chainlink WS print is considered stale; a
@@ -118,11 +129,12 @@ AUTO_PAUSE_MIN_TRADES = _env_int("AUTO_PAUSE_MIN_TRADES", 10)
 AUTO_PAUSE_MIN_ROI = _env_float("AUTO_PAUSE_MIN_ROI", -0.15)
 
 # --- Live trading (Polymarket CLOB) ---------------------------------------
-POLYMARKET_CLOB_API = os.getenv("POLYMARKET_CLOB_API", "https://clob.polymarket.com")
+POLYMARKET_CLOB_API = _env_str("POLYMARKET_CLOB_API", "https://clob.polymarket.com")
 POLYMARKET_CHAIN_ID = _env_int("POLYMARKET_CHAIN_ID", 137)  # Polygon mainnet
-POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
-POLYMARKET_FUNDER = os.getenv("POLYMARKET_FUNDER", "")
-# 0 = EOA, 1 = email/magic proxy wallet, 2 = browser wallet proxy.
+POLYMARKET_PRIVATE_KEY = _env_str("POLYMARKET_PRIVATE_KEY", "")
+POLYMARKET_FUNDER = _env_str("POLYMARKET_FUNDER", "")
+# 0 = EOA, 1 = email/Magic proxy (POLY_PROXY), 2 = Gnosis Safe (browser wallet
+# e.g. MetaMask), 3 = deposit wallet / ERC-1271 (tools/live_setup.py).
 POLYMARKET_SIGNATURE_TYPE = _env_int("POLYMARKET_SIGNATURE_TYPE", 1)
 # Hard risk limits enforced by the unified RiskGate (issue #64) before every
 # paper or live entry. Same gate, same values, both modes — paper is a
@@ -139,10 +151,10 @@ TRADE_MAX_ENTRY_SLIPPAGE = _env_float("TRADE_MAX_ENTRY_SLIPPAGE", 0.02)
 # new best bid. Exits never rest beyond this bound.
 LIVE_EXIT_FILL_TIMEOUT_SECONDS = _env_float("LIVE_EXIT_FILL_TIMEOUT_SECONDS", 10.0)
 # Must be the literal string YES_I_UNDERSTAND for live mode to boot.
-LIVE_CONFIRM = os.getenv("LIVE_CONFIRM", "")
+LIVE_CONFIRM = _env_str("LIVE_CONFIRM", "")
 # Touch this file to halt all live trading and cancel open orders.
 KILL_SWITCH_PATH = Path(
-    os.getenv("KILL_SWITCH_PATH", str(DATA_DIR / "KILL"))
+    _env_str("KILL_SWITCH_PATH", str(DATA_DIR / "KILL"))
 ).expanduser().resolve()
 PAPER_MIN_TRADE_USD = _env_float("PAPER_MIN_TRADE_USD", 1.0)
 PAPER_MAX_TRADE_USD = _env_float("PAPER_MAX_TRADE_USD", 5.0)
@@ -155,14 +167,14 @@ PAPER_ENTRY_EDGE_MAX = _env_float("PAPER_ENTRY_EDGE_MAX", 0.07)
 PAPER_MIN_ENTRY_PRICE = _env_float("PAPER_MIN_ENTRY_PRICE", 0.50)
 PAPER_MIN_CONFIDENCE = _env_float("PAPER_MIN_CONFIDENCE", 0.50)
 PAPER_ENTRY_MIN_REMAINING_SECONDS = int(
-    os.getenv("PAPER_ENTRY_MIN_REMAINING_SECONDS", "60")
+    _env_str("PAPER_ENTRY_MIN_REMAINING_SECONDS", "60")
 )
 PAPER_TARGET_RETURN = _env_float("PAPER_TARGET_RETURN", 0.10)
 PAPER_STOP_RETURN = _env_float("PAPER_STOP_RETURN", -0.08)
-PAPER_TIME_EXIT_SECONDS = int(os.getenv("PAPER_TIME_EXIT_SECONDS", "45"))
+PAPER_TIME_EXIT_SECONDS = int(_env_str("PAPER_TIME_EXIT_SECONDS", "45"))
 
 HISTORY_CSV_PATH = Path(
-    os.getenv(
+    _env_str(
         "HISTORY_CSV_PATH",
         str(DATA_DIR / "polymarket_history.csv"),
     )
@@ -174,13 +186,45 @@ HISTORY_CSV_PATH = Path(
 # whichever asset currently shows the strongest signal.
 DAILY_ASSETS = [
     a.strip().lower()
-    for a in os.getenv("DAILY_ASSETS", "doge,sol,xrp,bnb,eth").split(",")
+    for a in _env_str("DAILY_ASSETS", "doge,sol,xrp,bnb,eth").split(",")
     if a.strip()
 ]
 DAILY_TRADE_USD = _env_float("DAILY_TRADE_USD", 10.0)
 DAILY_SCAN_INTERVAL_SECONDS = _env_float("DAILY_SCAN_INTERVAL_SECONDS", 60.0)
 DAILY_ENTRY_EDGE_MIN = _env_float("DAILY_ENTRY_EDGE_MIN", 0.045)
 DAILY_ENTRY_MIN_REMAINING_SECONDS = int(
-    os.getenv("DAILY_ENTRY_MIN_REMAINING_SECONDS", "3600")
+    _env_str("DAILY_ENTRY_MIN_REMAINING_SECONDS", "3600")
 )
 DAILY_VOL_LOOKBACK_DAYS = _env_int("DAILY_VOL_LOOKBACK_DAYS", 30)
+
+
+# --- Legacy BTC_-prefixed env names ------------------------------------------
+# The knobs above used to be read as BTC_<NAME> (and the four risk limits as
+# BTC_LIVE_*). An operator still carrying an old name silently gets the
+# default — e.g. BTC_LIVE_MAX_TRADE_USD=1 still trades at the $3 default.
+# Collect a non-fatal warning per stale key (main.py logs them once at boot;
+# values are never echoed). Deliberately NO aliasing: a risk limit or wallet
+# setting must be set consciously under its current name.
+_LEGACY_ENV_RENAMES = {
+    "BTC_LIVE_MAX_TRADE_USD": "TRADE_MAX_USD",
+    "BTC_LIVE_DAILY_LOSS_HALT_USD": "TRADE_DAILY_LOSS_HALT_USD",
+    "BTC_LIVE_BANKROLL_CAP_USD": "TRADE_BANKROLL_CAP_USD",
+    "BTC_LIVE_MAX_ENTRY_SLIPPAGE": "TRADE_MAX_ENTRY_SLIPPAGE",
+}
+
+
+def _legacy_env_warnings(environ: Mapping[str, str], read_names: set[str]) -> list[str]:
+    warnings = []
+    for key in sorted(environ):
+        if not key.startswith("BTC_"):
+            continue
+        new_name = _LEGACY_ENV_RENAMES.get(key, key.removeprefix("BTC_"))
+        if new_name in read_names:
+            warnings.append(
+                f"{key} is set but IGNORED; the app reads {new_name}. Rename it "
+                "in .env / the environment (the value is not carried over)."
+            )
+    return warnings
+
+
+CONFIG_WARNINGS: list[str] = _legacy_env_warnings(os.environ, _ENV_NAMES_READ)

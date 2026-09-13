@@ -72,8 +72,8 @@ def main() -> None:
     )
     # Deferred from config.py import-time (logging wasn't ready then).
     import config as _config
-    for note in getattr(_config, "CONFIG_DEPRECATIONS", []):
-        log.warning("config.deprecation", message=note)
+    for note in _config.CONFIG_WARNINGS:
+        log.warning("config.legacy_env_name", message=note)
     asyncio.run(startup_tasks())
 
     if HAS_NEW_DASHBOARD:
