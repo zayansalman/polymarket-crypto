@@ -63,10 +63,10 @@ class TestDashboardPage:
 
     def test_has_runtime_controls_card(self, client: TestClient):
         text = client.get("/").text
-        assert "CONTROLS" in text
+        assert "ORDER SIZE" in text
         assert "ctl-shares" in text
         assert "setTradeShares()" in text
-        assert "Polymarket minimum order" in text
+        assert "min 5 sh" in text
 
     def test_has_secondary_panels(self, client: TestClient):
         text = client.get("/").text
@@ -107,7 +107,7 @@ class TestStaticFiles:
     def test_js_has_runtime_control_handler(self, client: TestClient):
         js = client.get("/static/dashboard.js").text
         assert "setTradeShares" in js
-        assert "updateShareValue" in js
+        assert "updateTicket" in js
 
     def test_css_has_control_input(self, client: TestClient):
         assert ".ctl-input" in client.get("/static/style.css").text
@@ -401,7 +401,9 @@ class TestV0StrategyArchived:
     def test_controls_has_no_model_picker(self) -> None:
         from polymarket_exec.ops.dashboard.panels import controls
 
-        html = controls.render(trade_shares_current=None, current_price=None)
+        html = controls.render(
+            trade_shares_current=None, asset="btc", timeframe="5m", quote=None, now=0.0
+        )
         assert "ctl-model" not in html
         assert "STRATEGY MODEL" not in html
 

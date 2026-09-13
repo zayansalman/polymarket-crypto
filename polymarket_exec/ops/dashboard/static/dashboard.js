@@ -160,19 +160,46 @@ function handleStop() {
     .finally(function() { setButtonsDisabled(false); });
 }
 
-function updateShareValue() {
+// ORDER SIZE ticket: re-price the typed share count against the live asks the
+// panel carries (data-up / data-down), and light Apply only when it differs
+// from the saved size.
+function updateTicket() {
   var el = document.getElementById('ctl-shares');
-  var out = document.getElementById('ctl-shares-val');
-  if (!el || !out) return;
+  var cost = document.getElementById('ctl-cost');
+  if (!el || !cost) return;
   var n = parseFloat(el.value);
-  var px = parseFloat(out.getAttribute('data-px')) || 0;
-  if (!(n > 0)) { out.textContent = '≈ $—'; return; }
-  if (px > 0) {
-    out.textContent = '≈ $' + (n * px).toFixed(2) + ' at ' + px.toFixed(2);
-  } else {
-    out.textContent = '≈ $' + (n * 0.5).toFixed(2) + '–$' + (n * 1).toFixed(2);
-  }
+  var ok = n > 0;
+  var fmt = function(v) { return '$' + v.toFixed(2); };
+  ['up', 'down'].forEach(function(side) {
+    var out = cost.querySelector('[data-cost="' + side + '"]');
+    var px = parseFloat(cost.getAttribute('data-' + side));
+    if (out) out.textContent = ok && px > 0 ? fmt(n * px) : '—';
+  });
+  var max = cost.querySelector('[data-cost="max"]');
+  if (max) max.textContent = ok ? fmt(n) : '—';
+  var apply = document.getElementById('ctl-apply');
+  if (apply) apply.disabled = !ok || n === parseFloat(el.getAttribute('data-saved'));
 }
+
+function onSharesInput(el) {
+  el.dataset.dirty = '1';
+  updateTicket();
+}
+
+function setShares(n) {
+  var el = document.getElementById('ctl-shares');
+  if (!el) return;
+  var min = parseFloat(el.min) || 5;
+  el.value = Math.min(1000, Math.max(min, Math.round(n)));
+  onSharesInput(el);
+}
+
+function stepShares(delta) {
+  var el = document.getElementById('ctl-shares');
+  if (el) setShares((parseFloat(el.value) || 0) + delta);
+}
+
+function pickShares(n) { setShares(n); }
 
 // Refreshes replace panel HTML every few seconds — keep what the operator is
 // typing (focused or edited-but-unsaved inputs, by id) so it isn't wiped.
@@ -192,6 +219,7 @@ function swapKeepingInputs(container, html) {
     if (k.dirty) el.dataset.dirty = k.dirty;
     if (k.focus) el.focus();
   });
+  updateTicket();  // a kept share count must be re-priced at the fresh quote
 }
 
 function setLossHalt() {
@@ -236,8 +264,9 @@ function setTradeShares() {
   var el = document.getElementById('ctl-shares');
   if (!el) return;
   var v = parseFloat(el.value);
-  if (!(v >= 5)) {
-    showToast('Minimum order is 5 shares (Polymarket)', 'error');
+  var min = parseFloat(el.min) || 5;
+  if (!(v >= min)) {
+    showToast('Minimum order is ' + min + ' shares (Polymarket)', 'error');
     return;
   }
   fetch('/api/runtime-config', {
@@ -248,6 +277,7 @@ function setTradeShares() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.status === 'ok') {
+        delete el.dataset.dirty;
         showToast('Trade size → ' + Number(data.value) + ' shares', 'success');
       } else {
         showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');

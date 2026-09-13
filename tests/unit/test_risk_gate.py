@@ -467,6 +467,22 @@ class TestRuntimeTradeShares:
         assert await get_runtime_trade_shares() is None
 
     @pytest.mark.asyncio
+    async def test_unset_size_defaults_to_five_shares(self) -> None:
+        from polymarket_exec.execution.gate import (
+            DEFAULT_TRADE_SHARES,
+            set_runtime_trade_shares,
+        )
+
+        gate = RiskGate(_cfg(max_trade_usd=5.0))
+        await gate.refresh_runtime_limits()
+        assert DEFAULT_TRADE_SHARES == 5.0
+        assert gate.runtime_trade_shares is None
+        assert gate.trade_shares == 5.0
+        await set_runtime_trade_shares(12.0)
+        await gate.refresh_runtime_limits()
+        assert gate.trade_shares == 12.0
+
+    @pytest.mark.asyncio
     async def test_refresh_derives_effective_cap(self) -> None:
         from polymarket_exec.execution.gate import set_runtime_trade_shares
 

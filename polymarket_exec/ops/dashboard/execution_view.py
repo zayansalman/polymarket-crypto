@@ -9,10 +9,13 @@ SQLite read layer (``panels/_data.py``) and the per-panel renderers.
 """
 from __future__ import annotations
 
+import time
+
 import config as _config
 from db import get_config
 from polymarket_bot import runtime_knobs as _knobs
 
+from polymarket_exec.ops.dashboard import quote_feed
 from polymarket_exec.ops.dashboard.panels import _data as data
 from polymarket_exec.ops.dashboard.panels import _wallet
 from polymarket_exec.ops.dashboard.panels import (
@@ -108,15 +111,8 @@ async def execution_view_html() -> str:
     )
     bypass_loss_halt = await get_loss_halt_bypass()
     # Share-denominated trade size (#89) — the operator-facing knob. None → the
-    # CONTROLS input defaults to the venue minimum. ``current_price`` is the
-    # favoured side's live ask (the side ≥ 0.50) for the $-value estimate.
+    # ticket defaults to the venue minimum.
     trade_shares_current = await get_runtime_trade_shares()
-    _px = [
-        p
-        for p in ((tick or {}).get("market_up_price"), (tick or {}).get("market_down_price"))
-        if isinstance(p, (int, float)) and p > 0
-    ]
-    current_price = max(_px) if _px else None
 
     loss_halt_current = await _knobs.get("live_daily_loss_halt_usd")
     ribbon_html = ribbon.render(
@@ -135,9 +131,17 @@ async def execution_view_html() -> str:
         paper_peak=paper_peak,
         bypass_loss_halt=bypass_loss_halt,
     )
+    # The ticket prices the SELECTED market's live book (not the loop's last
+    # tick), so it tracks the selector and stays live while the loop is stopped.
+    from polymarket_bot import market_selection
+
+    selection = await market_selection.get_selection()
     controls_html = controls.render(
         trade_shares_current=trade_shares_current,
-        current_price=current_price,
+        asset=selection.asset,
+        timeframe=selection.timeframe,
+        quote=quote_feed.snapshot(selection.asset, selection.timeframe),
+        now=time.time(),
     )
     from polymarket_bot import paper as _paper
 
