@@ -2,9 +2,9 @@
 
 Replaces the 150MB+ Gradio dashboard with a lightweight FastAPI + Jinja2
 implementation. All visual design is preserved via extracted CSS. Also
-starts the daily altcoin scanner (#185) as a background task for its
-lifetime — see ``_lifespan`` — a paper-only strategy independent of the
-BTC 5m loop the rest of this module's endpoints control.
+starts the daily altcoin scanner (#185) and the feed monitor (FEEDS card)
+as background tasks for its lifetime — see ``_lifespan`` — both independent
+of the BTC 5m loop the rest of this module's endpoints control.
 
 Endpoints:
     GET  /              — Main dashboard page (HTML)
@@ -113,7 +113,26 @@ async def _lifespan(app: FastAPI):
     daily_stop_event = asyncio.Event()
     daily_task = asyncio.create_task(_run_daily_scanner(daily_stop_event))
 
+    # Feed monitor: keeps the live feeds connected and checked for the FEEDS
+    # card, bot running or not. The BTC loop reads its Chainlink WS feed
+    # instead of opening a second connection.
+    from polymarket_bot import paper as _paper
+    from polymarket_exec.ops import feed_monitor as _feed_monitor
+
+    monitor = _feed_monitor.FeedMonitor()
+    feeds_stop_event = asyncio.Event()
+    feeds_task = asyncio.create_task(monitor.run(feeds_stop_event))
+    _feed_monitor.set_current(monitor)
+    _paper.set_shared_chainlink_feed(monitor.chainlink_ws)
+
     yield
+
+    _paper.set_shared_chainlink_feed(None)
+    _feed_monitor.set_current(None)
+    feeds_stop_event.set()
+    feeds_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await feeds_task
 
     daily_stop_event.set()
     daily_task.cancel()

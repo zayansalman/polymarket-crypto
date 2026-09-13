@@ -20,21 +20,6 @@ async def latest_tick() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-async def last_live_order_at() -> str | None:
-    """ISO timestamp of the most recent action recorded in live_orders.
-
-    A live bot that has lost the ability to actually place orders looks fine
-    in the tick journal (the loop still polls Chainlink and CLOB) — the only
-    objective signal of "we are still trading for real" is this column.
-    """
-    async with connect() as db:
-        async with db.execute(
-            "SELECT MAX(created_at) AS last_at FROM live_orders"
-        ) as cur:
-            row = await cur.fetchone()
-    return (row["last_at"] if row else None) if row is not None else None
-
-
 async def reconciliation() -> dict[str, Any] | None:
     """Latest Polymarket reconciliation snapshot (``recon.*`` keys), or None.
 

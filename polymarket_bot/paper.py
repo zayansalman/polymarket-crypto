@@ -86,6 +86,8 @@ _risk_gate: RiskGate | None = None
 # Settlement-aligned Chainlink WS feed for the current run loop (issue #21).
 # None / stale means NO new entries (the tick journals why).
 _chainlink_feed: ChainlinkWsFeed | None = None
+# Process-wide feed owned by someone else (see set_shared_chainlink_feed).
+_shared_chainlink_feed: ChainlinkWsFeed | None = None
 
 # Reference open print per window_start_ts. The open is immutable once the
 # provisional revision settles, so one stabilized REST read per window.
@@ -119,17 +121,15 @@ def heartbeat_age_seconds() -> float:
     return time.monotonic() - _heartbeat_monotonic
 
 
-def chainlink_print_age_seconds() -> float | None:
-    """Wall-clock seconds since the latest Chainlink WS print (dashboard FEEDS card).
+def set_shared_chainlink_feed(feed: ChainlinkWsFeed | None) -> None:
+    """Hand the loop a process-wide Chainlink WS feed (the dashboard's feed monitor).
 
-    None while the loop is stopped or before the first print. Uses the print's
-    own timestamp, so it covers source-to-us delay plus time since the last print.
+    While set, the loop reads that feed instead of opening its own connection,
+    so the FEEDS card shows the exact stream the loop trades on. The owner keeps
+    it running; the loop never stops it.
     """
-    feed = _chainlink_feed
-    latest = feed.latest() if feed is not None else None
-    if latest is None:
-        return None
-    return max(0.0, time.time() - latest[0])
+    global _shared_chainlink_feed
+    _shared_chainlink_feed = feed
 
 
 def _is_current_generation(my_generation: int) -> bool:
@@ -415,14 +415,19 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
         await _risk_gate.load()
         await _risk_gate.refresh_overrides()
 
-    # Settlement-aligned live spot (issue #21): the WS feed task lives and
-    # dies with this loop. Until its first print arrives, ticks journal
-    # "settlement feed degraded" and open no entries — by design.
-    feed = ChainlinkWsFeed(
-        url=POLYMARKET_LIVE_DATA_WS,
-        stale_after_s=CHAINLINK_STALE_SECONDS,
-    )
-    feed_task = asyncio.create_task(feed.run())
+    # Settlement-aligned live spot (issue #21). Inside the dashboard the feed
+    # monitor already holds the WS connection, so read that one; otherwise the
+    # loop owns a feed that lives and dies with it. Until the first print
+    # arrives, ticks journal "settlement feed degraded" and open no entries.
+    feed_task: asyncio.Task[None] | None = None
+    if _shared_chainlink_feed is not None:
+        feed = _shared_chainlink_feed
+    else:
+        feed = ChainlinkWsFeed(
+            url=POLYMARKET_LIVE_DATA_WS,
+            stale_after_s=CHAINLINK_STALE_SECONDS,
+        )
+        feed_task = asyncio.create_task(feed.run())
     _chainlink_feed = feed
 
     await set_config("polymarket_bot.state", "running")
@@ -476,8 +481,9 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             log.warning(
                 "paper_loop.superseded_exit", generation=my_generation
             )
-            feed.stop()
-            feed_task.cancel()
+            if feed_task is not None:
+                feed.stop()
+                feed_task.cancel()
             return
         if _live_executor is not None:
             # Flatten BEFORE dropping the executor: this thread owns it, so
@@ -494,12 +500,13 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             _live_executor = None
         _risk_gate = None
         _chainlink_feed = None
-        feed.stop()
-        feed_task.cancel()
-        try:
-            await feed_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        if feed_task is not None:
+            feed.stop()
+            feed_task.cancel()
+            try:
+                await feed_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         await set_config("polymarket_bot.state", "stopped")
         await _set_detail(
             stop_detail

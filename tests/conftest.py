@@ -55,6 +55,21 @@ def _no_real_live_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_controller, "_live_consent", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_feed_monitor_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dashboard tests boot the app lifespan; keep its feed monitor offline.
+
+    The monitor's WS connection and REST checks are unit-tested with fakes in
+    test_feed_monitor.py.
+    """
+    from polymarket_exec.ops.feed_monitor import FeedMonitor
+
+    async def _idle_run(self, stop_event):  # noqa: ANN001
+        await stop_event.wait()
+
+    monkeypatch.setattr(FeedMonitor, "run", _idle_run)
+
+
 # ---------------------------------------------------------------------------
 # Strategy parameter fixtures
 # ---------------------------------------------------------------------------
