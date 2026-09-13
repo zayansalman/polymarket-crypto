@@ -42,7 +42,7 @@
   1. `PYTHON_DOTENV_DISABLED=1 DATA_DIR="$(mktemp -d)" python3 -m pytest tests/ -q`
   2. `python3 -m ruff check polymarket_exec/ polymarket_bot/ tests/ tools/`
   3. `PYTHON_DOTENV_DISABLED=1 python3 tools/gen_docs.py`, then `PYTHON_DOTENV_DISABLED=1 python3 tools/gen_docs.py --check`
-  4. `! grep -rn -e "No live orders" -e "no private key required" -e "321 tests" -e "gradio.Blocks" -e "live trading is intentionally absent" README.md AGENTS.md CLAUDE.md docs/`
+  4. the banned-strings grep from the `docs-drift` job in `.github/workflows/ci.yml` (run the exact command from that file; it must print nothing)
 
 ## File Structure
 
@@ -1829,9 +1829,8 @@ Run:
 ```bash
 PYTHON_DOTENV_DISABLED=1 DATA_DIR="$(mktemp -d)" python3 -m pytest tests/ -q
 python3 -m ruff check polymarket_exec/ polymarket_bot/ tests/ tools/
-! grep -rn -e "No live orders" -e "no private key required" -e "321 tests" -e "gradio.Blocks" -e "live trading is intentionally absent" README.md AGENTS.md CLAUDE.md docs/
 ```
-Expected: all tests pass, ruff reports `All checks passed!`, grep prints nothing
+Expected: all tests pass and ruff reports `All checks passed!`; then run the banned-strings grep from the `docs-drift` job in `.github/workflows/ci.yml` and confirm it prints nothing
 
 - [ ] **Step 4: Smoke-run the dashboard and confirm the rows go green**
 
