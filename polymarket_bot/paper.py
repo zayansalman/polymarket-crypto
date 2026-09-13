@@ -119,6 +119,19 @@ def heartbeat_age_seconds() -> float:
     return time.monotonic() - _heartbeat_monotonic
 
 
+def chainlink_print_age_seconds() -> float | None:
+    """Wall-clock seconds since the latest Chainlink WS print (dashboard FEEDS card).
+
+    None while the loop is stopped or before the first print. Uses the print's
+    own timestamp, so it covers source-to-us delay plus time since the last print.
+    """
+    feed = _chainlink_feed
+    latest = feed.latest() if feed is not None else None
+    if latest is None:
+        return None
+    return max(0.0, time.time() - latest[0])
+
+
 def _is_current_generation(my_generation: int) -> bool:
     return _loop_generation == my_generation
 

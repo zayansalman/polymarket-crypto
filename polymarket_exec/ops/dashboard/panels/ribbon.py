@@ -1,5 +1,6 @@
-"""Top status ribbon: wallet, P&L, open-position (live) P&L, loss-halt control,
-feed liveness chips.
+"""Top status ribbon: wallet, P&L, open-position (live) P&L, loss-halt control.
+
+Feed liveness lives in its own FEEDS card (``feeds.py``).
 
 The loss halt lives here (#76, #112): a typeable limit with Set (runtime knob,
 next tick, no restart) and Reset (when stopped, zeroes today's tally + peaks).
@@ -28,7 +29,6 @@ def render(
     open_pos: list[dict[str, Any]],
     closed_session: list[dict[str, Any]],
     tick: dict[str, Any] | None,
-    last_live_at: str | None,
     wallet: dict[str, Any] | None = None,
     loss_halt_usd: float | None = None,
     live_peak: float = 0.0,
@@ -46,52 +46,6 @@ def render(
     mode_pnl = live_pnl if is_live else paper_pnl
     session_pnl = sum(c["realized_pnl_usd"] or 0.0 for c in closed_session)
 
-
-    # Real liveness comes from (a) when the loop last journaled a tick, and
-    # (b) what feed_source that tick recorded for each upstream. Each chip
-    # flips off when its source goes degraded; a TICK chip shows loop age.
-    tick_age = s.tick_age_seconds(tick.get("created_at") if tick else None)
-    stale_after = int(max(_config.PAPER_TICK_SECONDS * 3, 20))
-    parts = s.parse_feed_source(tick.get("feed_source") if tick else None)
-    book_ok = bool(tick) and (
-        tick.get("up_best_ask") is not None
-        or tick.get("down_best_ask") is not None
-        or tick.get("up_best_bid") is not None
-        or tick.get("down_best_bid") is not None
-    )
-    if tick_age is None:
-        tick_chip = "<span class='feed warn'>TICK ∅</span>"
-    elif tick_age <= stale_after:
-        tick_chip = f"<span class='feed on'>TICK {tick_age}s</span>"
-    else:
-        tick_chip = f"<span class='feed warn'>TICK {tick_age}s STALE</span>"
-
-    def _chip(label: str, ok: bool) -> str:
-        return f"<span class='feed {'on' if ok else 'warn'}'>{label}</span>"
-
-    chips = [
-        _chip("SPOT", (parts.get("spot") or "").startswith("chainlink")),
-        _chip("REF", (parts.get("ref") or "").startswith("chainlink")),
-        _chip("VOL", parts.get("vol") == "chainlink_ws"),
-        _chip("BOOK", book_ok),
-    ]
-    if is_live:
-        live_age = s.tick_age_seconds(last_live_at)
-        if live_age is None:
-            chips.append("<span class='feed warn'>EXEC ∅</span>")
-        else:
-            # "Real trade is X minutes ago" was the exact diagnostic the
-            # operator needed when no entries are firing — surface it here.
-            label = (
-                f"EXEC {live_age}s"
-                if live_age < 60
-                else f"EXEC {live_age // 60}m{live_age % 60:02d}s"
-            )
-            # Treat >5min without ANY live-order action as warn-worthy when
-            # the bot is supposed to be live. A bot that lost CLOB write
-            # access often keeps reading and journaling skips.
-            chips.append(_chip(label, live_age <= 300))
-    feeds = "".join(chips)
     kill_chip = "<span class='pill live'>KILL ARMED</span>" if kill_armed else ""
 
     # Run state lives in the topbar Start/Stop buttons; the ribbon only
@@ -165,8 +119,6 @@ def render(
         f"{live_pnl_stat}"
         f"{s.stat('Open Risk', s.money(sum(p['notional_usd'] or 0 for p in open_pos)), '', f'{len(open_pos)} pos')}"
         f"{halt_ctl}"
-        f"<div class='feeds tick-box'>{tick_chip}</div>"
-        f"<div class='feeds'>{feeds}</div>"
         f"{s.stat('Uptime', s.ago(session_start))}"
         "</div></div>"
     )

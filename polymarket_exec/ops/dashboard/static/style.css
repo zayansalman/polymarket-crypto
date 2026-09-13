@@ -116,12 +116,19 @@ body {
 .pill.gr-pill-btn { cursor: pointer; font-family: var(--font-mono); line-height: 1.2; }
 .pill.gr-pill-btn:hover { filter: brightness(1.18); }
 
-.feeds { display: flex; gap: 6px; align-items: center; }
-/* loop-heartbeat chip gets its own box, apart from the upstream feed chips */
-.tick-box { align-self: center; padding: 3px; border: 1px solid var(--border-strong); }
+/* feed status chips (FEEDS card) */
 .feed { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .5px; padding: 2px 6px; border-radius: 0; }
 .feed.on { color: var(--pos); background: rgba(43,212,125,.1); }
 .feed.warn { color: var(--warn); background: rgba(255,180,84,.1); }
+.feed.down { color: var(--neg); background: rgba(179,38,30,.08); }
+.feed.idle { color: var(--label); background: var(--bg-alt); }
+/* FEEDS card: one row per upstream feed */
+.feeds-scroll { overflow-x: auto; }
+.feeds-tbl td { white-space: nowrap; }
+.feeds-role { color: var(--muted); }
+.feeds-delay { text-align: right; }
+.feeds-delay.warn { color: var(--warn); }
+.card-h .win.warn { color: var(--warn); }
 
 /* ── stat blocks ── */
 .stat { display: flex; flex-direction: column; gap: 2px; min-width: 70px; }
@@ -313,6 +320,27 @@ body {
 .feed-list li { padding: 5px 0; border-bottom: 1px solid var(--border-strong); color: var(--muted); }
 .feed-list code { font-family: var(--font-mono); color: var(--label); margin-right: 6px; }
 .feed-list strong { color: var(--text); font-weight: 500; }
+
+/* activity log: collapsible card, rows colour-coded by event kind */
+.card.fold { display: block; margin-bottom: 14px; }
+.card.fold > summary { cursor: pointer; list-style: none; user-select: none; }
+.card.fold > summary::-webkit-details-marker { display: none; }
+.card.fold:not([open]) > summary { margin-bottom: -16px; border-bottom: 0; }
+.card.fold > summary:hover { color: var(--text); }
+.fold-title::before { content: "\25B8"; display: inline-block; width: 12px; text-align: center; transition: transform .12s; }
+.card.fold[open] .fold-title::before { transform: rotate(90deg); }
+.feed-legend { display: flex; gap: 12px; text-transform: none; letter-spacing: .3px; }
+.feed-legend i { font-style: normal; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.feed-legend i::before { content: ""; width: 8px; height: 8px; background: var(--k); }
+.k-system { --k: #8a8f97; }
+.k-trade { --k: #2f62b5; }
+.k-config { --k: #7a4fb0; }
+.k-warn { --k: var(--warn); }
+.k-alert { --k: var(--neg); }
+.k-other { --k: var(--border-strong); }
+.feed-list li[class^="k-"] { border-left: 3px solid var(--k); padding-left: 8px; }
+.feed-list li[class^="k-"] strong { color: var(--k); font-weight: 600; }
+.feed-list li.k-other strong { color: var(--text); font-weight: 500; }
 .backtest-report h2, .backtest-report h3 { font-size: 12px; color: var(--text); margin: 10px 0 6px; }
 .backtest-report ul { margin: 0; padding-left: 16px; color: var(--muted); }
 .backtest-report code, .backtest-report pre { font-family: var(--font-mono); }

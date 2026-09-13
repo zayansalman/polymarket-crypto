@@ -336,7 +336,7 @@ class TestRibbonTrailingHalt:
         kw = dict(
             mode="live", state="running", session_start=None,
             live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
-            open_pos=[], closed_session=[], tick=None, last_live_at=None,
+            open_pos=[], closed_session=[], tick=None,
             loss_halt_usd=10.0, live_peak=0.0, paper_peak=0.0, bypass_loss_halt=False,
         )
         kw.update(over)
@@ -381,7 +381,7 @@ class TestRibbonLivePnl:
         return ribbon.render(
             mode="live", state="running", session_start=None,
             live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
-            open_pos=open_pos, closed_session=[], tick=tick, last_live_at=None,
+            open_pos=open_pos, closed_session=[], tick=tick,
         )
 
     def test_unrealized_pnl_of_open_positions(self) -> None:

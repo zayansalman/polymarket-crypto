@@ -20,6 +20,7 @@ from polymarket_exec.ops.dashboard.panels import (
     controls,
     daily_altcoin,
     decision_engine,
+    feeds,
     market,
     market_selector,
     performance,
@@ -128,7 +129,6 @@ async def execution_view_html() -> str:
         open_pos=open_pos,
         closed_session=closed_session,
         tick=tick,
-        last_live_at=last_live_at,
         wallet=await _wallet.wallet_snapshot(),
         loss_halt_usd=loss_halt_current,
         live_peak=live_peak,
@@ -138,6 +138,15 @@ async def execution_view_html() -> str:
     controls_html = controls.render(
         trade_shares_current=trade_shares_current,
         current_price=current_price,
+    )
+    from polymarket_bot import paper as _paper
+
+    feeds_html = feeds.render(
+        tick=tick,
+        is_live=mode == "live",
+        last_live_at=last_live_at,
+        chainlink_age_s=_paper.chainlink_print_age_seconds(),
+        tick_seconds=float(await _knobs.get("paper_tick_seconds")),
     )
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)
@@ -159,6 +168,7 @@ async def execution_view_html() -> str:
         "<div class='execution-view'>"
         + ribbon_html
         + "<div class='execution-grid'>"
+        + feeds_html
         + controls_html
         + market_html
         + decision_html
