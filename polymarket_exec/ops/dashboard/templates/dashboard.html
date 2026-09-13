@@ -3,10 +3,15 @@
 {% block content %}
 
 {# ───────── Activity log (blocked entries included) — above execution view ───────── #}
-<section class="card">
-  <div class="card-h">ACTIVITY LOG</div>
+<details class="card fold" id="activity-fold">
+  <summary class="card-h">
+    <span class="fold-title">ACTIVITY LOG</span>
+    <span class="feed-legend">
+      <i class="k-system">system</i><i class="k-trade">trade</i><i class="k-config">config</i><i class="k-warn">warning</i><i class="k-alert">alert</i>
+    </span>
+  </summary>
   <div id="activity-content" class="feed-wrap">{{ activity | safe }}</div>
-</section>
+</details>
 
 {# ───────── Execution view (status ribbon + strategy/market/perf/TCA/blotter) ───────── #}
 <div id="execution-content">

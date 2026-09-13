@@ -38,6 +38,16 @@ document.addEventListener('DOMContentLoaded', function() {
   } catch (e) {}
 });
 
+// Activity log dropdown: remember open/closed across reloads
+document.addEventListener('DOMContentLoaded', function() {
+  var fold = document.getElementById('activity-fold');
+  if (!fold) return;
+  try { fold.open = localStorage.getItem('btc-dashboard-activity-open') === '1'; } catch (e) {}
+  fold.addEventListener('toggle', function() {
+    try { localStorage.setItem('btc-dashboard-activity-open', fold.open ? '1' : '0'); } catch (e) {}
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Toast Notifications
 // ---------------------------------------------------------------------------

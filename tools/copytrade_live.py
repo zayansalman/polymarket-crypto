@@ -50,7 +50,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from polymarket_bot.pairarb.feed import FeedUnavailable, open_feed
 from polymarket_bot.pairarb.mirror import MIN_ORDER_SHARES, price_the_copy
 
 CLOB = "https://clob.polymarket.com"

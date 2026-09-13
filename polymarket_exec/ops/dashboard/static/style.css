@@ -320,6 +320,27 @@ body {
 .feed-list li { padding: 5px 0; border-bottom: 1px solid var(--border-strong); color: var(--muted); }
 .feed-list code { font-family: var(--font-mono); color: var(--label); margin-right: 6px; }
 .feed-list strong { color: var(--text); font-weight: 500; }
+
+/* activity log: collapsible card, rows colour-coded by event kind */
+.card.fold { display: block; margin-bottom: 14px; }
+.card.fold > summary { cursor: pointer; list-style: none; user-select: none; }
+.card.fold > summary::-webkit-details-marker { display: none; }
+.card.fold:not([open]) > summary { margin-bottom: -16px; border-bottom: 0; }
+.card.fold > summary:hover { color: var(--text); }
+.fold-title::before { content: "\25B8"; display: inline-block; width: 12px; text-align: center; transition: transform .12s; }
+.card.fold[open] .fold-title::before { transform: rotate(90deg); }
+.feed-legend { display: flex; gap: 12px; text-transform: none; letter-spacing: .3px; }
+.feed-legend i { font-style: normal; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.feed-legend i::before { content: ""; width: 8px; height: 8px; background: var(--k); }
+.k-system { --k: #8a8f97; }
+.k-trade { --k: #2f62b5; }
+.k-config { --k: #7a4fb0; }
+.k-warn { --k: var(--warn); }
+.k-alert { --k: var(--neg); }
+.k-other { --k: var(--border-strong); }
+.feed-list li[class^="k-"] { border-left: 3px solid var(--k); padding-left: 8px; }
+.feed-list li[class^="k-"] strong { color: var(--k); font-weight: 600; }
+.feed-list li.k-other strong { color: var(--text); font-weight: 500; }
 .backtest-report h2, .backtest-report h3 { font-size: 12px; color: var(--text); margin: 10px 0 6px; }
 .backtest-report ul { margin: 0; padding-left: 16px; color: var(--muted); }
 .backtest-report code, .backtest-report pre { font-family: var(--font-mono); }

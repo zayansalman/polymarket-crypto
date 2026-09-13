@@ -24,7 +24,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
 | `polymarket_bot/market_selection.py` | WIRED | 3 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
-| `polymarket_bot/pairarb/feed.py` | WIRED | 2 | Fill feed for the copier — one interface, two transports (#182). |
+| `polymarket_bot/pairarb/feed.py` | WIRED | 1 | Fill feed for the copier — one interface, two transports (#182). |
 | `polymarket_bot/pairarb/fills.py` | WIRED | 1 | Back-of-queue maker fill simulation and window settlement (#182). |
 | `polymarket_bot/pairarb/ledger.py` | WIRED | 1 | Persistence for the two-sided pair shadow tester (#182). |
 | `polymarket_bot/pairarb/market_index.py` | WIRED | 2 | Outcome-token -> market metadata resolver for the 5m Up/Down family (#182). |
