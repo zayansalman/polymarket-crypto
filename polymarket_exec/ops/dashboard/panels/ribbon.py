@@ -2,10 +2,9 @@
 feed liveness chips.
 
 The loss halt lives here (#76, #112): a typeable limit with Set (runtime knob,
-next tick, no restart) and Reset (clears the auto-pause and, when stopped,
-zeroes today's tally + peaks). Its verdict MUST mirror
-RiskGate.loss_halt_breached — trailing floor = peak - limit, decided on the
-running mode's own leg.
+next tick, no restart) and Reset (when stopped, zeroes today's tally + peaks).
+Its verdict MUST mirror RiskGate.loss_halt_breached — trailing floor =
+peak - limit, decided on the running mode's own leg.
 """
 from __future__ import annotations
 
@@ -23,8 +22,6 @@ def render(
     mode: str,
     state: str,
     session_start: str | None,
-    paused: bool,
-    pause_reason: str,
     live_pnl: float,
     paper_pnl: float,
     day_pnl: float,
@@ -95,16 +92,11 @@ def render(
             # access often keeps reading and journaling skips.
             chips.append(_chip(label, live_age <= 300))
     feeds = "".join(chips)
-    pause_chip = (
-        f"<span class='pill warn' title='{escape(pause_reason)}'>⏸ AUTO-PAUSED</span>"
-        if paused
-        else ""
-    )
     kill_chip = "<span class='pill live'>KILL ARMED</span>" if kill_armed else ""
 
     # Run state lives in the topbar Start/Stop buttons; the ribbon only
-    # surfaces the exceptional pause / kill conditions.
-    alert_chips = f"{pause_chip}{kill_chip}"
+    # surfaces the exceptional kill condition.
+    alert_chips = kill_chip
     # Live P&L = unrealized P&L of open positions, marked at the book mid for
     # positions in the current window (same mark as the blotter, #113).
     cur_window = (tick or {}).get("window_slug")

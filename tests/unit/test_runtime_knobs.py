@@ -24,20 +24,20 @@ async def _isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_get_returns_default_when_unset() -> None:
-    assert await _knobs.get("paper_entry_edge_min") == pytest.approx(0.045)
+    assert await _knobs.get("daily_entry_edge_min") == pytest.approx(0.045)
 
 
 @pytest.mark.asyncio
 async def test_set_persists_and_get_reflects_it() -> None:
-    await _knobs.set("paper_entry_edge_min", 0.06)
-    assert await _knobs.get("paper_entry_edge_min") == pytest.approx(0.06)
+    await _knobs.set("daily_entry_edge_min", 0.06)
+    assert await _knobs.get("daily_entry_edge_min") == pytest.approx(0.06)
 
 
 @pytest.mark.asyncio
 async def test_reset_clears_override_back_to_default() -> None:
-    await _knobs.set("paper_entry_edge_min", 0.06)
-    await _knobs.reset("paper_entry_edge_min")
-    assert await _knobs.get("paper_entry_edge_min") == pytest.approx(0.045)
+    await _knobs.set("daily_entry_edge_min", 0.06)
+    await _knobs.reset("daily_entry_edge_min")
+    assert await _knobs.get("daily_entry_edge_min") == pytest.approx(0.045)
 
 
 @pytest.mark.asyncio
@@ -50,13 +50,13 @@ async def test_get_override_is_none_when_unset() -> None:
 @pytest.mark.asyncio
 async def test_set_rejects_below_min() -> None:
     with pytest.raises(ValueError):
-        await _knobs.set("paper_entry_edge_min", -0.1)
+        await _knobs.set("daily_entry_edge_min", -0.1)
 
 
 @pytest.mark.asyncio
 async def test_set_rejects_above_max() -> None:
     with pytest.raises(ValueError):
-        await _knobs.set("paper_min_confidence", 1.5)
+        await _knobs.set("live_max_entry_slippage", 1.5)
 
 
 @pytest.mark.asyncio
@@ -66,17 +66,22 @@ async def test_set_rejects_invalid_enum_choice() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bool_knob_roundtrip() -> None:
-    await _knobs.set("auto_pause_enabled", False)
-    assert (await _knobs.get("auto_pause_enabled")) is False
-    await _knobs.set("auto_pause_enabled", True)
-    assert (await _knobs.get("auto_pause_enabled")) is True
+async def test_bool_knob_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No bool knob is registered since the auto-pause knobs were archived with
+    # the v0 strategy; register a throwaway one to keep the kind covered.
+    monkeypatch.setitem(
+        _knobs.KNOBS, "test_flag", _knobs.Knob("runtime.test.flag", True, "bool", "Test flag")
+    )
+    await _knobs.set("test_flag", False)
+    assert (await _knobs.get("test_flag")) is False
+    await _knobs.set("test_flag", True)
+    assert (await _knobs.get("test_flag")) is True
 
 
 @pytest.mark.asyncio
 async def test_int_knob_coerces_float_input() -> None:
-    await _knobs.set("paper_entry_min_remaining_seconds", 90.0)
-    assert await _knobs.get("paper_entry_min_remaining_seconds") == 90
+    await _knobs.set("paper_time_exit_seconds", 90.0)
+    assert await _knobs.get("paper_time_exit_seconds") == 90
 
 
 @pytest.mark.asyncio

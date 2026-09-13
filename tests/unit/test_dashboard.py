@@ -334,8 +334,8 @@ class TestRibbonTrailingHalt:
         from polymarket_exec.ops.dashboard.panels import ribbon
 
         kw = dict(
-            mode="live", state="running", session_start=None, paused=False,
-            pause_reason="", live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
+            mode="live", state="running", session_start=None,
+            live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
             open_pos=[], closed_session=[], tick=None, last_live_at=None,
             loss_halt_usd=10.0, live_peak=0.0, paper_peak=0.0, bypass_loss_halt=False,
         )
@@ -379,8 +379,8 @@ class TestRibbonLivePnl:
         from polymarket_exec.ops.dashboard.panels import ribbon
 
         return ribbon.render(
-            mode="live", state="running", session_start=None, paused=False,
-            pause_reason="", live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
+            mode="live", state="running", session_start=None,
+            live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
             open_pos=open_pos, closed_session=[], tick=tick, last_live_at=None,
         )
 
@@ -395,46 +395,32 @@ class TestRibbonLivePnl:
         assert "no open positions" in self._render([])
 
 
-class TestModelSelector:
-    """The dropdown lists the full logged roster (SELECTABLE_MODELS); an unknown
-    active model still renders (orphan guard); the switch rejects unknown ids."""
+class TestV0StrategyArchived:
+    """The v0 strategy's dashboard surfaces are gone (archived 2026-09-13)."""
 
-    def test_selector_lists_all_selectable_models(self) -> None:
-        from polymarket_exec.ops.dashboard.panels import controls
-        from polymarket_bot.shadow import runner
-
-        html = controls.render(
-            trade_shares_current=None, current_price=None, active_model="pricing_v0"
-        )
-        for mid in runner.SELECTABLE_MODELS:
-            assert f"value='{mid}'" in html
-        # Post-surgery roster (#142): control, champion, challenger.
-        assert "value='pricing_v0'" in html
-        assert "value='cushion_favorite_v2'" in html
-        assert "value='cushion_fresh_v7'" in html
-        # Retired models no longer render as options.
-        assert "value='late_convergence_v3'" not in html
-        assert "value='down_skeptic_drift_v6'" not in html
-        # An unknown id is never rendered as an option.
-        assert "value='no_such_model'" not in html
-
-    def test_selector_includes_orphaned_active_model(self) -> None:
-        """An unknown / non-selectable active model still renders (orphan guard)."""
+    def test_controls_has_no_model_picker(self) -> None:
         from polymarket_exec.ops.dashboard.panels import controls
 
-        html = controls.render(
-            trade_shares_current=None, current_price=None, active_model="ghost_model"
-        )
-        assert "value='ghost_model'" in html
+        html = controls.render(trade_shares_current=None, current_price=None)
+        assert "ctl-model" not in html
+        assert "STRATEGY MODEL" not in html
 
-    def test_active_model_rejects_unknown(self, client: TestClient) -> None:
-        """Posting an unknown / non-selectable model id is rejected (no write)."""
+    def test_active_model_key_is_rejected(self, client: TestClient) -> None:
         r = client.post(
             "/api/runtime-config",
-            json={"key": "active_model", "value": "no_such_model"},
+            json={"key": "active_model", "value": "pricing_v0"},
         )
         assert r.status_code == 200
         assert r.json()["status"] == "error"
+
+    def test_decision_engine_has_no_gates_column(self) -> None:
+        from polymarket_exec.ops.dashboard.panels import decision_engine
+
+        tick = {"spot_price": 1.0, "reference_price": 1.0, "remaining_seconds": 90,
+                "reason": "skip: no strategy loaded"}
+        html = decision_engine.render(tick, [])
+        assert "GATES" not in html
+        assert "no strategy loaded" in html
 
 
 def test_stat_helper_emits_data_flash_attribute():

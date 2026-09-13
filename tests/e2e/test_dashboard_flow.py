@@ -50,12 +50,11 @@ class TestFullPageLoad:
         assert "activity-content" in text
         assert "backtest-content" in text
 
-    def test_strategy_panel_shows_params(self, client: TestClient):
+    def test_strategy_panel_is_gone(self, client: TestClient):
+        # The v0 Strategy card was archived (2026-09-13).
         text = client.get("/").text
-        # Strategy panel surfaces the model + bands.
-        assert "Pricing" in text
-        assert "Edge band" in text
-        assert "Settlement" in text
+        assert "Edge band" not in text
+        assert "AUTO-PAUSE" not in text.upper().replace("AUTO-PAUSED", "")
 
 
 class TestButtonInteractivity:
