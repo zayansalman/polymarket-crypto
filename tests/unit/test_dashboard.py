@@ -324,26 +324,25 @@ class TestMarketOpenPosition:
         assert "class='card wide'" in market.render(None)
 
 
-class TestGuardrailsTrailingHalt:
-    """Issue #112: the LOSS HALT panel reflects a trailing high-water-mark stop —
+class TestRibbonTrailingHalt:
+    """Issue #112: the ribbon loss halt reflects a trailing high-water-mark stop —
     halt floor = peak - limit, headroom = pnl - floor. A positive PnL that has
     drawn down past the floor shows HALTED; a never-profitable leg behaves like
     the old fixed -limit floor."""
 
     def _render(self, **over):
-        from polymarket_exec.ops.dashboard.panels import guardrails
+        from polymarket_exec.ops.dashboard.panels import ribbon
 
         kw = dict(
-            day_spend=0.0, bankroll_cap=None, submitted_count=0, submitted_notional=0.0,
-            day_pnl=0.0, live_pnl=0.0, paper_pnl=0.0, live_peak=0.0, paper_peak=0.0,
-            loss_halt_usd=10.0, state="running", bot_detail="", session_start=None,
-            paused=False, pause_reason="", blocked=[], mode="live", bypass_loss_halt=False,
+            mode="live", state="running", session_start=None, paused=False,
+            pause_reason="", live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
+            open_pos=[], closed_session=[], tick=None, last_live_at=None,
+            loss_halt_usd=10.0, live_peak=0.0, paper_peak=0.0, bypass_loss_halt=False,
         )
         kw.update(over)
-        return guardrails.render(**kw)
+        return ribbon.render(**kw)
 
     def test_headroom_is_full_at_peak(self) -> None:
-        # pnl == peak == 0 → full headroom, not halted.
         html = self._render(live_pnl=0.0, live_peak=0.0)
         assert "$10.00" in html  # headroom
         assert ">OK<" in html
@@ -351,30 +350,49 @@ class TestGuardrailsTrailingHalt:
     def test_headroom_shrinks_after_drawdown_from_peak(self) -> None:
         # Banked +30, gave back 5 → headroom 5, floor +20, still OK.
         html = self._render(live_pnl=25.0, live_peak=30.0)
-        assert "$5.00" in html  # headroom = 25 - (30-10)
+        assert "$5.00" in html
         assert ">OK<" in html
 
     def test_positive_pnl_can_be_halted_by_trailing_stop(self) -> None:
-        # +18 after a +30 peak → floor +20, 18 <= 20 → HALTED despite positive PnL.
         html = self._render(live_pnl=18.0, live_peak=30.0)
         assert ">HALTED<" in html
 
     def test_never_profitable_matches_fixed_floor(self) -> None:
-        # peak 0 → floor -10; -10 → HALTED, exactly like the pre-#112 behaviour.
         html = self._render(live_pnl=-10.0, live_peak=0.0)
         assert ">HALTED<" in html
 
-    def test_panel_shows_peak_and_floor(self) -> None:
+    def test_title_shows_peak_and_floor(self) -> None:
         html = self._render(live_pnl=25.0, live_peak=30.0)
-        assert "Peak (live)" in html
-        assert "Halt floor" in html
+        assert "peak +$30.00" in html and "floor +$20.00" in html
 
     def test_paper_mode_uses_paper_leg(self) -> None:
-        # In paper mode the paper leg + paper peak drive the display.
         html = self._render(mode="paper", paper_pnl=4.0, paper_peak=12.0,
                             live_pnl=0.0, live_peak=0.0)
         # floor = 12 - 10 = 2; headroom = 4 - 2 = 2.
         assert "$2.00" in html
+
+
+class TestRibbonLivePnl:
+    _TICK = {"window_slug": "w1", "up_best_bid": 0.60, "up_best_ask": 0.62}
+
+    def _render(self, open_pos, tick=None):
+        from polymarket_exec.ops.dashboard.panels import ribbon
+
+        return ribbon.render(
+            mode="live", state="running", session_start=None, paused=False,
+            pause_reason="", live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
+            open_pos=open_pos, closed_session=[], tick=tick, last_live_at=None,
+        )
+
+    def test_unrealized_pnl_of_open_positions(self) -> None:
+        pos = {"side": "UP", "entry_price": 0.50, "shares": 10.0,
+               "notional_usd": 5.0, "window_slug": "w1"}
+        html = self._render([pos], self._TICK)
+        assert "Live P&amp;L" in html
+        assert "+$1.10" in html  # (0.61 mid - 0.50) * 10
+
+    def test_no_open_positions(self) -> None:
+        assert "no open positions" in self._render([])
 
 
 class TestModelSelector:

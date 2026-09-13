@@ -14,6 +14,7 @@ import pytest_asyncio
 
 import db as _db
 import polymarket_bot.paper as paper
+from polymarket_bot import runtime_knobs as _knobs
 from polymarket_exec.execution.live import LiveExecutor
 
 
@@ -73,13 +74,13 @@ _POS = {
 
 def test_settle_style_holds_through_target_and_stop_marks():
     # +20% mark would be TARGET, -20% would be STOP under scalp; settle holds.
-    assert paper.EXIT_STYLE == "settle"  # repo default
+    assert _knobs.cached("exit_style") == "settle"  # repo default
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.60) is None
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.40) is None
 
 
 def test_scalp_style_still_scalps(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(paper, "EXIT_STYLE", "scalp")
+    monkeypatch.setitem(_knobs._cache, "exit_style", "scalp")
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.60) == "TARGET"
     assert paper._exit_reason(_snapshot(), _POS, exit_price=0.40) == "STOP"
 

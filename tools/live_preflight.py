@@ -72,8 +72,7 @@ def main() -> int:
     balance = float((bal or {}).get("balance", 0)) / 1e6  # USDC 6dp
     print(f"\nusable balance: ${balance:.2f}")
     if balance <= 0:
-        print("NO-GO: fund the funder wallet, then re-run. "
-              "(Withdraw from a Polymarket UI account straight to the funder address.)")
+        print("NO-GO: deposit USDC into your Polymarket account (MetaMask), then re-run.")
         return 1
     print("GO: config verified — launch with the dashboard Start button.")
     return 0

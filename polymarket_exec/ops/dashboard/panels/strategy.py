@@ -15,12 +15,17 @@ def render(
     is_live: bool,
     paused: bool,
     pause_reason: str,
+    entry_edge_min: float,
+    entry_edge_max: float,
+    min_confidence: float,
+    min_entry_price: float,
+    entry_min_remaining_seconds: int,
+    is_operator_set: bool,
     max_trade: float | None = None,
     trade_shares: float | None = None,
     current_price: float | None = None,
     active_model: str = "pricing_v0",
 ) -> str:
-    active = _params.load_active()
     # Sizing line: share-denominated when the operator set a share count (#89),
     # else the dollar clip.
     if trade_shares is not None:
@@ -31,22 +36,18 @@ def render(
         else:
             sizing = f"{trade_shares:g} shares · 1 pos max"
     else:
-        _dollar = (
-            max_trade
-            if max_trade is not None
-            else (_config.TRADE_MAX_USD if is_live else _config.PAPER_MAX_TRADE_USD)
-        )
+        _dollar = max_trade if max_trade is not None else _config.TRADE_MAX_USD
         sizing = f"${_dollar:.0f}/clip · 1 pos max"
     proposed = _params.load_proposed()
-    if active.source == "applied":
+    if is_operator_set:
         params_html = (
-            f"<b class='up'>applied · edge≥{active.entry_edge_min:.3f} · "
-            f"conf≥{active.min_confidence:.2f} · rem≥{active.min_remaining_seconds}s</b>"
+            f"<b class='up'>operator-set · edge≥{entry_edge_min:.3f} · "
+            f"conf≥{min_confidence:.2f} · rem≥{entry_min_remaining_seconds}s</b>"
         )
     else:
         params_html = (
-            f"<b>env defaults · edge≥{active.entry_edge_min:.3f} · "
-            f"conf≥{active.min_confidence:.2f}</b>"
+            f"<b>defaults · edge≥{entry_edge_min:.3f} · "
+            f"conf≥{min_confidence:.2f}</b>"
         )
     if proposed is not None:
         m = proposed.backtest_meta or {}
@@ -81,8 +82,8 @@ def render(
         f"<div><span>Model</span><b>{escape(_shadow_runner.MODEL_LABELS.get(active_model, active_model))}</b></div>"
         f"<div><span>Logic</span><b class='dim' title='{escape(_shadow_runner.MODEL_DESCRIPTIONS.get(active_model, ''))}'>{escape(_shadow_runner.MODEL_DESCRIPTIONS.get(active_model, ''))}</b></div>"
         f"<div><span>Style</span><b title='{escape(style)} (1 entry/window, hold→resolution)'>{escape(style)} (1 entry/window, hold→resolution)</b></div>"
-        f"<div><span>Edge band</span><b>{_config.PAPER_ENTRY_EDGE_MIN:.3f} – {_config.PAPER_ENTRY_EDGE_MAX:.3f}</b></div>"
-        f"<div><span>Entry floor</span><b>≥ {_config.PAPER_MIN_ENTRY_PRICE:.2f} (favorites)</b></div>"
+        f"<div><span>Edge band</span><b>{entry_edge_min:.3f} – {entry_edge_max:.3f}</b></div>"
+        f"<div><span>Entry floor</span><b>≥ {min_entry_price:.2f} (favorites)</b></div>"
         f"<div><span>Sizing</span><b>{sizing}</b></div>"
         f"<div><span>Settlement</span><b>Chainlink BTC/USD · ≥ ⇒ Up</b></div>"
         f"<div><span>Params</span>{params_html}</div>"

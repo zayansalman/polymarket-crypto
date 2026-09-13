@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import asyncio
 import math
 import sqlite3
 import sys
@@ -48,18 +49,20 @@ SHARES = shadow_runner.SHADOW_SHARES
 def _params() -> strategy.StrategyParams:
     """The production strategy params — the same mapping the paper loop uses
     (polymarket_bot/paper.py::_strategy_params, minus the runtime sizing override)."""
-    from polymarket_bot import params as _p
+    from polymarket_bot import runtime_knobs as _knobs
 
-    a = _p.load_active()
-    return strategy.StrategyParams(
-        min_trade_usd=_config.PAPER_MIN_TRADE_USD,
-        max_trade_usd=_config.PAPER_MAX_TRADE_USD,
-        entry_edge_min=a.entry_edge_min,
-        min_confidence=a.min_confidence,
-        entry_min_remaining_seconds=a.min_remaining_seconds,
-        entry_edge_max=a.entry_edge_max,
-        min_entry_price=a.min_entry_price,
-    )
+    async def _load() -> strategy.StrategyParams:
+        return strategy.StrategyParams(
+            min_trade_usd=await _knobs.get("paper_min_trade_usd"),
+            max_trade_usd=await _knobs.get("paper_max_trade_usd"),
+            entry_edge_min=await _knobs.get("paper_entry_edge_min"),
+            min_confidence=await _knobs.get("paper_min_confidence"),
+            entry_min_remaining_seconds=await _knobs.get("paper_entry_min_remaining_seconds"),
+            entry_edge_max=await _knobs.get("paper_entry_edge_max"),
+            min_entry_price=await _knobs.get("paper_min_entry_price"),
+        )
+
+    return asyncio.run(_load())
 
 
 @dataclass

@@ -45,6 +45,11 @@ WATCHDOG_POLL_SECONDS = 20.0
 _watchdog_thread: threading.Thread | None = None
 _desired_running = False
 _mode_cache = "paper"
+# Real-money consent: set ONLY by an operator LIVE selection in THIS process
+# (dashboard click → token-checked /api/mode → set_mode). Never persisted, so a
+# restart, a stale DB row, env BOT_MODE=live or another process (pytest, a
+# second instance) can never inherit it.
+_live_consent = False
 _live_stall_notified = False
 
 # --- Silent-stop detector (#138) -------------------------------------------
@@ -107,6 +112,11 @@ def _default_detail() -> str:
         f"Paper sizing range: ${PAPER_MIN_TRADE_USD:.0f}-"
         f"${PAPER_MAX_TRADE_USD:.0f} by confidence."
     )
+
+
+def live_consented() -> bool:
+    """True once the operator clicked LIVE (and confirmed) in this process."""
+    return _live_consent
 
 
 def _is_runner_alive() -> bool:
@@ -173,24 +183,24 @@ async def set_mode(mode: str) -> BtcBotStatus:
     The switch itself is never blocked: LIVE is always selectable. The live
     boot gate guards real orders at Start (``request_start``) and again at
     executor build (``build_live_executor``) — an unarmed LIVE selection
-    simply refuses to start, with the reason in the status detail.
+    simply refuses to start. Armed-ness is computed at render time by the
+    dashboard, never persisted here, so it can't go stale.
     """
     if mode not in ("paper", "live"):
         raise ValueError(f"unknown mode {mode!r}")
-    await request_stop()
+    global _live_consent
+    stopped = await request_stop()
     await set_config("polymarket_bot.requested_mode", mode)
+    _live_consent = mode == "live"
     now = datetime.now(UTC).isoformat(timespec="seconds")
-    detail = (
-        f"Mode set to {mode.upper()}. Bot is stopped — press Start to begin."
-    )
-    if mode == "live":
-        try:
-            assert_live_boot_allowed()
-        except LiveBootRefused as e:
-            detail = (
-                f"Mode set to LIVE — not armed: {e} "
-                "Start will refuse until this is fixed."
-            )
+    if _is_runner_alive() or await count_open_positions(mode="live"):
+        # Never bury "Do NOT restart" / "LIVE positions remain OPEN" under a
+        # friendly "press Start" — those warnings are the operator's cue.
+        detail = f"Mode set to {mode.upper()}. {stopped.detail}"
+    else:
+        detail = (
+            f"Mode set to {mode.upper()}. Bot is stopped — press Start to begin."
+        )
     await set_config("polymarket_bot.mode", mode)
     await set_config("polymarket_bot.updated_at", now)
     await set_config("polymarket_bot.detail", detail)
@@ -200,9 +210,35 @@ async def set_mode(mode: str) -> BtcBotStatus:
 async def request_start() -> BtcBotStatus:
     """Start the trading runner (paper by default, live only when fully gated)."""
     now = datetime.now(UTC).isoformat(timespec="seconds")
+    runner = _runner_thread
+    if runner is not None and runner.is_alive() and _stop_event is not None and _stop_event.is_set():
+        # A stopped runner that hasn't exited may still own the LiveExecutor
+        # mid-flatten. Starting now would spawn nothing (the old thread is
+        # alive) yet flip _mode_cache/_desired_running under it.
+        detail = (
+            "Start refused: the previous loop is still shutting down (live "
+            "flatten may be in progress). Wait for it to exit; check logs and "
+            "live_orders."
+        )
+        await set_config("polymarket_bot.updated_at", now)
+        await set_config("polymarket_bot.detail", detail)
+        log.warning("btc.start_refused_runner_shutting_down")
+        return BtcBotStatus(
+            state="stopped",
+            mode=await current_mode(),
+            updated_at=now,
+            detail=detail,
+        )
     mode = await current_mode()
     if mode == "live":
         try:
+            # Consent is the operator clicking LIVE in this dashboard session —
+            # not a persisted row, an env default, or another process.
+            if not _live_consent:
+                raise LiveBootRefused(
+                    "Live mode boot REFUSED: LIVE was not clicked in this dashboard "
+                    "session. Click LIVE to trade real funds."
+                )
             # Boot gate is checked HERE, before any thread starts. Refusal
             # means nothing runs — live never silently falls back to paper.
             assert_live_boot_allowed()
@@ -246,12 +282,19 @@ async def request_stop() -> BtcBotStatus:
     event loop, the only thread that ever drives the LiveExecutor) cancels
     resting orders and flattens live positions before dropping the executor,
     so no entry can fire after the flatten and no live position can ever be
-    paper-closed by this controller. In live mode, any ledger row that is
-    still open afterwards means the live exit FAILED — it is left open for
-    the operator instead of being closed with fictional paper prices.
+    paper-closed by this controller.
+
+    No decision here depends on the mode (env ``BOT_MODE``, the dashboard
+    selector and what actually ran can all disagree). Instead:
+
+    * runner still alive after the join, or a LiveExecutor still set → touch
+      nothing; the runner owns the ledger until it exits.
+    * runner gone → force-close PAPER rows only (``force_close_open_positions``
+      never paper-closes a LIVE row without an executor), then loudly report
+      any LIVE rows still open — their live exit FAILED and real tokens remain.
     """
     now = datetime.now(UTC).isoformat(timespec="seconds")
-    mode = _config.BOT_MODE
+    mode = await current_mode()  # label only
     global _desired_running
     _desired_running = False  # an operator stop is never a stall (#147)
     if _stop_event is not None:
@@ -260,33 +303,30 @@ async def request_stop() -> BtcBotStatus:
     if runner is not None and runner.is_alive():
         await asyncio.to_thread(runner.join, 90.0)
 
-    if mode == "live":
-        remaining = await count_open_positions()
-        if runner is not None and runner.is_alive():
-            detail = (
-                "BTC live loop stop requested but the runner has not finished its "
-                "shutdown flatten yet. Do NOT restart until it exits; check logs "
-                "and live_orders."
-            )
-        elif remaining:
-            detail = (
-                f"BTC live loop stopped, but {remaining} live position(s) could NOT "
-                "be flattened and remain OPEN in the ledger. Flatten manually on "
-                "Polymarket and check the live_orders journal."
-            )
-        else:
-            detail = (
-                "BTC live loop stopped. Resting orders cancelled and open live "
-                "positions flattened."
-            )
+    if (runner is not None and runner.is_alive()) or _paper._live_executor is not None:
+        detail = (
+            "BTC loop stop requested but the runner has not finished its "
+            "shutdown (live flatten) yet. Do NOT restart until it exits; check "
+            "logs and live_orders."
+        )
     else:
         closed_count, close_error = await _safe_force_close()
         detail = (
-            "BTC paper loop stop requested. New entries are disabled. "
+            f"BTC {mode} loop stopped. New entries are disabled. "
             f"Force-closed {closed_count} open paper position(s)."
         )
         if close_error:
             detail = f"{detail} Force-close check failed: {close_error}"
+        live_open = await count_open_positions(mode="live")
+        if live_open:
+            warning = (
+                f"{live_open} LIVE position(s) remain OPEN in the ledger — the "
+                "live exit failed or no live loop is running. Flatten manually "
+                "on Polymarket and check the live_orders journal."
+            )
+            detail = f"{detail} {warning}"
+            log.error("btc.live_positions_left_open", count=live_open)
+            await notify("live_positions_left_open", warning, {"count": live_open})
     await set_config("polymarket_bot.state", "stopped")
     await set_config("polymarket_bot.mode", mode)
     await set_config("polymarket_bot.updated_at", now)
@@ -315,15 +355,17 @@ def _ensure_runner_started(force: bool = False) -> None:
         _stop_event = threading.Event()
         _runner_thread = threading.Thread(
             target=_run_loop_in_thread,
-            args=(_stop_event,),
+            # The mode Start decided on — the loop must not re-read the
+            # selector, which a concurrent mode switch may have changed.
+            args=(_stop_event, _mode_cache),
             name="btc-paper-runner",
             daemon=True,
         )
         _runner_thread.start()
 
 
-def _run_loop_in_thread(stop_event: threading.Event) -> None:
-    asyncio.run(run_paper_loop(stop_event))
+def _run_loop_in_thread(stop_event: threading.Event, mode: str) -> None:
+    asyncio.run(run_paper_loop(stop_event, mode=mode))
 
 
 def _ensure_watchdog_started() -> None:

@@ -40,7 +40,7 @@ _GAMMA_ASSET_NAME = {
 }
 _SLUG_ASSET_TO_SHORT = {v: k for k, v in _GAMMA_ASSET_NAME.items()}
 
-# Distinguishes this family from the old 5m/15m/4h clock-floor family
+# Distinguishes this family from the old 5m/15m/1h clock-floor family
 # (slug shape "{asset}-updown-{rung}-{ts}") by slug shape alone — NOT by the
 # startDate..endDate span, which is the TRADING window and can be ~2 days
 # wide even though the actual resolution always compares two specific

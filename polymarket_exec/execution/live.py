@@ -3,8 +3,10 @@
 Safety model
 ------------
 * Boot is gated: live mode refuses to start unless ``POLYMARKET_PRIVATE_KEY``
-  is set AND ``LIVE_CONFIRM == "YES_I_UNDERSTAND"`` AND the wallet config
-  is coherent (a funder address is mandatory for proxy signature types 1/2).
+  is set AND the wallet is the MetaMask setup: signature type 2 with the
+  Polymarket Safe as funder (``tools/live_detect_wallet.py`` finds it). Consent is the operator clicking LIVE
+  in the dashboard — the controller refuses a live Start that wasn't selected
+  there — not an env phrase.
 * Hard risk gates run BEFORE every order: per-trade notional cap, one open
   position max, daily realized-loss halt, and an OPTIONAL daily bankroll cap
   (disabled when ``TRADE_BANKROLL_CAP_USD`` is blank/unset/≤0). The daily
@@ -64,7 +66,8 @@ log = get_logger("live")
 
 BUY = "BUY"
 SELL = "SELL"
-CONFIRM_PHRASE = "YES_I_UNDERSTAND"
+# MetaMask-connected Polymarket accounts trade from a Gnosis Safe the key owns.
+METAMASK_SIGNATURE_TYPE = 2
 
 # Polymarket CLOB conventions (see installed py_clob_client_v2 source):
 # - size granularity is 2 decimals for every tick size (ROUNDING_CONFIG.size == 2)
@@ -93,21 +96,13 @@ class LiveBootRefused(RuntimeError):
     """Raised when live mode is requested but the boot gate is not satisfied."""
 
 
-def assert_live_boot_allowed(
+def live_boot_problems(
     private_key: str | None = None,
-    confirm: str | None = None,
     funder: str | None = None,
     signature_type: int | None = None,
-) -> None:
-    """Refuse live boot unless the operator config is complete AND coherent.
-
-    Reads ``config.POLYMARKET_*`` / ``config.LIVE_CONFIRM`` at call time
-    (not import time) so operators and tests can adjust config. Also refuses
-    when any risk-limit env var failed to parse (config.CONFIG_PARSE_ERRORS):
-    a typo in a risk limit must never silently degrade to looser defaults.
-    """
+) -> list[str]:
+    """Every reason live boot would be refused right now (empty = armed)."""
     key = private_key if private_key is not None else _config.POLYMARKET_PRIVATE_KEY
-    phrase = confirm if confirm is not None else _config.LIVE_CONFIRM
     fund = funder if funder is not None else _config.POLYMARKET_FUNDER
     sig = (
         signature_type
@@ -123,19 +118,32 @@ def assert_live_boot_allowed(
         )
     if not key:
         problems.append("POLYMARKET_PRIVATE_KEY is not set")
-    if phrase != CONFIRM_PHRASE:
-        problems.append(f"LIVE_CONFIRM is not '{CONFIRM_PHRASE}'")
-    if sig not in (0, 1, 2, 3):
+    if sig != METAMASK_SIGNATURE_TYPE:
         problems.append(
-            f"POLYMARKET_SIGNATURE_TYPE={sig} is not one of 0 (EOA), 1 (email/Magic "
-            "proxy), 2 (Gnosis Safe), 3 (deposit wallet / ERC-1271)"
+            f"POLYMARKET_SIGNATURE_TYPE={sig} is not {METAMASK_SIGNATURE_TYPE} "
+            "(MetaMask) — run tools/live_detect_wallet.py"
         )
-    elif sig in (1, 2, 3) and not fund:
+    if not fund:
         problems.append(
-            f"POLYMARKET_FUNDER is required for signature_type={sig} (proxy/deposit "
-            "wallet): without it every order is signed with the EOA as maker and "
-            "the CLOB rejects it"
+            "POLYMARKET_FUNDER (your Polymarket wallet address) is not set — run "
+            "tools/live_detect_wallet.py"
         )
+    return problems
+
+
+def assert_live_boot_allowed(
+    private_key: str | None = None,
+    funder: str | None = None,
+    signature_type: int | None = None,
+) -> None:
+    """Refuse live boot unless the operator config is complete AND coherent.
+
+    Reads ``config.POLYMARKET_*`` at call time
+    (not import time) so operators and tests can adjust config. Also refuses
+    when any risk-limit env var failed to parse (config.CONFIG_PARSE_ERRORS):
+    a typo in a risk limit must never silently degrade to looser defaults.
+    """
+    problems = live_boot_problems(private_key, funder, signature_type)
     if problems:
         raise LiveBootRefused(
             "Live mode boot REFUSED: " + " and ".join(problems) + ". "
@@ -283,7 +291,7 @@ class LiveExecutor:
         self,
         private_key: str,
         funder: str = "",
-        signature_type: int = 1,
+        signature_type: int = METAMASK_SIGNATURE_TYPE,
         *,
         host: str | None = None,
         chain_id: int | None = None,
@@ -326,11 +334,12 @@ class LiveExecutor:
         )
         # is_live=True → the gate halts on the live (real-money) leg (#76).
         self.gate = RiskGate(gate_cfg, is_live=True)
-        self.exit_fill_timeout_seconds = (
-            exit_fill_timeout_seconds
-            if exit_fill_timeout_seconds is not None
-            else _config.LIVE_EXIT_FILL_TIMEOUT_SECONDS
-        )
+        # An explicit constructor value (tests; a caller that wants a fixed
+        # timeout) always wins. Otherwise this tracks the dashboard-editable
+        # ``live_exit_fill_timeout_seconds`` knob (#206) via the shared gate,
+        # which is re-read every tick — so unset construction reflects operator
+        # changes without a restart, same as the gate's other risk knobs.
+        self._exit_fill_timeout_override = exit_fill_timeout_seconds
 
         self._client = client
         self._started = client is not None
@@ -390,15 +399,18 @@ class LiveExecutor:
         except Exception as e:  # noqa: BLE001
             log.warning("live_executor.allowance_refresh_failed", error=str(e))
         await self.gate.load()
+        # Pick up any operator-set dashboard knobs (#206) immediately at boot,
+        # rather than waiting for the paper loop's first per-tick refresh.
+        await self.gate.refresh_runtime_limits()
         await self._reconcile_account()
         log.info(
             "live_executor.started",
             host=self._host,
             signature_type=self._signature_type,
             funder_set=bool(self._funder),
-            max_trade_usd=self.gate.cfg.max_trade_usd,
-            daily_loss_halt_usd=self.gate.cfg.daily_loss_halt_usd,
-            bankroll_cap_usd=self.gate.cfg.bankroll_cap_usd,
+            max_trade_usd=self.gate.effective_max_trade_usd,
+            daily_loss_halt_usd=self.gate.effective_daily_loss_halt_usd,
+            bankroll_cap_usd=self.gate.effective_bankroll_cap_usd,
             daily_realized_pnl=round(self.gate.daily_realized_pnl, 4),
             daily_buy_notional=round(self.gate.daily_buy_notional, 4),
             adopted_position=self._position_open,
@@ -609,19 +621,26 @@ class LiveExecutor:
 
     @property
     def max_trade_usd(self) -> float:
-        return self.gate.cfg.max_trade_usd
+        return self.gate.effective_max_trade_usd
 
     @property
     def daily_loss_halt_usd(self) -> float:
-        return self.gate.cfg.daily_loss_halt_usd
+        return self.gate.effective_daily_loss_halt_usd
 
     @property
     def bankroll_cap_usd(self) -> float | None:
-        return self.gate.cfg.bankroll_cap_usd
+        cap = self.gate.effective_bankroll_cap_usd
+        return cap if cap and cap > 0 else None
 
     @property
     def max_entry_slippage(self) -> float:
-        return self.gate.cfg.max_entry_slippage
+        return self.gate.effective_max_entry_slippage
+
+    @property
+    def exit_fill_timeout_seconds(self) -> float:
+        if self._exit_fill_timeout_override is not None:
+            return self._exit_fill_timeout_override
+        return self.gate.effective_exit_fill_timeout_seconds
 
     @property
     def kill_switch_path(self) -> Path:

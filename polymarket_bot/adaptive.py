@@ -18,8 +18,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import config as _config
 from db import connect, get_config, notify, set_config
+from polymarket_bot import runtime_knobs as _knobs
 from logging_setup import get_logger
 
 log = get_logger("adaptive")
@@ -122,15 +122,15 @@ async def evaluate_and_maybe_pause() -> tuple[bool, str]:
     paused, reason = await is_paused()
     if paused:
         return True, reason
-    if not _config.AUTO_PAUSE_ENABLED:
+    if not await _knobs.get("auto_pause_enabled"):
         return False, "auto-pause disabled"
 
     since = await _edge_window_since()
     perf = await rolling_performance(
-        _config.AUTO_PAUSE_WINDOW, _config.EXIT_STYLE, since=since
+        await _knobs.get("auto_pause_window"), await _knobs.get("exit_style"), since=since
     )
     pause, reason = should_pause(
-        perf, _config.AUTO_PAUSE_MIN_TRADES, _config.AUTO_PAUSE_MIN_ROI
+        perf, await _knobs.get("auto_pause_min_trades"), await _knobs.get("auto_pause_min_roi")
     )
     if pause:
         await set_config(_PAUSE_KEY, "1")

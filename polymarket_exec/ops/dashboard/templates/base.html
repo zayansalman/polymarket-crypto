@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Polymarket Crypto EMS{% endblock %}</title>
+  <meta name="dashboard-token" content="{{ dashboard_token }}">
   <link rel="stylesheet" href="/static/style.css">
   {% block extra_head %}{% endblock %}
 </head>
@@ -17,6 +18,7 @@
           <button class="mode-opt paper {{ 'active' if mode == 'paper' else '' }}"
                   onclick="setMode('paper')">PAPER</button>
           <button class="mode-opt live {{ 'active' if mode == 'live' else '' }}"
+                  data-armed="{{ '1' if live_armed else '0' }}"
                   title="{{ live_hint }}" onclick="setMode('live')">LIVE</button>
         </div>
         <div class="sse-indicator" title="Live connection">

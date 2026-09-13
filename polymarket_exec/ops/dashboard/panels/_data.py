@@ -154,27 +154,6 @@ async def recent_blocked(limit: int = 5) -> list[dict[str, Any]]:
             return [dict(r) for r in await cur.fetchall()]
 
 
-async def today_submitted_summary() -> tuple[int, float]:
-    """Count + summed notional of ENTRY orders that reached the network today.
-
-    'SUBMITTED' is the journal status for orders that passed every risk gate
-    and were posted to the CLOB (whether or not they fully filled). Returned
-    so the guardrails panel can show 'N entries · $X submitted' alongside the
-    persisted daily_buy_notional spend counter (which only counts matched fills).
-    """
-    async with connect() as db:
-        async with db.execute(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0.0) AS total "
-            "FROM live_orders "
-            "WHERE intent='ENTRY' AND status='SUBMITTED' "
-            "AND date(created_at)=date('now')"
-        ) as cur:
-            row = await cur.fetchone()
-    if row is None:
-        return 0, 0.0
-    return int(row["n"] or 0), float(row["total"] or 0.0)
-
-
 async def daily_positions(state: str | None = None) -> list[dict[str, Any]]:
     """Daily altcoin scanner rows (issue #185), newest first.
 

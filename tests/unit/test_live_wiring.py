@@ -318,7 +318,6 @@ async def test_live_loop_refuses_without_gates(
 ) -> None:
     monkeypatch.setattr(_config, "BOT_MODE", "live")
     monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "")
-    monkeypatch.setattr(_config, "LIVE_CONFIRM", "")
 
     await paper.run_paper_loop(threading.Event())
 
@@ -335,7 +334,7 @@ async def test_controller_start_refuses_live_without_gates(
 ) -> None:
     monkeypatch.setattr(_config, "BOT_MODE", "live")
     monkeypatch.setattr(_config, "POLYMARKET_PRIVATE_KEY", "")
-    monkeypatch.setattr(_config, "LIVE_CONFIRM", "")
+    monkeypatch.setattr(controller, "_live_consent", True)  # operator clicked LIVE
     runner = MagicMock()
     monkeypatch.setattr(controller, "_ensure_runner_started", runner)
 
@@ -343,7 +342,7 @@ async def test_controller_start_refuses_live_without_gates(
 
     runner.assert_not_called()  # nothing starts — no silent paper fallback
     assert status.state == "stopped"
-    assert "REFUSED" in status.detail
+    assert "POLYMARKET_PRIVATE_KEY" in status.detail
 
 
 @pytest.mark.asyncio

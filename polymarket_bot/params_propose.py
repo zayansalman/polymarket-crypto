@@ -15,6 +15,7 @@ Output: prints the current-vs-recommended delta, persists the proposal.
 from __future__ import annotations
 
 import argparse
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def main() -> int:
 
     rec = report["recommended"]
     current = report["current"]
-    active = load_active()
+    active = asyncio.run(load_active())
 
     proposed = ActiveParams(
         entry_edge_min=float(rec["params"]["entry_edge_min"]),
@@ -56,7 +57,7 @@ def main() -> int:
         },
     )
 
-    print("=== current (env defaults / last applied) ===")
+    print("=== current (dashboard/runtime knobs) ===")
     print(f"  entry_edge_min       = {active.entry_edge_min:.3f}")
     print(f"  min_confidence       = {active.min_confidence:.2f}")
     print(f"  min_remaining_seconds= {active.min_remaining_seconds}")

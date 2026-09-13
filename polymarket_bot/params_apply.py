@@ -1,23 +1,50 @@
-"""Layer 2 — operator-gated promotion of proposed -> active strategy params.
+"""Layer 2 — operator-gated promotion of a proposed strategy param set (#206).
 
 Reads ``$DATA_DIR/params_proposed.json`` (written by ``params_propose``) and,
-when ``--confirm`` is passed, writes the same set to
-``$DATA_DIR/params_active.json``. The live bot reloads from active per window
-roll. Refuses without ``--confirm`` so accidental invocation is impossible.
+when ``--confirm`` is passed, writes each value through
+``polymarket_bot.runtime_knobs`` — the same store the dashboard's Settings
+tab writes to. The live bot re-reads these every tick; no restart. Refuses
+without ``--confirm`` so accidental invocation is impossible.
 
 Run::
 
     python -m polymarket_bot.params_apply           # prints the proposal, does NOT apply
-    python -m polymarket_bot.params_apply --confirm # applies; live bot picks it up
+    python -m polymarket_bot.params_apply --confirm # applies; live bot picks it up next tick
 """
 
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
-from dataclasses import replace
+import asyncio
 
-from polymarket_bot.params import load_active, load_proposed, save_active
+from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot.params import load_proposed
+
+_KNOB_NAMES = (
+    "paper_entry_edge_min",
+    "paper_entry_edge_max",
+    "paper_min_confidence",
+    "paper_entry_min_remaining_seconds",
+    "paper_max_entry_price",
+    "paper_min_entry_price",
+)
+_FIELD_FOR_KNOB = {
+    "paper_entry_edge_min": "entry_edge_min",
+    "paper_entry_edge_max": "entry_edge_max",
+    "paper_min_confidence": "min_confidence",
+    "paper_entry_min_remaining_seconds": "min_remaining_seconds",
+    "paper_max_entry_price": "max_entry_price",
+    "paper_min_entry_price": "min_entry_price",
+}
+
+
+async def _current_values() -> dict[str, object]:
+    return {name: await _knobs.get(name) for name in _KNOB_NAMES}
+
+
+async def _apply(proposed) -> None:
+    for name in _KNOB_NAMES:
+        await _knobs.set(name, getattr(proposed, _FIELD_FOR_KNOB[name]))
 
 
 def main() -> int:
@@ -34,14 +61,13 @@ def main() -> int:
         print("no proposal found at params_proposed.json — run params_propose first.")
         return 2
 
-    active = load_active()
+    active = asyncio.run(_current_values())
     print("=== currently active ===")
     print(
-        f"  entry_edge_min={active.entry_edge_min:.3f} "
-        f"min_confidence={active.min_confidence:.2f} "
-        f"min_remaining_seconds={active.min_remaining_seconds} "
-        f"max_entry_price={active.max_entry_price:.2f} "
-        f"source={active.source}"
+        f"  entry_edge_min={active['paper_entry_edge_min']:.3f} "
+        f"min_confidence={active['paper_min_confidence']:.2f} "
+        f"min_remaining_seconds={active['paper_entry_min_remaining_seconds']} "
+        f"max_entry_price={active['paper_max_entry_price']:.2f}"
     )
     print()
     print("=== proposed (pending) ===")
@@ -65,15 +91,10 @@ def main() -> int:
         print("Refusing to apply without --confirm. Re-run with --confirm to promote.")
         return 1
 
-    to_persist = replace(
-        proposed,
-        source="applied",
-        applied_at=datetime.now(UTC).isoformat(timespec="seconds"),
-    )
-    path = save_active(to_persist)
+    asyncio.run(_apply(proposed))
     print()
-    print(f"PROMOTED -> {path}")
-    print("Live bot reads from this file at the next window roll.")
+    print("PROMOTED -> runtime_knobs (SQLite)")
+    print("Live bot picks this up on its next tick — no restart.")
     return 0
 
 

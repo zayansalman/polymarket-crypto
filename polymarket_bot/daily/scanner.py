@@ -17,6 +17,7 @@ import httpx
 
 import config as _config
 from logging_setup import get_logger
+from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot import strategy as _strategy
 from polymarket_bot.daily import ledger as _ledger
 from polymarket_bot.daily import market as _market
@@ -26,13 +27,14 @@ from polymarket_bot.daily.types import DailyMarketView, DailySignal
 log = get_logger("daily_scanner")
 
 
-def _params() -> _strategy.StrategyParams:
+async def _params() -> _strategy.StrategyParams:
     # min == max: a fixed $ size, not confidence-scaled (operator asked for
     # flat $10 positions, unlike the BTC loop's confidence-weighted $1-$5).
+    trade_usd = await _knobs.get("daily_trade_usd")
     return _strategy.StrategyParams(
-        min_trade_usd=_config.DAILY_TRADE_USD,
-        max_trade_usd=_config.DAILY_TRADE_USD,
-        entry_edge_min=_config.DAILY_ENTRY_EDGE_MIN,
+        min_trade_usd=trade_usd,
+        max_trade_usd=trade_usd,
+        entry_edge_min=await _knobs.get("daily_entry_edge_min"),
         min_confidence=0.0,
         entry_min_remaining_seconds=_config.DAILY_ENTRY_MIN_REMAINING_SECONDS,
     )
@@ -46,7 +48,7 @@ async def _scored_view(
         log.warning("daily_scan.no_view", asset=short_asset)
         return None
     closes = await _market.fetch_daily_closes(
-        client, view.binance_symbol, days=_config.DAILY_VOL_LOOKBACK_DAYS
+        client, view.binance_symbol, days=await _knobs.get("daily_vol_lookback_days")
     )
     if len(closes) < 5:
         log.warning("daily_scan.insufficient_history", asset=short_asset, n=len(closes))
@@ -54,13 +56,13 @@ async def _scored_view(
     sigma, drift = _signal.daily_sigma_and_drift_per_second(closes)
     fair_up = _signal.fair_up_probability(view.spot, view.reference, sigma, view.remaining_seconds)
     view = dataclasses.replace(view, fair_up=fair_up, sigma_per_second=sigma, drift_per_second=drift)
-    sig = _signal.score(view, _params())
+    sig = _signal.score(view, await _params())
     if sig is None:
         return None
     return view, sig
 
 
-def _shares_for(sig: DailySignal, view: DailyMarketView) -> float:
+async def _shares_for(sig: DailySignal, view: DailyMarketView) -> float:
     """Shares for a flat $ notional, floored to the venue's order minimum.
 
     DOGE/BNB carry materially thinner books than SOL/XRP/ETH (confirmed
@@ -70,7 +72,7 @@ def _shares_for(sig: DailySignal, view: DailyMarketView) -> float:
     principle as the BTC loop's #85/#87 share-floor fix, applied here to a
     liquidity CEILING instead of a minimum-order FLOOR).
     """
-    raw_shares = _config.DAILY_TRADE_USD / sig.entry_price
+    raw_shares = await _knobs.get("daily_trade_usd") / sig.entry_price
     shares = max(raw_shares, view.order_min_size)
     if view.liquidity_usd is not None and view.liquidity_usd > 0:
         liquidity_shares = view.liquidity_usd / sig.entry_price
@@ -96,7 +98,7 @@ async def scan_once(client: httpx.AsyncClient) -> None:
     best = _signal.rank([sig for _view, sig in scored])
     if best is not None:
         view = next(v for v, s in scored if s is best)
-        shares = _shares_for(best, view)
+        shares = await _shares_for(best, view)
         inserted = await _ledger.record_signal(
             created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             window_slug=view.window_slug,
@@ -184,4 +186,4 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
                 await scan_once(client)
             except Exception:  # noqa: BLE001
                 log.exception("daily_scan.tick_failed")
-            await asyncio.sleep(_config.DAILY_SCAN_INTERVAL_SECONDS)
+            await asyncio.sleep(await _knobs.get("daily_scan_interval_seconds"))

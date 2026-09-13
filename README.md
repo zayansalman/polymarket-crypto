@@ -68,7 +68,7 @@ DB_PATH=/tmp/t.db ./.venv/bin/python -m pytest tests/ -q   # DB-isolated
 ```
 
 Dashboard defaults to paper trading. Operator presses ▶ Start / Stop. Live trading is
-built, multi-gated (mode + confirm string + key + coherent wallet), and off by
+built, multi-gated (operator clicks LIVE in the dashboard + key + coherent wallet), and off by
 default — the operator, never an agent, arms and launches it. See
 **[docs/OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md)**.
 
