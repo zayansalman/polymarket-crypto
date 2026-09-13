@@ -40,22 +40,21 @@ class TestFullPageLoad:
 
     def test_ems_panels_present(self, client: TestClient):
         text = client.get("/").text
-        for panel in ("STRATEGY", "LIVE MARKET", "PERFORMANCE / ALPHA",
-                      "TCA", "TRADE BLOTTER", "ems-grid", "ribbon"):
+        for panel in ("DECISION ENGINE", "LIVE MARKET", "PERFORMANCE / ALPHA",
+                      "TCA", "TRADE BLOTTER", "execution-grid", "ribbon"):
             assert panel in text
 
     def test_ems_content_container(self, client: TestClient):
         text = client.get("/").text
-        assert "ems-content" in text
+        assert "execution-content" in text
         assert "activity-content" in text
         assert "backtest-content" in text
 
-    def test_strategy_panel_shows_params(self, client: TestClient):
+    def test_strategy_panel_is_gone(self, client: TestClient):
+        # The v0 Strategy card was archived (2026-09-13).
         text = client.get("/").text
-        # Strategy panel surfaces the model + bands.
-        assert "Pricing" in text
-        assert "Edge band" in text
-        assert "Settlement" in text
+        assert "Edge band" not in text
+        assert "AUTO-PAUSE" not in text.upper().replace("AUTO-PAUSED", "")
 
 
 class TestButtonInteractivity:
@@ -94,7 +93,7 @@ class TestStaticAssets:
     def test_css_complete(self, client: TestClient):
         css = client.get("/static/style.css").text
         selectors = [
-            ":root", "body", ".topbar", ".ribbon", ".ems-grid", ".card",
+            ":root", "body", ".topbar", ".ribbon", ".execution-grid", ".card",
             ".card-h", ".stat", ".pill", ".gauge", ".book", ".spark",
             ".calib", ".blotter", ".tag", ".btn", ".sse-indicator", ".toast",
         ]
@@ -128,7 +127,12 @@ class TestVisualContract:
         import re
         radii = re.findall(r"border-radius:\s*([^;]+);", css)
         assert all(r.strip() in ("0", "0px", "0 0 0 0") for r in radii), radii
-        assert "box-shadow" not in css
+        # The only shadow allowed is the header market selector's open-position
+        # glow (and its pulse keyframes) — a deliberate status signal.
+        shadow_lines = [ln for ln in css.splitlines() if "box-shadow" in ln]
+        assert all(
+            ln.startswith((".mkt-btn.glow", "@keyframes mkt-pulse")) for ln in shadow_lines
+        ), shadow_lines
 
     def test_monospace_numbers(self, client: TestClient):
         assert "--font-mono:" in client.get("/static/style.css").text

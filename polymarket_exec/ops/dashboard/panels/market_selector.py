@@ -15,7 +15,7 @@ from polymarket_bot import market_selection as ms
 
 from . import _shared as s
 
-_UPDOWN_SLUG = re.compile(r"^([a-z]+)-updown-(5m|15m|1h|4h)-\d+$")
+_UPDOWN_SLUG = re.compile(r"^([a-z]+)-updown-(5m|15m|1h)-\d+$")
 
 # Simplified inline coin marks (no network fetch; 16px, brand colours).
 _LOGOS: dict[str, str] = {

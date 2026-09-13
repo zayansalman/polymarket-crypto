@@ -7,17 +7,13 @@ transform — no DB access here (values are loaded in ``ems.py`` and passed in).
 """
 from __future__ import annotations
 
-from html import escape
-
 from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
-from polymarket_bot.shadow import runner as _shadow_runner
 
 
 def render(
     *,
     trade_shares_current: float | None,
     current_price: float | None,
-    active_model: str = "pricing_v0",
 ) -> str:
     """Render the CONTROLS card.
 
@@ -36,12 +32,6 @@ def render(
     lo, hi = shares * 0.50, shares * 1.00
     # Infographic: one pip per venue-minimum share, with a label.
     pips = "".join("<span class='shp'></span>" for _ in range(int(minsh)))
-    # Operator-selectable models (the full logged roster; see
-    # runner.SELECTABLE_MODELS). Always include the active model so a
-    # currently-selected id is never orphaned even if one is hidden later.
-    selectable = list(_shadow_runner.SELECTABLE_MODELS)
-    if active_model not in selectable:
-        selectable = [active_model, *selectable]
     return (
         "<section class='card'>"
         "<div class='card-h'>CONTROLS<span class='win'>runtime · no restart</span></div>"
@@ -66,28 +56,6 @@ def render(
         "<div class='gr-toggle-hint'>"
         "you set the share count · every order ≥ 5 shares (venue minimum) · "
         "applies to paper + live"
-        "</div>"
-        # --- Strategy-model selector (live-switchable) ----------------------
-        "<div class='card-h' style='margin-top:12px'>STRATEGY MODEL"
-        "<span class='win'>live-switchable</span></div>"
-        "<div class='de-kv'>"
-        f"<div><span>Active</span><b class='mono'>"
-        f"{escape(_shadow_runner.MODEL_LABELS.get(active_model, active_model))}</b></div>"
-        f"<div><span>What</span><b class='mono dim'>"
-        f"{escape(_shadow_runner.MODEL_DESCRIPTIONS.get(active_model, ''))}</b></div>"
-        "</div>"
-        "<div class='ctl-row'>"
-        "<select id='ctl-model' class='ctl-input' aria-label='Active strategy model'>"
-        + "".join(
-            f"<option value='{mid}'{' selected' if mid == active_model else ''}>"
-            f"{escape(_shadow_runner.MODEL_LABELS.get(mid, mid))}</option>"
-            for mid in selectable
-        )
-        + "</select>"
-        "<button class='gr-btn btn-ok' onclick='setActiveModel()'>Apply</button>"
-        "</div>"
-        "<div class='gr-toggle-hint'>"
-        "switches which model the bot actually trades · paper + live · no restart"
         "</div>"
         "</section>"
     )

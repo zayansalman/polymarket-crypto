@@ -36,7 +36,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: an unpinned install picked up ruff 0.16's wider default rule set
+        # and turned CI red with hundreds of new findings overnight.
+        run: pip install ruff==0.15.12
 
       - name: Ruff check
         run: ruff check polymarket_exec/ polymarket_bot/ tests/ tools/

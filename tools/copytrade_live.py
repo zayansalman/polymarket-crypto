@@ -7,8 +7,7 @@ operator does (``AGENTS.md``).
 Gates, all mandatory:
 
 1. ``assert_live_boot_allowed()`` — the repo's existing live gate: a private key,
-   ``LIVE_CONFIRM=YES_I_UNDERSTAND``, a coherent signature type, and a funder
-   address for proxy wallets.
+   a coherent signature type, and a funder address for proxy wallets.
 2. ``COPY_LIVE_CONFIRM=YES_I_UNDERSTAND`` — a **separate** phrase, so arming the
    BTC strategy bot never silently arms the copier. They are different risks and
    must be consented to independently.
@@ -51,7 +50,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from polymarket_bot.pairarb.feed import FeedUnavailable, open_feed
 from polymarket_bot.pairarb.mirror import MIN_ORDER_SHARES, price_the_copy
 
 CLOB = "https://clob.polymarket.com"
@@ -151,7 +149,6 @@ def preflight(bankroll: float, assets: list[str]) -> int:
         ("POLYGON_RPC_WSS", "wss://polygon-mainnet.g.alchemy.com/v2/KEY (free)"),
         ("POLYMARKET_PRIVATE_KEY", "your signer key (never shown)"),
         ("POLYMARKET_FUNDER", "proxy wallet address"),
-        ("LIVE_CONFIRM", COPY_CONFIRM_PHRASE),
         ("COPY_LIVE_CONFIRM", COPY_CONFIRM_PHRASE),
     ):
         val = os.getenv(var, "")

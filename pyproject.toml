@@ -32,7 +32,7 @@ dependencies = [
 # match requirements.txt.
 test = ["pytest>=8.0", "pytest-asyncio>=0.24", "polars>=1.17", "huggingface-hub>=0.26", "numpy>=1.26"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
-# One-time live onboarding only (tools/live_setup.py): deposit-wallet deploy.
+# One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
 # Day-to-day trading uses py-clob-client-v2, a core dependency.
 setup = ["polymarket-client"]
 
@@ -55,6 +55,11 @@ target-version = "py311"
 "tests/unit/test_dashboard.py" = ["E402"]
 "tools/backtest_btc_strategy.py" = ["E402"]
 "tools/demo_snapshot.py" = ["E402"]
+"tools/copytrade_dashboard.py" = ["E402"]
+"tools/copytrade_live.py" = ["E402"]
+"tools/copytrade_onchain.py" = ["E402"]
+"tools/copytrade_shadow.py" = ["E402"]
+"tools/pairarb_shadow.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

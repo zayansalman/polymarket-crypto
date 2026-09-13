@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-The question was: *can data from other-timeframe Polymarket BTC markets (15m/4h) improve our
+The question was: *can data from other-timeframe Polymarket BTC markets (15m/1h) improve our
 5m positions, or support a multi-book strategy?* After a deep, adversarially-verified
 investigation the answer is **no — and the premise doesn't hold yet**: the 5m strategy has
 **no statistically demonstrated live edge** to amplify, and every lever that might add one is
@@ -65,7 +65,7 @@ a **sharp risk to watch in its shadow validation**, not a veto:
 
 ## What NOT to do
 
-No multi-book recorder, no 15m/4h connectors, no drift-in-fair-value term, no recalibration layer, no
+No multi-book recorder, no 15m/1h connectors, no drift-in-fair-value term, no recalibration layer, no
 night-hour gate. The strategy is at the *is-there-any-edge* stage, not the *amplify-the-edge* stage; the
 only forward paths are (a) accumulate far more live data to detect/rule-out a sub-$0.40/trade edge, or
 (b) source a structurally different signal **outside this dataset**.

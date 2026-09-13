@@ -17,12 +17,12 @@ import config as _config
 from . import _shared as s
 
 
-def _mechanism_blurb() -> str:
+def _mechanism_blurb(*, scan_interval_seconds: float, trade_usd: float) -> str:
     assets = ", ".join(a.upper() for a in _config.DAILY_ASSETS)
     return (
         "Scans Polymarket's daily (24h) Up/Down market across "
-        f"{escape(assets)} roughly every {int(_config.DAILY_SCAN_INTERVAL_SECONDS)}s, "
-        f"sizes a flat ${_config.DAILY_TRADE_USD:.0f} paper position on whichever "
+        f"{escape(assets)} roughly every {int(scan_interval_seconds)}s, "
+        f"sizes a flat ${trade_usd:.0f} paper position on whichever "
         "asset currently shows the strongest edge versus a realized-volatility "
         "fair-value model. Paper only — no live gate exists for this strategy."
     )
@@ -46,6 +46,8 @@ def render(
     *,
     open_positions: list[dict[str, Any]],
     perf: dict[str, Any],
+    scan_interval_seconds: float,
+    trade_usd: float,
 ) -> str:
     if open_positions:
         open_html = "<div class='de-kv'>" + "".join(_open_row(r) for r in open_positions) + "</div>"
@@ -68,7 +70,8 @@ def render(
 
     return (
         "<section class='card'><div class='card-h'>DAILY ALTCOIN SCANNER</div>"
-        f"<div class='dim' style='margin-bottom:8px'>{_mechanism_blurb()}</div>"
+        f"<div class='dim' style='margin-bottom:8px'>"
+        f"{_mechanism_blurb(scan_interval_seconds=scan_interval_seconds, trade_usd=trade_usd)}</div>"
         f"{open_html}"
         f"{equity_html}"
         f"{stats_html}"

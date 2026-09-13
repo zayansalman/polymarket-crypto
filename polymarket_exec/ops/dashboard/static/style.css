@@ -75,7 +75,6 @@ body {
 .mode-opt:hover { color: var(--text); }
 .mode-opt.active.paper { background: var(--bg-alt); color: var(--muted); }
 .mode-opt.active.live { background: rgba(255,93,108,.16); color: var(--neg); }
-.mode-opt:disabled { opacity: .5; cursor: not-allowed; }
 
 .btn {
   font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.4px;
@@ -101,7 +100,7 @@ body {
   border: 1px solid var(--border-strong); border-radius: 0; padding: 12px 16px; margin-bottom: 14px;
 }
 .ribbon-id { font-family: var(--font-mono); font-size: 13px; letter-spacing: 1px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ribbon-stats { display: flex; align-items: stretch; gap: 22px; flex-wrap: wrap; }
+.ribbon-stats { margin-left: auto; display: flex; align-items: stretch; gap: 22px; flex-wrap: wrap; }
 
 .pill {
   font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: .6px;
@@ -118,6 +117,8 @@ body {
 .pill.gr-pill-btn:hover { filter: brightness(1.18); }
 
 .feeds { display: flex; gap: 6px; align-items: center; }
+/* loop-heartbeat chip gets its own box, apart from the upstream feed chips */
+.tick-box { align-self: center; padding: 3px; border: 1px solid var(--border-strong); }
 .feed { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .5px; padding: 2px 6px; border-radius: 0; }
 .feed.on { color: var(--pos); background: rgba(43,212,125,.1); }
 .feed.warn { color: var(--warn); background: rgba(255,180,84,.1); }
@@ -180,7 +181,7 @@ body {
 
 /* ── decision engine ── */
 .de-grid {
-  display: grid; grid-template-columns: 1.05fr 1.05fr 1fr; gap: 14px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
   margin-bottom: 12px;
 }
 .de-col {
@@ -198,15 +199,6 @@ body {
 }
 .de-kv span { color: var(--label); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
 .de-kv b { font-size: 11.5px; font-weight: 500; }
-.de-gates { display: flex; flex-direction: column; gap: 4px; }
-.de-gate {
-  font-family: var(--font-mono); font-size: 11px; padding: 3px 0;
-  display: flex; align-items: baseline; gap: 8px;
-}
-.de-gate span { display: inline-block; min-width: 12px; font-weight: 700; }
-.de-gate.up span { color: var(--pos); }
-.de-gate.down span { color: var(--neg); }
-.de-gate em { font-style: normal; font-size: 10px; }
 .de-decision {
   display: flex; align-items: baseline; gap: 10px;
   border: 1px solid var(--border-strong);
@@ -231,18 +223,7 @@ body {
   .de-grid { grid-template-columns: 1fr; }
 }
 
-/* ── risk guardrails ── */
-.gr-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
-}
-.gr-tail { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 10.5px; }
-.gr-tail td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
-.gr-tail tr:last-child td { border-bottom: none; }
-.gr-tail tbody tr:nth-child(even) { background: var(--bg-alt); }
-.gr-tail-empty {
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--label);
-  padding: 8px 4px; font-style: italic;
-}
+/* ── shared operator buttons ── */
 .gr-toggle { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .gr-btn {
   font-family: var(--font-mono); font-size: 11px; cursor: pointer;
@@ -269,6 +250,19 @@ body {
 .ctl-input::-webkit-outer-spin-button,
 .ctl-input::-webkit-inner-spin-button { opacity: 1; }
 .ctl-unit { font-family: var(--font-mono); font-size: 11px; color: var(--label); }
+
+/* ── settings panel (#206: every .env knob, dashboard-editable) ── */
+.settings-group { margin-bottom: 16px; }
+.settings-group:last-child { margin-bottom: 0; }
+.settings-group-h {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--label); margin-bottom: 6px; border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.settings-label {
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg);
+  min-width: 220px; flex: 1;
+}
 /* ── share-minimum infographic (#89) ── */
 .share-min { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
 .share-pips { display: flex; gap: 3px; }
@@ -277,13 +271,6 @@ body {
   background: var(--pos); opacity: 0.8;
 }
 .share-min-lbl { font-family: var(--font-mono); font-size: 10px; color: var(--label); }
-@media (max-width: 1100px) {
-  .gr-grid { grid-template-columns: repeat(2, 1fr); }
-}
-@media (max-width: 640px) {
-  .gr-grid { grid-template-columns: 1fr; }
-}
-
 /* ── performance ── */
 .equity { margin-bottom: 12px; }
 .spark { width: 100%; height: 84px; display: block; }
@@ -340,7 +327,7 @@ body {
 
 /* ── toasts ── */
 .toast-container { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
-.toast { padding: 10px 14px; border-radius: 0; background: var(--bg); border: 1px solid var(--border-strong); font-size: 12px; animation: slidein .2s; }
+.toast { max-width: min(460px, calc(100vw - 36px)); padding: 10px 14px; border-radius: 0; background: var(--bg); border: 1px solid var(--border-strong); font-size: 12px; animation: slidein .2s; }
 .toast.success { border-color: rgba(43,212,125,.5); }
 .toast.error { border-color: rgba(255,84,112,.5); }
 .toast.info { border-color: var(--border-strong); }
@@ -379,3 +366,10 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .flash-pos, .flash-neg, .flash-warn { animation: none; }
 }
+
+/* Ribbon loss-halt control: typeable limit + Set / Reset */
+.halt-row { display: flex; align-items: center; gap: 4px; }
+.halt-input { width: 64px; padding: 3px 6px; font-size: 13px; }
+.halt-row .gr-btn { padding: 3px 8px; }
+.halt-status { font-family: var(--font-mono); font-weight: 700; }
+.halt-status.warn { color: var(--warn, #c98a3a); }

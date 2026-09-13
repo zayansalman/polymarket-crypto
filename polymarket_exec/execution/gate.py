@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from db import get_config, set_config  # type: ignore[import-untyped]
+from polymarket_bot import runtime_knobs as _knobs
 
 # ---------------------------------------------------------------------------
 # Persisted-state keys
@@ -170,6 +171,15 @@ class RiskGate:
         # Operator runtime trade size in SHARES (#89). None → fall back to the
         # dollar cap above. Refreshed every tick by ``refresh_runtime_limits``.
         self._runtime_trade_shares: float | None = None
+        # Dashboard-editable live-risk knobs (#206) — same refresh cadence and
+        # override-wins-else-cfg precedence as ``_runtime_max_trade_usd`` above,
+        # backed by the shared ``runtime_knobs`` registry. None → this gate's
+        # own ``cfg.X`` (so a GateConfig built with custom values, e.g. in
+        # tests, is respected until an operator override is actually set).
+        self._runtime_daily_loss_halt_usd: float | None = None
+        self._runtime_max_entry_slippage: float | None = None
+        self._runtime_bankroll_cap_usd: float | None = None
+        self._runtime_exit_fill_timeout_seconds: float | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -274,7 +284,7 @@ class RiskGate:
     def loss_halt_floor(self) -> float:
         """The PnL level at/below which the halt fires (#112): peak - limit.
         With peak 0 (never profitable) this is the old fixed -limit floor."""
-        return self.halt_peak - self.cfg.daily_loss_halt_usd
+        return self.halt_peak - self.effective_daily_loss_halt_usd
 
     @property
     def loss_halt_headroom(self) -> float:
@@ -302,6 +312,10 @@ class RiskGate:
         """
         self._runtime_max_trade_usd = await _read_positive(_RUNTIME_MAX_TRADE_KEY)
         self._runtime_trade_shares = await _read_positive(_RUNTIME_TRADE_SHARES_KEY)
+        self._runtime_daily_loss_halt_usd = await _knobs.get_override("live_daily_loss_halt_usd")
+        self._runtime_max_entry_slippage = await _knobs.get_override("live_max_entry_slippage")
+        self._runtime_bankroll_cap_usd = await _knobs.get_override("live_bankroll_cap_usd")
+        self._runtime_exit_fill_timeout_seconds = await _knobs.get_override("live_exit_fill_timeout_seconds")
 
     @property
     def runtime_max_trade_usd(self) -> float | None:
@@ -326,6 +340,38 @@ class RiskGate:
         if self._runtime_max_trade_usd is not None:
             return self._runtime_max_trade_usd
         return self.cfg.max_trade_usd
+
+    @property
+    def effective_daily_loss_halt_usd(self) -> float:
+        """Dashboard-editable daily loss-halt limit (#206). Falls back to this
+        gate's own ``cfg.daily_loss_halt_usd`` until an operator sets
+        ``live_daily_loss_halt_usd`` from the Settings tab."""
+        if self._runtime_daily_loss_halt_usd is not None:
+            return self._runtime_daily_loss_halt_usd
+        return self.cfg.daily_loss_halt_usd
+
+    @property
+    def effective_max_entry_slippage(self) -> float:
+        """Dashboard-editable entry-slippage guard (#206)."""
+        if self._runtime_max_entry_slippage is not None:
+            return self._runtime_max_entry_slippage
+        return self.cfg.max_entry_slippage
+
+    @property
+    def effective_bankroll_cap_usd(self) -> float | None:
+        """Dashboard-editable daily bankroll cap (#206). 0/≤0 means disabled,
+        matching the existing ``GateConfig.bankroll_cap_usd`` convention."""
+        if self._runtime_bankroll_cap_usd is not None:
+            return self._runtime_bankroll_cap_usd
+        return self.cfg.bankroll_cap_usd
+
+    @property
+    def effective_exit_fill_timeout_seconds(self) -> float:
+        """Dashboard-editable exit-fill timeout (#206), consumed by the live
+        executor's exit-order retry loop."""
+        if self._runtime_exit_fill_timeout_seconds is not None:
+            return self._runtime_exit_fill_timeout_seconds
+        return _knobs.KNOBS["live_exit_fill_timeout_seconds"].default
 
     # ------------------------------------------------------------------
     # Counters — fed by BOTH paper closes and live closes
@@ -410,7 +456,7 @@ class RiskGate:
             return (
                 f"daily loss halt: {leg} realized {self.halt_pnl:+.2f} USD at/below "
                 f"trailing floor {self.loss_halt_floor:+.2f} "
-                f"(peak {self.halt_peak:+.2f} − {self.cfg.daily_loss_halt_usd:.2f} limit)"
+                f"(peak {self.halt_peak:+.2f} − {self.effective_daily_loss_halt_usd:.2f} limit)"
             )
         if req.position_open or req.entry_order_resting:
             return "an open position/order already exists (max 1)"
@@ -422,26 +468,28 @@ class RiskGate:
                 f"per-trade cap: {req.notional_usd:.2f} USD exceeds "
                 f"{cap:.2f} USD"
             )
+        cap_usd = self.effective_bankroll_cap_usd
         if (
-            self.cfg.bankroll_cap_usd is not None
-            and self.cfg.bankroll_cap_usd > 0
-            and self._daily_buy_notional + req.notional_usd > self.cfg.bankroll_cap_usd
+            cap_usd is not None
+            and cap_usd > 0
+            and self._daily_buy_notional + req.notional_usd > cap_usd
         ):
             return (
                 f"daily bankroll cap: {self._daily_buy_notional:.2f} + "
                 f"{req.notional_usd:.2f} USD exceeds "
-                f"{self.cfg.bankroll_cap_usd:.2f} USD"
+                f"{cap_usd:.2f} USD"
             )
+        slippage_cap = self.effective_max_entry_slippage
         if (
             req.best_ask is not None
             and req.side_price is not None
             and req.side_price > 0
-            and req.best_ask - req.side_price > self.cfg.max_entry_slippage
+            and req.best_ask - req.side_price > slippage_cap
         ):
             return (
                 f"entry slippage guard: book ask {req.best_ask:.3f} is "
                 f"{req.best_ask - req.side_price:+.3f} above the signal price "
-                f"{req.side_price:.3f} (max {self.cfg.max_entry_slippage:.3f}); "
+                f"{req.side_price:.3f} (max {slippage_cap:.3f}); "
                 "the edge that justified this trade no longer exists"
             )
         return None

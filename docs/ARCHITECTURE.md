@@ -60,9 +60,9 @@ identically in both modes, with persisted daily counters. Paper is therefore a f
 preview of live — and the halts fired correctly in production three times, once ending a
 real-money session at −$8.10 exactly as specified.
 
-### Live is opt-in five times over
-Real orders require: `BOT_MODE=live` **and** the literal string
-`LIVE_CONFIRM=YES_I_UNDERSTAND` **and** a private key **and** a coherent wallet
+### Live is opt-in four times over
+Real orders require: the operator clicking **LIVE** in the dashboard (the consent — no
+env phrase) **and** a private key **and** a coherent wallet
 **and** a clean config parse (`CONFIG_PARSE_ERRORS` non-empty refuses live boot — a typo in
 a risk limit must never silently loosen it). A kill-switch file cancels and flattens.
 Missing gates refuse loudly; live never falls back to paper silently, and paper never
