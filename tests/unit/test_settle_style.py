@@ -441,3 +441,29 @@ async def test_five_minute_paths_ignore_hourly_rows(test_db, monkeypatch):
     await paper._close_due_positions(snap, client=MagicMock())
     settle.assert_not_called()  # the 5m loop never tries to settle an hourly row
     assert await paper._open_legacy_position_exists() is False
+
+
+@pytest.mark.asyncio
+async def test_hourly_row_does_not_hold_the_five_minute_slot(test_db, monkeypatch):
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", None)
+    snap = _snapshot()
+    async with paper.connect() as db:
+        await db.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, quote_source, strategy_style, strategy_id,"
+            " market_timeframe, window_start_ts)"
+            " VALUES (?, 'bitcoin-up-or-down-september-13-2026-3pm-et', 'Down', 'open',"
+            " 0.5, 2.5, 5.0, 'clob', 'settle', 'hourly_mean_reversion', '1h', 1789326000)",
+            (snap.created_at,),
+        )
+        await db.commit()
+    await paper._maybe_open_position(snap)  # the hourly row does not block a 5m entry
+    assert await paper._open_legacy_position_exists() is True
+    await paper._maybe_open_position(_snapshot(window_slug="btc-updown-5m-1781160300"))
+    async with paper.connect() as db:
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
+            " AND market_timeframe IS NULL"
+        ) as cur:
+            assert (await cur.fetchone())["n"] == 1  # the open 5m row holds the 5m slot
