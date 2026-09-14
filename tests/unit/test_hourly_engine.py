@@ -126,7 +126,7 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
 
 
 @pytest.mark.asyncio
-async def test_other_strategy_slot_does_not_block_but_own_slot_does(test_db, monkeypatch):
+async def test_other_strategy_slot_does_not_block(test_db, monkeypatch):
     async with _db.connect() as conn:
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
@@ -138,6 +138,15 @@ async def test_other_strategy_slot_does_not_block_but_own_slot_does(test_db, mon
     await _tick(monkeypatch, H + 30, _Venue())
     sids = sorted(p["strategy_id"] for p in await _positions() if p["state"] == "open")
     assert sids == ["hourly_mean_reversion", "kronos_btc_finetune"]
+
+
+@pytest.mark.asyncio
+async def test_hour_candle_not_closed_on_binance_keeps_position_and_record_open(test_db, monkeypatch):
+    venue = _Venue(hour_close=109.0)
+    await _tick(monkeypatch, H + 30, venue)
+    await _tick(monkeypatch, H + 3600 + 5, venue)  # local clock past H+1; Binance has no H+1 candle yet
+    assert (await _positions())[0]["state"] == "open"
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["settled_at"] is None
 
 
 @pytest.mark.asyncio
@@ -245,6 +254,20 @@ async def _insert_hourly(start: int, mode: str, side: str = "Down") -> None:
             (hm.slug_for(start), side, start, mode),
         )
         await conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_own_open_row_blocks_a_second_entry_in_paper_and_live(test_db, monkeypatch):
+    await _insert_hourly(H, "paper")
+    await _tick(monkeypatch, H + 30, _Venue())
+    assert len(await _positions()) == 1
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    await _insert_hourly(H, "live")
+    account = await _go_live(monkeypatch)
+    await _tick(monkeypatch, H + 40, _Venue())
+    slot = account.slots.get("hourly_mean_reversion")
+    assert slot is None or (slot.submit_entry.await_count == 0 and slot.resync_flat.await_count == 0)
+    assert len(await _positions()) == 2
 
 
 @pytest.mark.asyncio
