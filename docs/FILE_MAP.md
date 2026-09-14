@@ -99,6 +99,18 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `tools/copytrade_live.py` | cli | 0 | LIVE copy-trade executor — mirrors a target wallet with real funds (#182). |
 | `tools/copytrade_onchain.py` | cli | 0 | Real-time on-chain fill listener for a target wallet (#182). |
 | `tools/copytrade_shadow.py` | cli | 0 | Live copy-trade shadow — mirror a target wallet, priced honestly (#182). |
+| `tools/cryptotrader_lm/__init__.py` | pkg | 2 | CryptoTrader-LM backtest on Polymarket daily (noon-ET) BTC/ETH Up/Down markets. |
+| `tools/cryptotrader_lm/binance.py` | cli | 1 | Binance spot 5-minute klines: pre-decision price, momentum and aggressive flow. |
+| `tools/cryptotrader_lm/collect.py` | cli | 2 | Collect and join every backtest input for the daily BTC/ETH Up/Down markets. |
+| `tools/cryptotrader_lm/gpu_job.py` | cli | 0 | GPU job: tag headline sentiment, render prompts, run CryptoTrader-LM with vLLM. |
+| `tools/cryptotrader_lm/launch.py` | cli | 0 | Upload inputs, launch the CryptoTrader-LM GPU job on Hugging Face Jobs, fetch results. |
+| `tools/cryptotrader_lm/markets.py` | cli | 1 | Resolved daily Up/Down markets for BTC and ETH from Gamma series listings. |
+| `tools/cryptotrader_lm/news.py` | cli | 1 | Point-in-time crypto news from the public WordPress archives of crypto outlets. |
+| `tools/cryptotrader_lm/orderflow.py` | cli | 1 | Aggressive (taker) order flow on the Polymarket daily market itself. |
+| `tools/cryptotrader_lm/pricing.py` | cli | 2 | Entry pricing, taker fees and settlement for a $-stake daily Up/Down position. |
+| `tools/cryptotrader_lm/prompts.py` | cli | 0 | Prompt renderers and decision parser for CryptoTrader-LM (stdlib only). |
+| `tools/cryptotrader_lm/report.py` | cli | 0 | Score CryptoTrader-LM decisions against resolved daily markets, split by order flow. |
+| `tools/cryptotrader_lm/timing.py` | cli | 1 | Decision/reference/settlement instants for a daily noon-ET Up/Down market. |
 | `tools/demo_snapshot.py` | cli | 0 | Print a BTC paper trading snapshot. |
 | `tools/fetch_polymarket_trades.py` | cli | 0 | Pull this account's Polymarket trade history via the CLOB API → CSV. |
 | `tools/forecast_journal.py` | cli | 0 | Slow-market forecasting-skill pilot: journal + scoring (issue #162). |
