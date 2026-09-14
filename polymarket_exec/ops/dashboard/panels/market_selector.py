@@ -16,6 +16,11 @@ from polymarket_bot import market_selection as ms
 from . import _shared as s
 
 _UPDOWN_SLUG = re.compile(r"^([a-z]+)-updown-(5m|15m|1h)-\d+$")
+_HOURLY_SLUG = re.compile(
+    r"^(bitcoin|ethereum|solana|xrp|dogecoin|bnb)-up-or-down-[a-z]+-\d+-\d{4}-\d{1,2}(am|pm)-et$"
+)
+_LONG_TO_ASSET = {"bitcoin": "btc", "ethereum": "eth", "solana": "sol", "xrp": "xrp",
+                  "dogecoin": "doge", "bnb": "bnb"}
 
 # Simplified inline coin marks (no network fetch; 16px, brand colours).
 _LOGOS: dict[str, str] = {
@@ -90,9 +95,12 @@ def open_market_pnl(
 
     cur_window = (tick or {}).get("window_slug")
     for p in open_pos:
-        m = _UPDOWN_SLUG.match(str(p.get("window_slug") or ""))
-        if not m:
+        slug = str(p.get("window_slug") or "")
+        m = _UPDOWN_SLUG.match(slug)
+        hourly = None if m else _HOURLY_SLUG.match(slug)
+        if not m and not hourly:
             continue
+        key = (m.group(1), m.group(2)) if m else (_LONG_TO_ASSET[hourly.group(1)], "1h")
         mark = (
             s.side_mid(tick, p["side"])
             if tick and p.get("window_slug") == cur_window
@@ -103,7 +111,7 @@ def open_market_pnl(
             if mark is not None
             else None
         )
-        _add((m.group(1), m.group(2)), pnl)
+        _add(key, pnl)
     for p in daily_open:
         asset = str(p.get("asset") or "").lower()
         if asset:

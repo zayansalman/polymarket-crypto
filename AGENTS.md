@@ -46,6 +46,11 @@ paper-trading lab. Two strategies are wired and run simultaneously:
    for the process's lifetime. Its own dashboard panel
    (`panels/daily_altcoin.py`) shows current position(s), settled PnL, and a
    plain-language explanation of the mechanism.
+3. **BTC hourly Up/Down strategies** (`polymarket_bot/hourly/engine.py`) — the
+   loop runs them when the operator selects **BTC 1h** and presses ▶ Start, in
+   the mode selected (paper or live). One decision per hour per strategy, one
+   open position per strategy, held to resolution and settled from the Binance
+   1h candle. Strategy doc: `docs/strategies/hourly-btc-strategies.md`.
 
 The primary active product behavior for the BTC loop specifically is:
 
@@ -58,7 +63,7 @@ The primary active product behavior for the BTC loop specifically is:
 
 Live trading is also built and multi-gated (see the live rule below); it stays
 off unless the operator explicitly arms every gate **and** this file names an
-authorized live-trading market (none is currently authorized — see Absolute
+authorized live-trading market (BTC hourly Up/Down — see Absolute
 Rules). This includes the daily altcoin scanner: it has no live path built at
 all, so there is nothing to arm for it.
 
@@ -96,21 +101,21 @@ In scope:
 Out of scope:
 
 - Flipping the live gate or placing live orders on behalf of the operator.
-- **Any market, on the live trading path (real capital).** No market/timeframe
-  is currently authorized for live trading: 5-minute BTC work closed 2026-08-29
-  (#182) and no replacement category has been chosen or built. Research/shadow
-  work on any market/timeframe remains in scope — see the research/shadow-only
-  line above. Live trading resumes only once this file is explicitly updated
-  naming a newly authorized market.
+- **Any market other than BTC hourly Up/Down, on the live trading path (real
+  capital).** BTC hourly is authorized (2026-09-14); everything else stays
+  research/shadow-only until this file is explicitly updated naming it.
 - Remote deployment / exposing the dashboard beyond localhost by default.
 
 ## Absolute Rules
 
-- **Live trading (real capital) is not currently authorized for any market.**
-  5-minute BTC work closed 2026-08-29 (#182); no replacement category is chosen
-  or built. Research and shadow-only work on any market/timeframe remains in
-  scope by default — see Scope Fence above.
-- One open BTC paper position at a time.
+- **Live trading (real capital) is authorized for the BTC hourly Up/Down market**
+  (`polymarket_bot/hourly/`, operator decision 2026-09-14). There is no
+  paper-only strategy: a strategy runs in whichever mode the operator selects at
+  Start. Every other market stays research/shadow-only until this file names it.
+- One open position per strategy at a time, per mode (operator decision
+  2026-09-14). The legacy 5m loop is one slot; each hourly BTC strategy owns its
+  own slot, in paper and in live. Every entry still passes RiskGate (loss halt,
+  caps, slippage, kill switch).
 - **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
   It runs only when the operator **clicks LIVE in the dashboard**
   **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
@@ -168,6 +173,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1028.
+- **Tests:** 1029.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

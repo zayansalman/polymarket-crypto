@@ -18,6 +18,7 @@ They are **bidirectionally coupled**: the FastAPI dashboard imports `polymarket_
 | Change | File |
 |---|---|
 | Plug in a **new strategy** (the loop's entry decision) | `polymarket_bot/paper.py:_build_snapshot` — the `NO_STRATEGY_REASON` block |
+| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `mean_reversion.py` (Hourly Mean Reversion) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`); strategy doc `docs/strategies/hourly-btc-strategies.md` |
 | Shared pricing math (fair value, sigma) used by shadow/daily/backtests | `polymarket_bot/strategy.py` (NOT `polymarket_exec/strategy/` — that only feeds backtests) |
 | Risk limits / kill-switch / daily-loss halt | `polymarket_exec/execution/gate.py` |
 | Live order placement | `polymarket_exec/execution/live.py` |
@@ -74,7 +75,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1028.
+- **Tests:** 1029.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
