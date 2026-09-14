@@ -15,7 +15,7 @@ import config as _config
 from db import get_config
 from polymarket_bot import runtime_knobs as _knobs
 
-from polymarket_exec.ops import feed_monitor, flow_recorder
+from polymarket_exec.ops import feed_monitor, flow_recorder, macro_recorder
 from polymarket_exec.ops.dashboard import quote_feed
 from polymarket_exec.ops.dashboard.panels import _data as data
 from polymarket_exec.ops.dashboard.panels import _wallet
@@ -145,9 +145,11 @@ async def execution_view_html() -> str:
     )
     monitor = feed_monitor.current()
     recorder = flow_recorder.current()
+    macro = macro_recorder.current()
     feeds_html = feeds.render(
         monitor.snapshot() if monitor is not None else None,
         recorder.snapshot() if recorder is not None else None,
+        macro.snapshot() if macro is not None else None,
     )
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)

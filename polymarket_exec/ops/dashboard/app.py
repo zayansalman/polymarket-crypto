@@ -2,9 +2,10 @@
 
 Replaces the 150MB+ Gradio dashboard with a lightweight FastAPI + Jinja2
 implementation. All visual design is preserved via extracted CSS. Also
-starts the daily altcoin scanner (#185) and the feed monitor (FEEDS card)
-as background tasks for its lifetime — see ``_lifespan`` — both independent
-of the BTC 5m loop the rest of this module's endpoints control.
+starts the daily altcoin scanner (#185), the feed monitor (FEEDS card), and
+the venue flow and macro calendar recorders as background tasks for its
+lifetime — see ``_lifespan`` — all independent of the BTC 5m loop the rest
+of this module's endpoints control.
 
 Endpoints:
     GET  /              — Main dashboard page (HTML)
@@ -142,16 +143,27 @@ async def _lifespan(app: FastAPI):
     flow_task = asyncio.create_task(recorder.run(flow_stop_event))
     _flow_recorder.set_current(recorder)
 
+    # Macro recorder: US release calendars (BLS, BEA, Census, Fed) and ForexFactory
+    # consensus, each source on its own cadence — observation data only.
+    from polymarket_exec.ops import macro_recorder as _macro_recorder
+
+    macro = _macro_recorder.MacroRecorder()
+    macro_stop_event = asyncio.Event()
+    macro_task = asyncio.create_task(macro.run(macro_stop_event))
+    _macro_recorder.set_current(macro)
+
     yield
 
     _paper.set_shared_chainlink_feed(None)
     _feed_monitor.set_current(None)
     _flow_recorder.set_current(None)
+    _macro_recorder.set_current(None)
     for stop_event, task in (
         (daily_stop_event, daily_task),
         (quote_stop_event, quote_task),
         (feeds_stop_event, feeds_task),
         (flow_stop_event, flow_task),
+        (macro_stop_event, macro_task),
     ):
         stop_event.set()
         task.cancel()
