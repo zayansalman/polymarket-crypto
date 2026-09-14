@@ -179,6 +179,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_shadow_positions_window
   ON daily_shadow_positions(window_slug);
 CREATE INDEX IF NOT EXISTS idx_daily_shadow_positions_asset
   ON daily_shadow_positions(asset);
+
+-- Venue flow feeds: one closed-hour trade-flow bar per (venue, symbol, hour).
+-- complete=0 marks an hour a live WS feed did not see end to end (a reconnect,
+-- or the recorder starting mid-hour). Observation data for the hourly BTC strategy.
+CREATE TABLE IF NOT EXISTS venue_flow_hourly (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  hour_start_ms INTEGER NOT NULL,
+  open REAL,
+  high REAL,
+  low REAL,
+  close REAL,
+  volume REAL NOT NULL,
+  taker_buy_volume REAL NOT NULL,
+  trades INTEGER NOT NULL,
+  complete INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_venue_flow_hourly_key
+  ON venue_flow_hourly(venue, symbol, hour_start_ms);
+
+-- Perp venue state (mark, index, funding, open interest) sampled each hour.
+CREATE TABLE IF NOT EXISTS venue_snapshot (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  taken_at_ms INTEGER NOT NULL,
+  mark_price REAL,
+  index_price REAL,
+  funding_rate REAL,
+  next_funding_ms INTEGER,
+  open_interest REAL,
+  source TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_venue_snapshot_key
+  ON venue_snapshot(venue, symbol, taken_at_ms);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {

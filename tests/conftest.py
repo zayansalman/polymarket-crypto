@@ -88,6 +88,20 @@ def _no_feed_monitor_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FeedMonitor, "run", _idle_run)
 
 
+@pytest.fixture(autouse=True)
+def _no_flow_recorder_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dashboard tests boot the app lifespan; keep the venue flow recorder offline.
+
+    The recorder's REST and WS paths are unit-tested with fakes in test_flow_recorder.py.
+    """
+    from polymarket_exec.ops.flow_recorder import FlowRecorder
+
+    async def _idle_run(self, stop_event):  # noqa: ANN001
+        await stop_event.wait()
+
+    monkeypatch.setattr(FlowRecorder, "run", _idle_run)
+
+
 # ---------------------------------------------------------------------------
 # Strategy parameter fixtures
 # ---------------------------------------------------------------------------
