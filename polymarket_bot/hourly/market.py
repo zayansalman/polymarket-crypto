@@ -137,17 +137,24 @@ async def fetch_closed_candles(
 async def fetch_hour_candle(
     client: httpx.AsyncClient, start_ts: int, now_ms: int
 ) -> HourCandle | None:
-    """The Binance spot 1h candle that opens at ``start_ts`` (forming or closed), or None."""
+    """The Binance spot 1h candle that opens at ``start_ts`` (forming or closed), or None.
+
+    ``closed`` needs Binance's own clock as well as ours: the next hour's candle must already
+    exist, because Binance only opens it after processing every trade of this one. A local
+    clock running ahead of Binance cannot then settle on a candle that is still forming.
+    """
     resp = await client.get(
         _klines_url("spot"),
-        params={"symbol": "BTCUSDT", "interval": "1h", "startTime": start_ts * 1000, "limit": 1},
+        params={"symbol": "BTCUSDT", "interval": "1h", "startTime": start_ts * 1000, "limit": 2},
     )
     resp.raise_for_status()
     rows = resp.json()
     if not rows or int(rows[0][0]) != start_ts * 1000:
         return None
     row = rows[0]
-    return HourCandle(open=float(row[1]), close=float(row[4]), closed=int(row[6]) < now_ms)
+    nxt = (start_ts + HOUR_S) * 1000
+    closed = int(row[6]) < now_ms and len(rows) > 1 and int(rows[1][0]) == nxt
+    return HourCandle(open=float(row[1]), close=float(row[4]), closed=closed)
 
 
 async def fetch_spot(client: httpx.AsyncClient) -> float | None:
@@ -157,5 +164,6 @@ async def fetch_spot(client: httpx.AsyncClient) -> float | None:
         )
         resp.raise_for_status()
         return float(resp.json()["price"])
-    except (httpx.HTTPError, ValueError, KeyError):
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        log.warning("hourly_market.spot_read_failed", error=str(exc))
         return None

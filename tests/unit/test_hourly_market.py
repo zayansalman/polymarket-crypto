@@ -94,15 +94,23 @@ async def test_fetch_closed_candles_drops_forming_and_routes_perp() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_hour_candle_open_and_closed_flag() -> None:
-    def handle(request: httpx.Request) -> httpx.Response:
+    def forming_only(request: httpx.Request) -> httpx.Response:
         assert request.url.params["startTime"] == str(H * 1000)
+        assert request.url.params["limit"] == "2"
         return httpx.Response(200, json=[_kline(H, 100.0, 99.0)])
 
-    async with _client(handle) as client:
+    def with_next(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[_kline(H, 100.0, 99.0), _kline(H + 3600, 99.0, 99.0)])
+
+    async with _client(forming_only) as client:
         forming = await hm.fetch_hour_candle(client, H, (H + 60) * 1000)
+        # Local clock says the hour is over, but Binance has not opened the next candle yet.
+        clock_ahead = await hm.fetch_hour_candle(client, H, (H + 3600) * 1000)
+    async with _client(with_next) as client:
         done = await hm.fetch_hour_candle(client, H, (H + 3600) * 1000)
     assert forming == hm.HourCandle(open=100.0, close=99.0, closed=False)
-    assert done is not None and done.closed is True
+    assert clock_ahead == hm.HourCandle(open=100.0, close=99.0, closed=False)
+    assert done == hm.HourCandle(open=100.0, close=99.0, closed=True)
     async with _client(lambda r: httpx.Response(200, json=[_kline(H + 3600, 1, 1)])) as client:
         assert await hm.fetch_hour_candle(client, H, (H + 7200) * 1000) is None  # wrong hour
 
@@ -113,3 +121,5 @@ async def test_fetch_spot() -> None:
         assert await hm.fetch_spot(client) == 77123.5
     async with _client(lambda r: httpx.Response(500)) as client:
         assert await hm.fetch_spot(client) is None
+    async with _client(lambda r: httpx.Response(200, json=[])) as client:
+        assert await hm.fetch_spot(client) is None  # non-dict body degrades, never raises

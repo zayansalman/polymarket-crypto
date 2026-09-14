@@ -44,6 +44,7 @@
   - Perp: `https://fapi.binance.com/fapi/v1/klines`.
   - Kline row: `[open_time, open, high, low, close, volume, close_time, quote_volume, trades, taker_buy_base, taker_buy_quote, ignore]`.
   - A row is closed iff `close_time < now_ms`.
+  - Settlement read (`fetch_hour_candle`): the hour candle is closed only when `close_time < now_ms` **and** Binance already returns the next hour's candle (request `limit: 2`; the second row's open time is `start + 3600` s). Binance opens the next candle only after processing every trade of this one, so a local clock running ahead cannot settle on a forming candle.
 - **Hourly Mean Reversion constants (frozen):**
   - `WINDOW = 168`, `SPOT_FZ_MIN = 1.20`, `PERP_FZ_MAX = 1.24`, `CLV_MIN = 0.80`.
   - z uses the sample standard deviation (ddof = 1) over the 168 hourly imbalances **ending at and including** hour H-1.
@@ -200,15 +201,23 @@ async def test_fetch_closed_candles_drops_forming_and_routes_perp() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_hour_candle_open_and_closed_flag() -> None:
-    def handle(request: httpx.Request) -> httpx.Response:
+    def forming_only(request: httpx.Request) -> httpx.Response:
         assert request.url.params["startTime"] == str(H * 1000)
+        assert request.url.params["limit"] == "2"
         return httpx.Response(200, json=[_kline(H, 100.0, 99.0)])
 
-    async with _client(handle) as client:
+    def with_next(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[_kline(H, 100.0, 99.0), _kline(H + 3600, 99.0, 99.0)])
+
+    async with _client(forming_only) as client:
         forming = await hm.fetch_hour_candle(client, H, (H + 60) * 1000)
+        # Local clock says the hour is over, but Binance has not opened the next candle yet.
+        clock_ahead = await hm.fetch_hour_candle(client, H, (H + 3600) * 1000)
+    async with _client(with_next) as client:
         done = await hm.fetch_hour_candle(client, H, (H + 3600) * 1000)
     assert forming == hm.HourCandle(open=100.0, close=99.0, closed=False)
-    assert done is not None and done.closed is True
+    assert clock_ahead == hm.HourCandle(open=100.0, close=99.0, closed=False)
+    assert done == hm.HourCandle(open=100.0, close=99.0, closed=True)
     async with _client(lambda r: httpx.Response(200, json=[_kline(H + 3600, 1, 1)])) as client:
         assert await hm.fetch_hour_candle(client, H, (H + 7200) * 1000) is None  # wrong hour
 
@@ -219,6 +228,8 @@ async def test_fetch_spot() -> None:
         assert await hm.fetch_spot(client) == 77123.5
     async with _client(lambda r: httpx.Response(500)) as client:
         assert await hm.fetch_spot(client) is None
+    async with _client(lambda r: httpx.Response(200, json=[])) as client:
+        assert await hm.fetch_spot(client) is None  # non-dict body degrades, never raises
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -376,17 +387,24 @@ async def fetch_closed_candles(
 async def fetch_hour_candle(
     client: httpx.AsyncClient, start_ts: int, now_ms: int
 ) -> HourCandle | None:
-    """The Binance spot 1h candle that opens at ``start_ts`` (forming or closed), or None."""
+    """The Binance spot 1h candle that opens at ``start_ts`` (forming or closed), or None.
+
+    ``closed`` needs Binance's own clock as well as ours: the next hour's candle must already
+    exist, because Binance only opens it after processing every trade of this one. A local
+    clock running ahead of Binance cannot then settle on a candle that is still forming.
+    """
     resp = await client.get(
         _klines_url("spot"),
-        params={"symbol": "BTCUSDT", "interval": "1h", "startTime": start_ts * 1000, "limit": 1},
+        params={"symbol": "BTCUSDT", "interval": "1h", "startTime": start_ts * 1000, "limit": 2},
     )
     resp.raise_for_status()
     rows = resp.json()
     if not rows or int(rows[0][0]) != start_ts * 1000:
         return None
     row = rows[0]
-    return HourCandle(open=float(row[1]), close=float(row[4]), closed=int(row[6]) < now_ms)
+    nxt = (start_ts + HOUR_S) * 1000
+    closed = int(row[6]) < now_ms and len(rows) > 1 and int(rows[1][0]) == nxt
+    return HourCandle(open=float(row[1]), close=float(row[4]), closed=closed)
 
 
 async def fetch_spot(client: httpx.AsyncClient) -> float | None:
@@ -396,7 +414,8 @@ async def fetch_spot(client: httpx.AsyncClient) -> float | None:
         )
         resp.raise_for_status()
         return float(resp.json()["price"])
-    except (httpx.HTTPError, ValueError, KeyError):
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        log.warning("hourly_market.spot_read_failed", error=str(exc))
         return None
 ```
 
