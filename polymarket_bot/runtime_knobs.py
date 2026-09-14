@@ -113,6 +113,15 @@ KNOBS: dict[str, Knob] = {
         "runtime.daily.vol_lookback_days", 30, "int",
         "Volatility lookback", 1, 365, unit="d", group="Daily scanner",
     ),
+    # --- Hourly BTC strategies (polymarket_bot/hourly/engine.py) -----------
+    "hourly_mean_reversion_enabled": Knob(
+        "runtime.hourly.mean_reversion_enabled", True, "bool",
+        "Hourly Mean Reversion enabled", group="Hourly BTC",
+    ),
+    "hourly_entry_deadline_seconds": Knob(
+        "runtime.hourly.entry_deadline_seconds", 120, "int",
+        "Entry deadline after the hour opens", 10, 1800, unit="s", group="Hourly BTC",
+    ),
 }
 
 # In-memory mirror of the last `refresh_cache()` read, for sync call sites.

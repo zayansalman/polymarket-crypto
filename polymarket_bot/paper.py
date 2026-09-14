@@ -1589,6 +1589,22 @@ async def _record_and_settle_shadow(
         log.warning("shadow.harness_error", error=str(exc))
 
 
+def _executor_for(pos: dict[str, Any]) -> LiveExecutor | None:
+    """The live executor owning ``pos``: the account slot, a strategy slot, or None.
+
+    Paper rows of a strategy slot hold no real tokens, so they close paper-style even
+    while the loop runs live. Strategy-less (legacy loop) rows are unchanged.
+    """
+    if _live_executor is None:
+        return None
+    strategy_id = pos.get("strategy_id")
+    if not strategy_id:
+        return _live_executor
+    if pos.get("mode") != "live":
+        return None
+    return _live_executor.slot_executor(str(strategy_id))
+
+
 async def _close_position(
     pos: dict[str, Any],
     snapshot: PaperSnapshot,
@@ -1611,7 +1627,7 @@ async def _close_position(
     already registered the outcome via ``record_settlement`` — no exit order
     is placed and the row closes at the settlement payout.
     """
-    executor = _live_executor
+    executor = _executor_for(pos)
     entry_price = float(pos["entry_price"])
     prior_pnl = float(pos["realized_pnl_usd"] or 0.0)
     if executor is not None and not settled:
