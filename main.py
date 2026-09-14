@@ -61,6 +61,23 @@ def _acquire_singleton_lock() -> object:
     return fh  # keep the handle alive for the process lifetime
 
 
+# Seconds uvicorn waits for open requests on shutdown before cancelling them.
+# An open dashboard tab keeps /api/stream open forever, and without a bound
+# SIGTERM never got past "Waiting for connections to close" — the process
+# stayed alive holding data/bot.lock, so a restart was refused.
+SHUTDOWN_GRACE_S = 3
+
+
+def dashboard_server_options() -> dict[str, object]:
+    """uvicorn settings for the FastAPI dashboard."""
+    return {
+        "host": "127.0.0.1",
+        "port": DASHBOARD_SERVER_PORT,
+        "log_level": "info",
+        "timeout_graceful_shutdown": SHUTDOWN_GRACE_S,
+    }
+
+
 def main() -> None:
     setup_logging("INFO")
     _LOCK = _acquire_singleton_lock()  # noqa: F841 — held for process lifetime
@@ -80,10 +97,7 @@ def main() -> None:
         import uvicorn
         log.info("dashboard.start_fastapi", port=DASHBOARD_SERVER_PORT)
         uvicorn.run(
-            "polymarket_exec.ops.dashboard.app:app",
-            host="127.0.0.1",
-            port=DASHBOARD_SERVER_PORT,
-            log_level="info",
+            "polymarket_exec.ops.dashboard.app:app", **dashboard_server_options()
         )
     else:
         log.info("dashboard.start_gradio", server="127.0.0.1", port=DASHBOARD_SERVER_PORT)
