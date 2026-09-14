@@ -45,6 +45,7 @@ WATCHDOG_POLL_SECONDS = 20.0
 _watchdog_thread: threading.Thread | None = None
 _desired_running = False
 _mode_cache = "paper"
+_timeframe_cache: str = "5m"
 # Real-money consent: set ONLY by an operator LIVE selection in THIS process
 # (dashboard click → token-checked /api/mode → set_mode). Never persisted, so a
 # restart, a stale DB row, env BOT_MODE=live or another process (pytest, a
@@ -230,6 +231,18 @@ async def request_start() -> BtcBotStatus:
             detail=detail,
         )
     mode = await current_mode()
+    from polymarket_bot import market_selection
+
+    selection = await market_selection.get_selection()
+    if not selection.loop_supported:
+        detail = (
+            f"Start refused: the loop is not wired for {selection.asset.upper()} "
+            f"{selection.timeframe} yet. Select BTC 5m or BTC 1h."
+        )
+        await set_config("polymarket_bot.state", "stopped")
+        await set_config("polymarket_bot.updated_at", now)
+        await set_config("polymarket_bot.detail", detail)
+        return await get_status()
     if mode == "live":
         try:
             # Consent is the operator clicking LIVE in this dashboard session —
@@ -250,9 +263,10 @@ async def request_start() -> BtcBotStatus:
             await set_config("polymarket_bot.detail", detail)
             log.error("btc.live_start_refused", error=detail)
             return await get_status()
-    global _desired_running, _mode_cache, _silent_stop_notified
+    global _desired_running, _mode_cache, _silent_stop_notified, _timeframe_cache
     _desired_running = True
     _mode_cache = mode
+    _timeframe_cache = selection.timeframe
     _silent_stop_notified = False  # #138: re-arm on every legitimate start
     _paper._beat()  # startup grace: the watchdog measures from Start
     _ensure_runner_started()
@@ -260,14 +274,15 @@ async def request_start() -> BtcBotStatus:
     await set_config("polymarket_bot.state", "running")
     await set_config("polymarket_bot.mode", mode)
     await set_config("polymarket_bot.updated_at", now)
+    market_label = f"BTC {selection.timeframe}"
     if mode == "live":
         detail = (
-            "BTC LIVE loop starting — orders are REAL. It will discover the "
-            "current BTC 5m market and place risk-gated CLOB orders."
+            f"BTC LIVE loop starting — orders are REAL. It will discover the current "
+            f"{market_label} market and place risk-gated CLOB orders."
         )
     else:
         detail = (
-            "BTC paper loop starting. It will discover the current BTC 5m "
+            f"BTC paper loop starting. It will discover the current {market_label} "
             "market and log simulated trades only."
         )
     await set_config("polymarket_bot.detail", detail)
@@ -357,15 +372,15 @@ def _ensure_runner_started(force: bool = False) -> None:
             target=_run_loop_in_thread,
             # The mode Start decided on — the loop must not re-read the
             # selector, which a concurrent mode switch may have changed.
-            args=(_stop_event, _mode_cache),
+            args=(_stop_event, _mode_cache, _timeframe_cache),
             name="btc-paper-runner",
             daemon=True,
         )
         _runner_thread.start()
 
 
-def _run_loop_in_thread(stop_event: threading.Event, mode: str) -> None:
-    asyncio.run(run_paper_loop(stop_event, mode=mode))
+def _run_loop_in_thread(stop_event: threading.Event, mode: str, timeframe: str = "5m") -> None:
+    asyncio.run(run_paper_loop(stop_event, mode=mode, timeframe=timeframe))
 
 
 def _ensure_watchdog_started() -> None:

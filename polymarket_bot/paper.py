@@ -64,6 +64,7 @@ from polymarket_exec.execution.gate import (
     RiskGate,
     build_gate_from_config,
 )
+from polymarket_bot.hourly import engine as hourly_engine
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
 from polymarket_bot.shadow.fees import taker_fee_per_share
@@ -78,6 +79,9 @@ log = get_logger("paper")
 
 # Live executor for the current run loop. None means pure paper mode.
 _live_executor: LiveExecutor | None = None
+
+# Market timeframe pinned at Start ("5m" legacy loop, "1h" hourly strategies).
+_timeframe: str = "5m"
 
 # Shared risk gate for the current run loop (issue #64). In paper mode this
 # is a standalone RiskGate; in live mode it is the LiveExecutor's gate (same
@@ -371,7 +375,9 @@ async def _notify_paper_halt_pause(gate: Any, mode: str) -> None:
     )
 
 
-async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -> None:
+async def run_paper_loop(
+    stop_event: threading.Event, mode: str | None = None, timeframe: str = "5m"
+) -> None:
     """Run until Stop is pressed or the process exits.
 
     Mode comes from ``BOT_MODE``: ``paper`` (default) journals simulated
@@ -380,7 +386,7 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
     back to paper. The controller passes the ``mode`` Start decided on; when
     omitted it is read from the runtime selector (falling back to BOT_MODE).
     """
-    global _live_executor, _chainlink_feed, _risk_gate, _loop_generation
+    global _live_executor, _chainlink_feed, _risk_gate, _loop_generation, _timeframe
     # Watchdog bookkeeping (#147): claim a fresh generation and stamp the
     # heartbeat before any await, so a stall during startup is also visible.
     _loop_generation += 1
@@ -390,6 +396,7 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
     # passes the same boot gate. Falls back to BOT_MODE when unset.
     if mode is None:
         mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
+    _timeframe = timeframe
     if mode == "live":
         try:
             executor = build_live_executor()
@@ -485,7 +492,7 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             # Stop can never paper-close a live position (which would strand
             # real tokens on the exchange with a ledger that says flat).
             try:
-                await _live_executor.cancel_open(reason="LOOP_STOP")
+                await _live_executor.cancel_open_all(reason="LOOP_STOP")
             except Exception as e:  # noqa: BLE001
                 log.warning("live_loop.stop_cancel_failed", error=str(e))
             try:
@@ -541,6 +548,8 @@ async def paper_tick_once() -> PaperSnapshot:
     # an operator change applies without a restart, same as the gate above.
     await _knobs.refresh_cache()
     async with _make_settlement_client() as client:
+        if _timeframe == hourly_engine.TIMEFRAME:
+            return await hourly_engine.tick(client, allow_entries=not kill_active)
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
         await _close_due_positions(snapshot, client)
@@ -576,17 +585,28 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
         positions = [p for p in positions if p.get("mode") != "live"]
     if not positions:
         return 0
-    async with _make_settlement_client() as client:
-        snapshot = await _build_snapshot(client)
+    hourly = [p for p in positions if p.get("market_timeframe") == hourly_engine.TIMEFRAME]
+    legacy = [p for p in positions if p.get("market_timeframe") != hourly_engine.TIMEFRAME]
     closed = 0
-    for pos in positions:
-        if await _close_position(
-            pos,
-            snapshot,
-            _current_price_for_side(snapshot, pos["side"]),
-            exit_reason,
-        ):
-            closed += 1
+    async with _make_settlement_client() as client:
+        if legacy:
+            snapshot = await _build_snapshot(client)
+            for pos in legacy:
+                if await _close_position(
+                    pos, snapshot, _current_price_for_side(snapshot, pos["side"]), exit_reason
+                ):
+                    closed += 1
+        if hourly:
+            snapshot = await hourly_engine.build_snapshot(client)
+            for pos in hourly:
+                bid = _current_price_for_side(snapshot, pos["side"])
+                if pos["window_slug"] != snapshot.window_slug or bid is None:
+                    # A past hour can't be sold; it settles from Binance on the next start.
+                    log.warning("force_close.hourly_left_for_settlement",
+                                position_id=pos["position_id"], window_slug=pos["window_slug"])
+                    continue
+                if await _close_position(pos, snapshot, bid, exit_reason):
+                    closed += 1
     return closed
 
 
@@ -1782,6 +1802,10 @@ async def _set_detail(detail: str) -> None:
     await set_config("polymarket_bot.detail", detail)
 
 
+def _fmt3(value: float | None) -> str:
+    return f"{value:.3f}" if value is not None else "—"
+
+
 def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
     side = snapshot.signal_side or "SKIP"
     if _live_executor is not None:
@@ -1794,7 +1818,7 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
-        f"Polymarket Up: {snapshot.market_up_price:.3f}; fair Up: {snapshot.fair_up_prob:.3f}; "
+        f"Polymarket Up: {_fmt3(snapshot.market_up_price)}; fair Up: {snapshot.fair_up_prob:.3f}; "
         f"edge: {snapshot.edge:+.3f}\n"
         f"Signal: {side}; confidence {snapshot.confidence:.2f}; notional ${snapshot.notional_usd:.0f}\n"
         f"Gate: {_gate_preview_line(snapshot)}\n"

@@ -33,7 +33,7 @@ DEFAULT_ASSET = "btc"
 DEFAULT_TIMEFRAME = "5m"
 
 # Combos the trading loop actually trades today.
-LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset({("btc", "5m")})
+LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset({("btc", "5m"), ("btc", "1h")})
 
 ASSET_KEY = "polymarket_bot.market_asset"
 TIMEFRAME_KEY = "polymarket_bot.market_timeframe"

@@ -73,7 +73,9 @@ class TestForceRespawn:
         controller._stop_event = old_event
         spawned: list[threading.Event] = []
 
-        def fake_run(stop_event: threading.Event, mode: str | None = None) -> None:
+        def fake_run(
+            stop_event: threading.Event, mode: str | None = None, timeframe: str = "5m"
+        ) -> None:
             spawned.append(stop_event)
             stop_event.wait(5.0)
 
