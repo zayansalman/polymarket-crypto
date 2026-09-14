@@ -66,6 +66,7 @@ from polymarket_exec.execution.gate import (
 )
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
+from polymarket_bot.shadow.fees import taker_fee_per_share
 from polymarket_bot.strategy import (
     StrategyParams,
     drift_per_second,
@@ -587,6 +588,18 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
         ):
             closed += 1
     return closed
+
+
+# The 5m loop's rows (strategy-less legacy slot). Hourly strategy rows own their own slots.
+_LEGACY_ROWS_SQL = "(market_timeframe IS NULL OR market_timeframe != '1h')"
+
+
+async def _open_legacy_position_exists() -> bool:
+    async with connect() as db:
+        async with db.execute(
+            f"SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open' AND {_LEGACY_ROWS_SQL}"
+        ) as cur:
+            return bool((await cur.fetchone())["n"])
 
 
 async def count_open_positions(mode: str | None = None) -> int:
@@ -1210,12 +1223,9 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
 async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
     if not snapshot.signal_side or snapshot.notional_usd <= 0:
         return
+    if await _open_legacy_position_exists():
+        return
     async with connect() as db:
-        async with db.execute(
-            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
-        ) as cur:
-            if (await cur.fetchone())["n"]:
-                return
         if _knobs.cached('exit_style') == "settle":
             # One entry per window, ever (issue #28): re-entering the same
             # window after an exit pays the spread again for the same signal
@@ -1416,7 +1426,8 @@ async def _close_due_positions(
 ) -> None:
     async with connect() as db:
         async with db.execute(
-            "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
+            f"SELECT * FROM paper_positions WHERE state = 'open' AND {_LEGACY_ROWS_SQL} "
+            "ORDER BY opened_at"
         ) as cur:
             positions = [dict(r) for r in await cur.fetchall()]
 
@@ -1664,6 +1675,10 @@ async def _close_position(
         pnl = prior_pnl + realized
     else:
         pnl = float(pos["shares"]) * (exit_price - entry_price)
+        if settled:
+            # Paper/live parity: live record_settlement books the payout net of the
+            # entry taker fee (0.07·p·(1−p) per share); paper books the same number.
+            pnl -= float(pos["shares"]) * taker_fee_per_share(entry_price)
         # Paper closes feed the SAME daily-loss-halt counter live closes do
         # (issue #64). Without this, paper losses don't advance the halt and
         # paper diverges from what live would have done next.

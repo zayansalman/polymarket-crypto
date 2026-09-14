@@ -405,3 +405,39 @@ async def test_degraded_feed_reason_still_wins_over_no_strategy(test_db, monkeyp
 
     assert snap.signal_side is None
     assert snap.reason.startswith("skip: settlement feed degraded")
+
+
+@pytest.mark.asyncio
+async def test_paper_settled_close_is_net_of_entry_taker_fee(test_db, monkeypatch):
+    """Paper/live parity: live record_settlement books payout minus the entry taker fee."""
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", None)
+    snap = _snapshot()
+    await _insert_settle_pos(snap)
+    await paper._close_position(dict(_POS), snap, 1.0, "WINDOW_ROLL", settled=True)
+    async with paper.connect() as db:
+        async with db.execute("SELECT realized_pnl_usd FROM paper_positions") as cur:
+            row = dict(await cur.fetchone())
+    # 6 * (1.0 - 0.5) - 6 * 0.07 * 0.5 * 0.5
+    assert row["realized_pnl_usd"] == pytest.approx(3.0 - 0.105)
+
+
+@pytest.mark.asyncio
+async def test_five_minute_paths_ignore_hourly_rows(test_db, monkeypatch):
+    monkeypatch.setattr(paper, "_live_executor", None)
+    snap = _snapshot()
+    async with paper.connect() as db:
+        await db.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, quote_source, strategy_style, strategy_id,"
+            " market_timeframe, window_start_ts)"
+            " VALUES (?, 'bitcoin-up-or-down-september-13-2026-3pm-et', 'Down', 'open',"
+            " 0.5, 2.5, 5.0, 'clob', 'settle', 'hourly_mean_reversion', '1h', 1789326000)",
+            (snap.created_at,),
+        )
+        await db.commit()
+    settle = AsyncMock()
+    monkeypatch.setattr(paper, "_settle_position_outcome", settle)
+    await paper._close_due_positions(snap, client=MagicMock())
+    settle.assert_not_called()  # the 5m loop never tries to settle an hourly row
+    assert await paper._open_legacy_position_exists() is False
