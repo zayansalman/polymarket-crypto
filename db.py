@@ -218,6 +218,45 @@ CREATE TABLE IF NOT EXISTS venue_snapshot (
 );
 CREATE INDEX IF NOT EXISTS idx_venue_snapshot_key
   ON venue_snapshot(venue, symbol, taken_at_ms);
+
+-- Macro calendar: scheduled US releases and Fed events from official calendars (BLS, BEA,
+-- Census, Fed) and ForexFactory. A future slot that vanishes from its source's next pull
+-- becomes status='removed', so a reschedule shows as the old time removed and the new
+-- time appearing. first_seen_ms says when the schedule was first known. Observation data.
+CREATE TABLE IF NOT EXISTS macro_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  scheduled_at_ms INTEGER NOT NULL,
+  reference_period TEXT,
+  status TEXT NOT NULL CHECK (status IN ('scheduled', 'removed')),
+  first_seen_ms INTEGER NOT NULL,
+  last_seen_ms INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_macro_events_key
+  ON macro_events(source, title, scheduled_at_ms);
+CREATE INDEX IF NOT EXISTS idx_macro_events_time
+  ON macro_events(scheduled_at_ms);
+
+-- Consensus (impact, forecast, previous) per release, one row per observed change, so
+-- each value keeps the time it was first seen (taken_at_ms) — no lookahead when read back.
+CREATE TABLE IF NOT EXISTS macro_consensus (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  title TEXT NOT NULL,
+  country TEXT NOT NULL,
+  category TEXT NOT NULL,
+  scheduled_at_ms INTEGER NOT NULL,
+  impact TEXT,
+  forecast TEXT,
+  previous TEXT,
+  taken_at_ms INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_macro_consensus_key
+  ON macro_consensus(source, title, scheduled_at_ms, taken_at_ms);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
