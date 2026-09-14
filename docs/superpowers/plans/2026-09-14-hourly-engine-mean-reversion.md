@@ -1467,7 +1467,7 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
   - `STRATEGIES: tuple[tuple[str, str], ...] = (("hourly_mean_reversion", "hourly_mean_reversion_enabled"),)`
   - knobs `hourly_mean_reversion_enabled` (bool, default True) and `hourly_entry_deadline_seconds` (int, default 120, 10–1800)
   - `reset_caches() -> None`
-  - `async build_snapshot(client) -> PaperSnapshot`
+  - `async build_snapshot(client, now: int | None = None) -> PaperSnapshot`
   - `async settle_due(client, snapshot, now: int) -> None`
   - `async decide_hour(client, snapshot, now: int) -> dict[str, dict]` (strategy_id → decision row)
   - `async open_entries(snapshot, now: int, *, allow_entries: bool) -> None`
@@ -1664,6 +1664,19 @@ async def test_disabled_strategy_records_nothing_and_kill_holds_entries(test_db,
     await _tick(monkeypatch, H + 31, _Venue(), allow=False)
     assert await _positions() == []
     assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_tick_straddling_the_hour_uses_one_clock_read(test_db, monkeypatch):
+    clock = iter([H + 3599, H + 3601, H + 3602, H + 3603])
+    monkeypatch.setattr(paper, "_now", lambda: next(clock))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_Venue())) as client:
+        snap = await engine.tick(client)
+    assert snap.window_slug == SLUG
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT window_slug, window_start_ts FROM hourly_strategy_context")
+        rows = [dict(r) for r in await cur.fetchall()]
+    assert all(hm.slug_for(r["window_start_ts"]) == r["window_slug"] for r in rows)
 
 
 @pytest.mark.asyncio
@@ -1865,10 +1878,10 @@ async def _hour_open(client: httpx.AsyncClient, start_ts: int, now_ms: int) -> f
     return _open_cache[start_ts]
 
 
-async def build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
+async def build_snapshot(client: httpx.AsyncClient, now: int | None = None) -> PaperSnapshot:
     from polymarket_bot import paper as P
 
-    now = P._now()
+    now = P._now() if now is None else now
     start = market.hour_start(now)
     m = await _market_for(client, start)
     up_book = await P._fetch_clob_book(client, m.up_token_id)
@@ -2169,8 +2182,10 @@ def _reason_line(rows: dict[str, dict[str, Any]]) -> str:
 async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> PaperSnapshot:
     from polymarket_bot import paper as P
 
-    snapshot = await build_snapshot(client)
+    # One clock read per tick: the snapshot's market and every decision, entry and
+    # settlement step must agree on the hour, even when a tick straddles H:00.
     now = P._now()
+    snapshot = await build_snapshot(client, now)
     await settle_due(client, snapshot, now)
     rows = await decide_hour(client, snapshot, now)
     await open_entries(snapshot, now, allow_entries=allow_entries)
