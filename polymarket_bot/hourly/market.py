@@ -113,7 +113,13 @@ def _klines_url(market: str) -> str:
 async def fetch_closed_candles(
     client: httpx.AsyncClient, *, market: str, symbol: str, now_ms: int, limit: int
 ) -> list[Candle]:
-    """Most recent closed 1h candles, oldest first (the forming candle is dropped)."""
+    """Most recent closed 1h candles, oldest first (the forming candle is dropped).
+
+    Without ``startTime`` Binance always returns its own current (forming) candle last, so
+    that row is dropped by position, on Binance's clock. The ``close_time < now_ms`` check
+    stays as a second guard. A local clock running ahead of Binance cannot then hand the
+    strategy a previous hour that is still forming.
+    """
     resp = await client.get(
         _klines_url(market), params={"symbol": symbol, "interval": "1h", "limit": limit}
     )
@@ -129,7 +135,7 @@ async def fetch_closed_candles(
             quote_volume=float(r[7]),
             taker_buy_volume=float(r[9]),
         )
-        for r in resp.json()
+        for r in resp.json()[:-1]
         if int(r[6]) < now_ms
     ]
 

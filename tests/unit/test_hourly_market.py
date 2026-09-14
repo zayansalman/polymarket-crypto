@@ -91,6 +91,15 @@ async def test_fetch_closed_candles_drops_forming_and_routes_perp() -> None:
     assert seen[0].startswith(f"{_config.BINANCE_API_BASE}/api/v3/klines")
     assert seen[1].startswith(f"{hm.BINANCE_FAPI}/fapi/v1/klines")
 
+    # Local clock says H-1 is over, but Binance's last row is still H-1 (forming): drop it.
+    def clock_ahead(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[_kline(H - 7200, 1, 2), _kline(H - 3600, 2, 3)])
+
+    async with _client(clock_ahead) as client:
+        lagged = await hm.fetch_closed_candles(client, market="spot", symbol="BTCUSDT",
+                                               now_ms=(H + 2) * 1000, limit=170)
+    assert lagged[-1].open_time_ms == (H - 7200) * 1000
+
 
 @pytest.mark.asyncio
 async def test_fetch_hour_candle_open_and_closed_flag() -> None:

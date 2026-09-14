@@ -43,7 +43,7 @@
   - Spot: `config.BINANCE_API_BASE` + `/api/v3/klines`.
   - Perp: `https://fapi.binance.com/fapi/v1/klines`.
   - Kline row: `[open_time, open, high, low, close, volume, close_time, quote_volume, trades, taker_buy_base, taker_buy_quote, ignore]`.
-  - A row is closed iff `close_time < now_ms`.
+  - Closed-candle read (`fetch_closed_candles`, no `startTime`): Binance always returns its own current (forming) candle as the last row, so drop that last row, then keep only rows with `close_time < now_ms`. Both checks together mean a local clock running ahead of Binance cannot hand the strategy a previous hour that is still forming.
   - Settlement read (`fetch_hour_candle`): the hour candle is closed only when `close_time < now_ms` **and** Binance already returns the next hour's candle (request `limit: 2`; the second row's open time is `start + 3600` s). Binance opens the next candle only after processing every trade of this one, so a local clock running ahead cannot settle on a forming candle.
 - **Hourly Mean Reversion constants (frozen):**
   - `WINDOW = 168`, `SPOT_FZ_MIN = 1.20`, `PERP_FZ_MAX = 1.24`, `CLV_MIN = 0.80`.
@@ -197,6 +197,15 @@ async def test_fetch_closed_candles_drops_forming_and_routes_perp() -> None:
     assert len(perp) == 1
     assert seen[0].startswith(f"{_config.BINANCE_API_BASE}/api/v3/klines")
     assert seen[1].startswith(f"{hm.BINANCE_FAPI}/fapi/v1/klines")
+
+    # Local clock says H-1 is over, but Binance's last row is still H-1 (forming): drop it.
+    def clock_ahead(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[_kline(H - 7200, 1, 2), _kline(H - 3600, 2, 3)])
+
+    async with _client(clock_ahead) as client:
+        lagged = await hm.fetch_closed_candles(client, market="spot", symbol="BTCUSDT",
+                                               now_ms=(H + 2) * 1000, limit=170)
+    assert lagged[-1].open_time_ms == (H - 7200) * 1000
 
 
 @pytest.mark.asyncio
@@ -363,7 +372,13 @@ def _klines_url(market: str) -> str:
 async def fetch_closed_candles(
     client: httpx.AsyncClient, *, market: str, symbol: str, now_ms: int, limit: int
 ) -> list[Candle]:
-    """Most recent closed 1h candles, oldest first (the forming candle is dropped)."""
+    """Most recent closed 1h candles, oldest first (the forming candle is dropped).
+
+    Without ``startTime`` Binance always returns its own current (forming) candle last, so
+    that row is dropped by position, on Binance's clock. The ``close_time < now_ms`` check
+    stays as a second guard. A local clock running ahead of Binance cannot then hand the
+    strategy a previous hour that is still forming.
+    """
     resp = await client.get(
         _klines_url(market), params={"symbol": symbol, "interval": "1h", "limit": limit}
     )
@@ -379,7 +394,7 @@ async def fetch_closed_candles(
             quote_volume=float(r[7]),
             taker_buy_volume=float(r[9]),
         )
-        for r in resp.json()
+        for r in resp.json()[:-1]
         if int(r[6]) < now_ms
     ]
 
@@ -1541,7 +1556,11 @@ class _Venue:
             return httpx.Response(200, json={"price": "110.0"})
         if "startTime" in p:  # hour candle for open / settlement
             start = int(p["startTime"]) // 1000
-            return httpx.Response(200, json=[_kline(start, 110.0, self.hour_close, 111.0, 108.0, 0.5)])
+            rows = [_kline(start, 110.0, self.hour_close, 111.0, 108.0, 0.5)]
+            if start + 3600 <= self.end_hour:  # Binance returns the next candle once it began
+                c = self.hour_close
+                rows.append(_kline(start + 3600, c, c, c, c, 0.5))
+            return httpx.Response(200, json=rows)
         if url.startswith(f"{_config.BINANCE_API_BASE}/api/v3/klines"):
             return httpx.Response(200, json=_history(self.end_hour, 0.9))
         if url.startswith(f"{hm.BINANCE_FAPI}/fapi/v1/klines"):
