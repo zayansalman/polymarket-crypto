@@ -3,7 +3,7 @@
 Two strategies for Polymarket's hourly **Bitcoin Up or Down** market:
 
 1. **Kronos BTC Fine Tune** — a candlestick foundation model forecasts the next hour and bets where its probability beats the market price.
-2. **Taker Snapback** — bets against an hour that aggressive spot market orders pushed to an extreme without the perpetual futures market confirming the move.
+2. **Hourly Mean Reversion** — bets the last hour reverses when aggressive spot market orders pushed it to an extreme without the perpetual futures market confirming the move.
 
 Written 2026-09-14. Evidence details, scripts and pre-registrations are summarised in `docs/superpowers/specs/2026-09-14-hourly-btc-flow-strategy-design.md` (PR #234). This file is the operator-facing description of what each strategy does and what to expect.
 
@@ -92,14 +92,14 @@ Tested on 500 random hours it never saw (2025-10-18 to 2026-09-11):
 - Its logic is reversal/RSI-like: its P(up) moves opposite to the last hours and to RSI.
 - Its forecast spread does predict how **big** the next hour's move will be, slightly better than a trailing 24-hour average.
 
-**The historical test gives no reason to expect a profit.** It runs forward so its calls are measured against real Polymarket prices and against Taker Snapback. It is not running because a backtest showed an edge.
+**The historical test gives no reason to expect a profit.** It runs forward so its calls are measured against real Polymarket prices and against Hourly Mean Reversion. It is not running because a backtest showed an edge.
 
 ### Cost
 About 10–20 s of CPU and about 1.7 GB peak memory per hour on the operator's 8 GB M2 MacBook Air. The dependencies (torch, einops, pandas, tqdm, safetensors) are an optional install. Without them the strategy records `unavailable` and never bets.
 
 ---
 
-## Strategy 2 — Taker Snapback
+## Strategy 2 — Hourly Mean Reversion
 
 ### The idea
 Sometimes an hour's move is driven by an unusual burst of **aggressive market orders** (takers) buying or selling spot BTC. In that pattern:
@@ -107,7 +107,7 @@ Sometimes an hour's move is driven by an unusual burst of **aggressive market or
 - the perpetual futures market does **not** show the same burst;
 - the hour closes at the very edge of its range.
 
-The next hour tends to **snap back**. The push looks like a one-sided rush that ran out of fuel, not new conviction across the market.
+The next hour tends to **revert**. The push looks like a one-sided rush that ran out of fuel, not new conviction across the market.
 
 ### Inputs (all known at the open of hour H)
 Binance spot **BTCUSDT** and Binance USD-M perpetual **BTCUSDT** hourly klines: the closed hour H-1 plus the trailing 168 hours. From each kline:
@@ -173,6 +173,6 @@ The dashboard shows, per strategy and separately for paper and live:
 
 - bets, win rate with its 95% range, average price paid, and P&L after fees;
 - would-have-bet hours with their outcomes, plus `MISSED`, `BLOCKED` and `UNFILLED` counts;
-- for Taker Snapback, the running win rate against the 60% line and the 52.25% break-even line.
+- for Hourly Mean Reversion, the running win rate against the 60% line and the 52.25% break-even line.
 
 Nothing switches a strategy off automatically. The operator reads the record and decides.
