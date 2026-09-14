@@ -99,6 +99,10 @@ async def test_paper_tick_routes_to_engine_on_1h(test_db, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_start_pins_the_selected_timeframe(test_db, monkeypatch) -> None:
+    # Start writes these globals; monkeypatch restores them so no later test inherits 1h.
+    monkeypatch.setattr(controller, "_timeframe_cache", "5m")
+    monkeypatch.setattr(controller, "_mode_cache", "paper")
+    monkeypatch.setattr(controller, "_desired_running", False)
     await market_selection.set_selection("btc", "1h")
     started: list[tuple] = []
     monkeypatch.setattr(controller, "_ensure_runner_started", lambda force=False: started.append(
@@ -106,7 +110,6 @@ async def test_start_pins_the_selected_timeframe(test_db, monkeypatch) -> None:
     monkeypatch.setattr(controller, "_ensure_watchdog_started", lambda: None)
     await controller.request_start()
     assert started == [("paper", "1h")]
-    controller._desired_running = False
 
 
 @pytest.mark.asyncio
@@ -117,3 +120,101 @@ async def test_start_refuses_an_unsupported_selection(test_db, monkeypatch) -> N
     status = await controller.request_start()
     spawn.assert_not_called()
     assert status.state == "stopped" and "not wired" in status.detail
+
+
+@pytest.mark.asyncio
+async def test_start_while_running_keeps_the_pinned_timeframe(test_db, monkeypatch) -> None:
+    release = threading.Event()
+    runner = threading.Thread(target=release.wait, daemon=True)
+    runner.start()
+    try:
+        monkeypatch.setattr(controller, "_timeframe_cache", "5m")
+        monkeypatch.setattr(controller, "_mode_cache", "paper")
+        monkeypatch.setattr(controller, "_runner_thread", runner)
+        monkeypatch.setattr(controller, "_stop_event", threading.Event())
+        spawn = MagicMock()
+        monkeypatch.setattr(controller, "_ensure_runner_started", spawn)
+        await market_selection.set_selection("btc", "1h")
+
+        status = await controller.request_start()
+
+        assert controller._timeframe_cache == "5m"
+        spawn.assert_not_called()
+        assert "Press Stop" in status.detail
+    finally:
+        release.set()
+        runner.join(5)
+
+
+def test_loop_thread_hands_the_timeframe_to_the_loop(monkeypatch) -> None:
+    seen: dict[str, str] = {}
+
+    async def fake(stop_event, mode=None, timeframe="5m"):
+        seen["tf"] = timeframe
+
+    monkeypatch.setattr(controller, "run_paper_loop", fake)
+    controller._run_loop_in_thread(threading.Event(), "paper", "1h")
+    assert seen == {"tf": "1h"}
+
+
+def test_runner_spawn_passes_the_pinned_mode_and_timeframe(monkeypatch) -> None:
+    monkeypatch.setattr(controller, "_runner_thread", None)
+    monkeypatch.setattr(controller, "_stop_event", None)
+    monkeypatch.setattr(controller, "_mode_cache", "paper")
+    monkeypatch.setattr(controller, "_timeframe_cache", "1h")
+    recorder = MagicMock()
+    monkeypatch.setattr(controller.threading, "Thread", recorder)
+
+    controller._ensure_runner_started()
+
+    assert recorder.call_args.kwargs["args"][1:] == ("paper", "1h")
+
+
+async def _insert_open_hourly_row(start_ts: int, mode: str) -> None:
+    async with _db.connect() as conn:
+        await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
+            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'hourly_mean_reversion', '1h', ?, ?)",
+            (hm.slug_for(start_ts), start_ts, mode),
+        )
+        await conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeypatch) -> None:
+    await _insert_open_hourly_row(H - 3600, "paper")
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(side_effect=AssertionError))
+    current_hour = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
+                                   up_best_bid=0.49, down_best_bid=0.50)
+    monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=current_hour))
+
+    assert await paper.force_close_open_positions("STOP_REQUEST") == 0
+    assert await paper.count_open_positions() == 1
+
+    own_hour_no_bid = SimpleNamespace(window_slug=hm.slug_for(H - 3600), created_at="y",
+                                      spot_price=1.0, up_best_bid=0.49, down_best_bid=None)
+    monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=own_hour_no_bid))
+
+    assert await paper.force_close_open_positions("STOP_REQUEST") == 0
+    assert await paper.count_open_positions() == 1
+
+
+@pytest.mark.asyncio
+async def test_live_stop_never_sells_a_past_hour_row(test_db, monkeypatch) -> None:
+    await _insert_open_hourly_row(H - 3600, "live")
+    slot = MagicMock()
+    slot.submit_exit = AsyncMock()
+    account = MagicMock()
+    account.slot_executor = MagicMock(return_value=slot)
+    monkeypatch.setattr(paper, "_live_executor", account)
+    snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
+                           up_best_bid=0.49, down_best_bid=0.50)
+    monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
+
+    assert await paper.force_close_open_positions("STOP_REQUEST") == 0
+
+    slot.submit_exit.assert_not_awaited()
+    account.submit_exit.assert_not_called()
+    assert await paper.count_open_positions(mode="live") == 1

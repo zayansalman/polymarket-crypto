@@ -210,6 +210,7 @@ async def set_mode(mode: str) -> BtcBotStatus:
 
 async def request_start() -> BtcBotStatus:
     """Start the trading runner (paper by default, live only when fully gated)."""
+    global _desired_running, _mode_cache, _silent_stop_notified, _timeframe_cache
     now = datetime.now(UTC).isoformat(timespec="seconds")
     runner = _runner_thread
     if runner is not None and runner.is_alive() and _stop_event is not None and _stop_event.is_set():
@@ -234,6 +235,18 @@ async def request_start() -> BtcBotStatus:
     from polymarket_bot import market_selection
 
     selection = await market_selection.get_selection()
+    if _is_runner_alive() and (selection.asset, selection.timeframe) != ("btc", _timeframe_cache):
+        # The market is pinned at Start, like mode: a running loop keeps the
+        # timeframe it was started on. Re-pinning here would leave the old
+        # loop trading while the detail (and a later watchdog respawn) says
+        # otherwise.
+        detail = (
+            f"Already running on BTC {_timeframe_cache}. Press Stop, then Start, to switch to "
+            f"{selection.asset.upper()} {selection.timeframe}."
+        )
+        await set_config("polymarket_bot.updated_at", now)
+        await set_config("polymarket_bot.detail", detail)
+        return await get_status()
     if not selection.loop_supported:
         detail = (
             f"Start refused: the loop is not wired for {selection.asset.upper()} "
@@ -263,7 +276,6 @@ async def request_start() -> BtcBotStatus:
             await set_config("polymarket_bot.detail", detail)
             log.error("btc.live_start_refused", error=detail)
             return await get_status()
-    global _desired_running, _mode_cache, _silent_stop_notified, _timeframe_cache
     _desired_running = True
     _mode_cache = mode
     _timeframe_cache = selection.timeframe
