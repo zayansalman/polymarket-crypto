@@ -39,7 +39,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/paper.py` | WIRED | 6 | BTC 5-minute trading engine (paper by default, live opt-in). |
 | `polymarket_bot/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
 | `polymarket_bot/shadow/__init__.py` | pkg | 3 | Shadow forward-tester: candidate strategies logged and settled net of fees. |
-| `polymarket_bot/shadow/fees.py` | WIRED | 6 | Polymarket taker-fee math for the shadow forward-tester. |
+| `polymarket_bot/shadow/fees.py` | WIRED | 7 | Polymarket taker-fee math for the shadow forward-tester. |
 | `polymarket_bot/shadow/ledger.py` | WIRED | 2 | Persistence for the shadow forward-tester's would-be trades. |
 | `polymarket_bot/shadow/runner.py` | WIRED | 2 | Shadow forward-tester runner. |
 | `polymarket_bot/shadow/signals.py` | WIRED | 2 | Candidate strategies for the shadow forward-tester. |

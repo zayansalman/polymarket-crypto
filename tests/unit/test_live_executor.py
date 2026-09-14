@@ -28,6 +28,7 @@ from polymarket_exec.execution.live import (
     _avg_fill_price,
     _round_price_to_tick,
     _round_size_down,
+    _row_window_resolved,
     assert_live_boot_allowed,
     build_live_executor,
 )
@@ -1342,3 +1343,187 @@ async def test_matched_entry_size_asymmetry_on_lookup_failure(
     assert await executor._matched_entry_size() == 5.0
     # SETTLE: no SELL, so a failed lookup must not manufacture held size.
     assert await executor._matched_entry_size(assume_filled_on_error=False) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Strategy slots: one open position per strategy (operator decision 2026-09-14)
+# ---------------------------------------------------------------------------
+
+MR = "hourly_mean_reversion"
+KR = "kronos_btc_finetune"
+HSLUG = "bitcoin-up-or-down-september-13-2026-3pm-et"
+
+
+def _distinct_order_ids(client: MagicMock) -> None:
+    ids = iter(f"0xORDER{i}" for i in range(1, 100))
+    client.create_and_post_order.side_effect = lambda args: {
+        "success": True, "errorMsg": "", "orderID": next(ids), "status": "live",
+    }
+
+
+async def _seed_hourly_row(journal_db, strategy_id: str, *, mode: str = "live",
+                           start: int | None = None) -> int:
+    start = start if start is not None else int(time.time()) // 3600 * 3600
+    async with journal_db.connect() as conn:
+        cur = await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, mode, strategy_id, market_timeframe, window_start_ts)"
+            " VALUES ('2026-09-13T19:00:30+00:00', ?, 'Down', 'open', 0.57, 3.0, 5.26, ?, ?,"
+            " '1h', ?)",
+            (HSLUG, mode, strategy_id, start),
+        )
+        await conn.commit()
+        return int(cur.lastrowid)
+
+
+async def _row(journal_db, position_id: int) -> dict:
+    async with journal_db.connect() as conn:
+        async with conn.execute(
+            "SELECT * FROM paper_positions WHERE position_id = ?", (position_id,)
+        ) as cur:
+            return dict(await cur.fetchone())
+
+
+@pytest.mark.asyncio
+async def test_slots_share_client_and_gate_but_hold_their_own_position(
+    journal_db, tmp_path: Path
+) -> None:
+    client = _mock_client()
+    account = _executor(client, tmp_path)
+    mr, kr = account.slot_executor(MR), account.slot_executor(KR)
+    assert account.slot_executor(MR) is mr
+    assert mr.gate is account.gate and mr._client is client
+
+    assert (await mr.submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)).ok
+
+    assert "max 1" in (mr.entry_block_reason(3.0) or "")
+    assert kr.entry_block_reason(3.0) is None
+    assert account.entry_block_reason(3.0) is None
+    entry = [r for r in await _journal_rows(journal_db) if r["intent"] == "ENTRY"][-1]
+    assert entry["strategy_id"] == MR
+
+
+def test_slot_executor_needs_a_client_and_the_account_executor(tmp_path: Path) -> None:
+    unbuilt = LiveExecutor(private_key="0x" + "1" * 64, kill_switch_path=tmp_path / "KILL")
+    with pytest.raises(RuntimeError):
+        unbuilt.slot_executor(MR)
+    slot = _executor(_mock_client(), tmp_path).slot_executor(MR)
+    with pytest.raises(RuntimeError):
+        slot.slot_executor(KR)
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_and_stop_cancel_resting_orders_in_every_slot(
+    journal_db, tmp_path: Path
+) -> None:
+    client = _mock_client()
+    _distinct_order_ids(client)
+    account = _executor(client, tmp_path)
+    await account.slot_executor(MR).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
+    await account.slot_executor(KR).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
+    (tmp_path / "KILL").touch()
+
+    assert await account.enforce_kill_switch() is True
+
+    cancelled = {c.args[0].orderID for c in client.cancel_order.call_args_list}
+    assert cancelled == {"0xORDER1", "0xORDER2"}
+    assert account.slot_executor(MR)._entry_order_id is None
+    assert account.slot_executor(KR)._entry_order_id is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_open_all_covers_the_account_and_every_slot(
+    journal_db, tmp_path: Path
+) -> None:
+    client = _mock_client()
+    _distinct_order_ids(client)
+    account = _executor(client, tmp_path)
+    await account.submit_entry(UP_TOKEN, 0.57, 3.0)
+    await account.slot_executor(MR).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
+
+    assert sorted(await account.cancel_open_all(reason="LOOP_STOP")) == ["0xORDER1", "0xORDER2"]
+
+
+@pytest.mark.asyncio
+async def test_boot_adopts_one_row_per_strategy_using_that_strategys_order(
+    journal_db, tmp_path: Path
+) -> None:
+    mr_id = await _seed_hourly_row(journal_db, MR)
+    kr_id = await _seed_hourly_row(journal_db, KR)
+    # Same hour, same token: only strategy_id tells the two entries apart.
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xMR", strategy_id=MR,
+    )
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xKR", strategy_id=KR,
+    )
+    client = _mock_client()
+    client.get_order.side_effect = lambda oid: {
+        "size_matched": "5.26" if oid == "0xMR" else "0", "price": "0.57",
+    }
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    assert "max 1" in (account.slot_executor(MR).entry_block_reason(3.0) or "")
+    assert (await _row(journal_db, mr_id))["state"] == "open"
+    assert (await _row(journal_db, kr_id))["exit_reason"] == "RECONCILED_UNFILLED"
+    assert account.slot_executor(KR).entry_block_reason(3.0) is None
+
+
+@pytest.mark.asyncio
+async def test_boot_refuses_two_open_rows_for_one_strategy(journal_db, tmp_path: Path) -> None:
+    await _seed_hourly_row(journal_db, MR)
+    await _seed_hourly_row(journal_db, MR)
+    with pytest.raises(LiveBootRefused, match="max 1 per strategy"):
+        await _executor(_mock_client(), tmp_path).start()
+
+
+@pytest.mark.asyncio
+async def test_boot_leaves_paper_rows_of_strategy_slots_for_paper_settlement(
+    journal_db, tmp_path: Path
+) -> None:
+    paper_id = await _seed_hourly_row(journal_db, MR, mode="paper")
+    account = _executor(_mock_client(), tmp_path)
+
+    await account.start()
+
+    row = await _row(journal_db, paper_id)
+    assert row["state"] == "open" and row["exit_reason"] is None
+    assert account.slot_executor(MR).entry_block_reason(3.0) is None
+
+
+@pytest.mark.asyncio
+async def test_boot_adopts_resolved_hourly_row_from_journal_so_it_settles(
+    journal_db, tmp_path: Path
+) -> None:
+    """An hourly row settles from the Binance candle, which stays readable after
+    resolution, so a pruned order with a journal-recorded fill is adopted, not zeroed."""
+    past = int(time.time()) // 3600 * 3600 - 3 * 3600
+    position_id = await _seed_hourly_row(journal_db, MR, start=past)
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xPRUNED",
+        details={"response": {"status": "matched", "takingAmount": "5.26"}},
+        strategy_id=MR,
+    )
+    client = _mock_client()
+    client.get_order.return_value = None
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    assert (await _row(journal_db, position_id))["state"] == "open"
+    settled = await account.slot_executor(MR).record_settlement(True, HSLUG)
+    assert settled.ok and settled.size == pytest.approx(5.26)
+
+
+def test_hourly_rows_resolve_an_hour_after_their_own_start() -> None:
+    row = {"window_slug": HSLUG, "market_timeframe": "1h", "window_start_ts": 1_000_000}
+    assert _row_window_resolved(row, now=1_000_000 + 3600 + 59) is False
+    assert _row_window_resolved(row, now=1_000_000 + 3600 + 60) is True
+    legacy = {"window_slug": "btc-updown-5m-1000000"}
+    assert _row_window_resolved(legacy, now=1_000_000 + 359) is False
+    assert _row_window_resolved(legacy, now=1_000_000 + 360) is True

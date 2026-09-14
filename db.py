@@ -219,6 +219,9 @@ LIVE_ORDERS_COLUMN_MIGRATIONS = {
     # crossed portion); 'live' = rested on the book (maker if later filled,
     # no fee); 'delayed' = venue-throttled. Backfilled from details_json.
     "placement_status": "TEXT",
+    # Hourly strategies (2026-09-14): which strategy slot placed the order, so
+    # two strategies trading the same hour never adopt each other's entries.
+    "strategy_id": "TEXT",
 }
 
 # Issue #122: capture the market state at decision time on each shadow row so
@@ -466,6 +469,7 @@ async def journal_live_order(
     error: str | None = None,
     details: dict[str, Any] | None = None,
     mode: str = "live",
+    strategy_id: str | None = None,
 ) -> None:
     """Append one order/fill/cancel attempt to the live_orders journal.
 
@@ -492,8 +496,8 @@ async def journal_live_order(
             INSERT INTO live_orders(
               created_at, window_slug, token_id, intent, side, price, size,
               notional_usd, order_type, status, clob_order_id, error,
-              details_json, mode, placement_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              details_json, mode, placement_status, strategy_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 utc_now_iso(),
@@ -511,6 +515,7 @@ async def journal_live_order(
                 payload,
                 mode,
                 placement_status,
+                strategy_id,
             ),
         )
         await db.commit()

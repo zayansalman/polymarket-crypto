@@ -8,7 +8,7 @@ Safety model
   in the dashboard — the controller refuses a live Start that wasn't selected
   there — not an env phrase.
 * Hard risk gates run BEFORE every order: per-trade notional cap, one open
-  position max, daily realized-loss halt, and an OPTIONAL daily bankroll cap
+  position per strategy slot, daily realized-loss halt, and an OPTIONAL daily bankroll cap
   (disabled when ``TRADE_BANKROLL_CAP_USD`` is blank/unset/≤0). The daily
   counters are PERSISTED in SQLite and rebuilt at boot, so Stop/Start or a
   process restart cannot reset the daily loss halt or grant a fresh bankroll
@@ -217,6 +217,7 @@ def _placement_crossed_shares(response: dict[str, Any], side: str) -> float:
 
 _WINDOW_SECONDS = 300  # 5-minute up/down markets
 _WINDOW_RESOLVE_GRACE_SECONDS = 60
+_HOURLY_WINDOW_SECONDS = 3600
 
 
 def _window_resolved(window_slug: str, *, now: float | None = None) -> bool:
@@ -232,6 +233,16 @@ def _window_resolved(window_slug: str, *, now: float | None = None) -> bool:
         return False
     now_s = time.time() if now is None else now
     return now_s >= start + _WINDOW_SECONDS + _WINDOW_RESOLVE_GRACE_SECONDS
+
+
+def _row_window_resolved(row: dict[str, Any], *, now: float | None = None) -> bool:
+    """``_window_resolved`` for a ledger row: hourly rows carry their own window start."""
+    if row.get("market_timeframe") == "1h" and row.get("window_start_ts") is not None:
+        now_s = time.time() if now is None else now
+        return now_s >= (
+            int(row["window_start_ts"]) + _HOURLY_WINDOW_SECONDS + _WINDOW_RESOLVE_GRACE_SECONDS
+        )
+    return _window_resolved(row["window_slug"], now=now)
 
 
 def _journal_filled_shares(details_json: object) -> float:
@@ -302,6 +313,8 @@ class LiveExecutor:
         exit_fill_timeout_seconds: float | None = None,
         kill_switch_path: Path | None = None,
         client: Any | None = None,
+        gate: RiskGate | None = None,
+        slot: str | None = None,
     ) -> None:
         if not private_key and client is None:
             raise LiveBootRefused("LiveExecutor requires a private key.")
@@ -310,30 +323,35 @@ class LiveExecutor:
         self._signature_type = signature_type
         self._host = host or _config.POLYMARKET_CLOB_API
         self._chain_id = chain_id or _config.POLYMARKET_CHAIN_ID
-        gate_cfg = GateConfig(
-            max_trade_usd=(
-                max_trade_usd if max_trade_usd is not None
-                else _config.TRADE_MAX_USD
-            ),
-            daily_loss_halt_usd=(
-                daily_loss_halt_usd if daily_loss_halt_usd is not None
-                else _config.TRADE_DAILY_LOSS_HALT_USD
-            ),
-            bankroll_cap_usd=(
-                bankroll_cap_usd if bankroll_cap_usd is not None
-                else _config.TRADE_BANKROLL_CAP_USD
-            ),
-            max_entry_slippage=(
-                max_entry_slippage if max_entry_slippage is not None
-                else _config.TRADE_MAX_ENTRY_SLIPPAGE
-            ),
-            kill_switch_path=Path(
-                kill_switch_path if kill_switch_path is not None
-                else _config.KILL_SWITCH_PATH
-            ),
-        )
-        # is_live=True → the gate halts on the live (real-money) leg (#76).
-        self.gate = RiskGate(gate_cfg, is_live=True)
+        if gate is not None:
+            # A strategy slot shares the account executor's gate: the daily loss
+            # halt, caps and kill switch are account-wide, never per strategy.
+            self.gate = gate
+        else:
+            gate_cfg = GateConfig(
+                max_trade_usd=(
+                    max_trade_usd if max_trade_usd is not None
+                    else _config.TRADE_MAX_USD
+                ),
+                daily_loss_halt_usd=(
+                    daily_loss_halt_usd if daily_loss_halt_usd is not None
+                    else _config.TRADE_DAILY_LOSS_HALT_USD
+                ),
+                bankroll_cap_usd=(
+                    bankroll_cap_usd if bankroll_cap_usd is not None
+                    else _config.TRADE_BANKROLL_CAP_USD
+                ),
+                max_entry_slippage=(
+                    max_entry_slippage if max_entry_slippage is not None
+                    else _config.TRADE_MAX_ENTRY_SLIPPAGE
+                ),
+                kill_switch_path=Path(
+                    kill_switch_path if kill_switch_path is not None
+                    else _config.KILL_SWITCH_PATH
+                ),
+            )
+            # is_live=True → the gate halts on the live (real-money) leg (#76).
+            self.gate = RiskGate(gate_cfg, is_live=True)
         # An explicit constructor value (tests; a caller that wants a fixed
         # timeout) always wins. Otherwise this tracks the dashboard-editable
         # ``live_exit_fill_timeout_seconds`` knob (#206) via the shared gate,
@@ -343,7 +361,11 @@ class LiveExecutor:
 
         self._client = client
         self._started = client is not None
-        # Position / order tracking (max 1 open position by design)
+        # None = the account executor (the legacy loop's slot). A strategy id =
+        # that strategy's slot, created by slot_executor() on the account executor.
+        self._slot = slot
+        self._slots: dict[str, LiveExecutor] = {}
+        # Position / order tracking (max 1 open position per slot)
         self._entry_order_id: Optional[str] = None
         self._entry_token_id: Optional[str] = None
         self._entry_price: Optional[float] = None
@@ -463,34 +485,48 @@ class LiveExecutor:
                 f"({type(last_err).__name__}: {last_err}). Refusing to trade on "
                 "top of unknown resting orders."
             ) from last_err
-        await journal_live_order(
+        await self._journal(
             intent="CANCEL_ALL", side="-", status="CANCELLED",
             details={"reason": "BOOT_RECONCILE", "response": raw},
         )
 
-        # 2) Re-adopt any open ledger position so it keeps being managed.
+        # 2) Re-adopt open ledger positions so they keep being managed: at most
+        # one per slot (the legacy loop's slot plus one per strategy). Paper rows
+        # of strategy slots hold no real tokens; the hourly engine settles them.
         async with connect() as db:
             async with db.execute(
-                "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
+                "SELECT * FROM paper_positions WHERE state = 'open' "
+                "AND NOT (strategy_id IS NOT NULL AND COALESCE(mode, '') = 'paper') "
+                "ORDER BY opened_at"
             ) as cur:
                 open_rows = [dict(r) for r in await cur.fetchall()]
-        if not open_rows:
-            return
-        if len(open_rows) > 1:
+        by_slot: dict[str | None, list[dict[str, Any]]] = {}
+        for row in open_rows:
+            by_slot.setdefault(row.get("strategy_id"), []).append(row)
+        crowded = sorted(
+            str(s or "the legacy loop") for s, rows in by_slot.items() if len(rows) > 1
+        )
+        if crowded:
             raise LiveBootRefused(
-                f"Boot reconciliation failed: {len(open_rows)} open ledger positions "
-                "found (max 1 by design). Resolve them manually (flatten on Polymarket, "
-                "then UPDATE paper_positions SET state='closed', exit_reason='MANUAL' "
-                "for each row) before restarting live mode."
+                f"Boot reconciliation failed: more than one open ledger position for "
+                f"{', '.join(crowded)} (max 1 per strategy by design). Resolve them "
+                "manually (flatten on Polymarket, then UPDATE paper_positions SET "
+                "state='closed', exit_reason='MANUAL' for each row) before restarting "
+                "live mode."
             )
-        row = open_rows[0]
+        for slot_id, rows in by_slot.items():
+            owner = self if slot_id is None else self.slot_executor(slot_id)
+            await owner._reconcile_row(rows[0])
+
+    async def _reconcile_row(self, row: dict[str, Any]) -> None:
+        """Adopt or close one open ledger row on the slot that owns it."""
         async with connect() as db:
             async with db.execute(
                 "SELECT token_id, clob_order_id, price, size, details_json "
                 "FROM live_orders "
                 "WHERE intent = 'ENTRY' AND status = 'SUBMITTED' AND window_slug = ? "
-                "ORDER BY id DESC LIMIT 1",
-                (row["window_slug"],),
+                "AND strategy_id IS ? ORDER BY id DESC LIMIT 1",
+                (row["window_slug"], row.get("strategy_id")),
             ) as cur:
                 entry = await cur.fetchone()
 
@@ -534,7 +570,11 @@ class LiveExecutor:
             # time: adopt any match it recorded; refuse only when live risk is
             # genuinely unknowable.
             journal_matched = _journal_filled_shares(entry["details_json"])
-            if _window_resolved(row["window_slug"]):
+            # An hourly row settles from the Binance candle, which stays readable
+            # after resolution: adopt a journal-recorded fill and settle it for
+            # real instead of closing the row at zero.
+            settles_from_candle = row.get("strategy_id") is not None and journal_matched > 0
+            if _row_window_resolved(row) and not settles_from_candle:
                 await self._close_ledger_row(row, "RECONCILED_STALE_RESOLVED")
                 await notify(
                     "live_reconciled",
@@ -676,7 +716,7 @@ class LiveExecutor:
                 "New entries halted; cancelling resting orders. Open positions "
                 "will still be flattened by the exit path.",
             )
-            await self.cancel_open(reason="KILL_SWITCH")
+            await self.cancel_open_all(reason="KILL_SWITCH")
         return True
 
     async def record_realized_pnl(self, pnl_usd: float) -> None:
@@ -712,7 +752,7 @@ class LiveExecutor:
         pnl = round(held * (payout - entry_price) - fee, 4)
         if held > 0:
             await self.record_realized_pnl(pnl)
-        await journal_live_order(
+        await self._journal(
             intent="SETTLEMENT",
             side=SELL,
             status="SETTLED",
@@ -956,7 +996,7 @@ class LiveExecutor:
                 "no live entry tracked; cannot flatten "
                 "(restart reconciliation should have adopted it — manual check required)"
             )
-            await journal_live_order(
+            await self._journal(
                 intent="EXIT", side=SELL, status="ERROR",
                 window_slug=window_slug, error=reason,
             )
@@ -994,14 +1034,14 @@ class LiveExecutor:
             if matched <= 0:
                 self._clear_position()
                 reason = "entry order has no matched size; nothing to sell"
-                await journal_live_order(
+                await self._journal(
                     intent="EXIT", side=SELL, status="SKIPPED",
                     window_slug=window_slug, token_id=token, error=reason,
                 )
                 return LiveOrderResult(ok=False, status="SKIPPED", reason=reason)
             # Earlier partial exits already sold everything that filled.
             self._clear_position()
-            await journal_live_order(
+            await self._journal(
                 intent="EXIT", side=SELL, status="FLAT",
                 window_slug=window_slug, token_id=token,
                 error="already fully flattened by earlier exits",
@@ -1069,7 +1109,7 @@ class LiveExecutor:
                 order_id=result.order_id, price=price, size=final,
                 notional_usd=round(price * final, 4),
             )
-        await journal_live_order(
+        await self._journal(
             intent="EXIT", side=SELL, status="UNFILLED",
             window_slug=window_slug, token_id=token,
             price=price, size=final, order_type="GTC",
@@ -1181,6 +1221,39 @@ class LiveExecutor:
         self._clear_position()
         return True
 
+    def slot_executor(self, strategy_id: str) -> LiveExecutor:
+        """The executor owning ``strategy_id``'s single position slot.
+
+        Shares this account executor's authenticated client and RiskGate; only
+        position/order tracking is per strategy. Created once per run.
+        """
+        if self._slot is not None:
+            raise RuntimeError("strategy slots are created from the account executor")
+        if self._client is None:
+            raise RuntimeError("the account executor has no CLOB client yet")
+        slot = self._slots.get(strategy_id)
+        if slot is None:
+            slot = LiveExecutor(
+                self._private_key,
+                self._funder,
+                self._signature_type,
+                host=self._host,
+                chain_id=self._chain_id,
+                exit_fill_timeout_seconds=self._exit_fill_timeout_override,
+                client=self._client,
+                gate=self.gate,
+                slot=strategy_id,
+            )
+            self._slots[strategy_id] = slot
+        return slot
+
+    async def cancel_open_all(self, reason: str = "CANCEL_REQUEST") -> list[str]:
+        """Cancel tracked resting orders in the account slot and every strategy slot."""
+        cancelled = await self.cancel_open(reason=reason)
+        for slot in self._slots.values():
+            cancelled += await slot.cancel_open(reason=reason)
+        return cancelled
+
     async def _register_exit_fill(
         self,
         sold_size: float,
@@ -1226,7 +1299,7 @@ class LiveExecutor:
             )
         except Exception as e:  # noqa: BLE001
             error = f"{type(e).__name__}: {e}"
-            await journal_live_order(
+            await self._journal(
                 intent="CANCEL", side="-", status="ERROR",
                 token_id=self._entry_token_id, clob_order_id=order_id, error=error,
                 details={"reason": reason},
@@ -1239,7 +1312,7 @@ class LiveExecutor:
                 status = await self._order_status(order_id)
                 if status not in _TERMINAL_ORDER_STATUSES:
                     error = f"cancel not confirmed (status={status or 'unknown'})"
-                    await journal_live_order(
+                    await self._journal(
                         intent="CANCEL", side="-", status="ERROR",
                         token_id=self._entry_token_id, clob_order_id=order_id,
                         error=error, details={"reason": reason, "response": raw},
@@ -1249,7 +1322,7 @@ class LiveExecutor:
                         order_id=order_id, response=str(raw),
                     )
                     return False
-        await journal_live_order(
+        await self._journal(
             intent="CANCEL", side="-", status="CANCELLED",
             token_id=self._entry_token_id, clob_order_id=order_id,
             details={"reason": reason, "response": raw},
@@ -1348,7 +1421,7 @@ class LiveExecutor:
             raw = await asyncio.to_thread(self._client.create_and_post_order, args)
         except Exception as e:  # noqa: BLE001
             error = f"{type(e).__name__}: {e}"
-            await journal_live_order(
+            await self._journal(
                 intent=intent, side=side, status="ERROR",
                 window_slug=window_slug, token_id=token_id,
                 price=price, size=size, notional_usd=notional,
@@ -1365,7 +1438,7 @@ class LiveExecutor:
         success = bool(response.get("success", order_id is not None))
         status = "SUBMITTED" if success else "ERROR"
         error = None if success else str(response.get("errorMsg") or response)
-        await journal_live_order(
+        await self._journal(
             intent=intent, side=side, status=status,
             window_slug=window_slug, token_id=token_id,
             price=price, size=size, notional_usd=notional,
@@ -1395,13 +1468,16 @@ class LiveExecutor:
         notional_usd: float | None = None,
         mode: str = "live",
     ) -> None:
-        await journal_live_order(
+        await self._journal(
             intent=intent, side=side, status="BLOCKED",
             window_slug=window_slug, token_id=token_id,
             price=price, size=size, notional_usd=notional_usd, error=reason,
             mode=mode,
         )
         log.warning("live_executor.order_blocked", intent=intent, reason=reason, mode=mode)
+
+    async def _journal(self, **fields: Any) -> None:
+        await journal_live_order(strategy_id=self._slot, **fields)
 
 
 def build_live_executor() -> LiveExecutor:

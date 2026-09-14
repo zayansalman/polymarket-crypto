@@ -74,7 +74,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 991.
+- **Tests:** 1003.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_bot/hourly/ledger.py`, `polymarket_bot/hourly/mean_reversion.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
@@ -114,7 +114,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/paper.py` | WIRED | 6 | BTC 5-minute trading engine (paper by default, live opt-in). |
 | `polymarket_bot/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
 | `polymarket_bot/shadow/__init__.py` | pkg | 3 | Shadow forward-tester: candidate strategies logged and settled net of fees. |
-| `polymarket_bot/shadow/fees.py` | WIRED | 6 | Polymarket taker-fee math for the shadow forward-tester. |
+| `polymarket_bot/shadow/fees.py` | WIRED | 7 | Polymarket taker-fee math for the shadow forward-tester. |
 | `polymarket_bot/shadow/ledger.py` | WIRED | 2 | Persistence for the shadow forward-tester's would-be trades. |
 | `polymarket_bot/shadow/runner.py` | WIRED | 2 | Shadow forward-tester runner. |
 | `polymarket_bot/shadow/signals.py` | WIRED | 2 | Candidate strategies for the shadow forward-tester. |
