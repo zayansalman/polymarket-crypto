@@ -144,7 +144,7 @@ Every test was pre-registered: rules chosen on 2023-10 to 2025-10, then checked 
 
 - **Frequency:** about 2.8% of hours, roughly **one bet every 1.5 days** (about 20 a month).
 - **Both directions work.** Walk-forward: bet Down 56.8% (n=303), bet Up 57.7% (n=317). In the latest 11 months, betting Down has been the stronger leg (60.9% vs 55.3%).
-- **The snapback window is short.** The effect lasts about 2 hours and is gone by the third, so entries happen at the open only.
+- **The reversion window is short.** The effect lasts about 2 hours and is gone by the third, so entries happen at the open only.
 
 ### What didn't help (kept as recorded context, not filters)
 | Idea | Result |
