@@ -179,6 +179,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_shadow_positions_window
   ON daily_shadow_positions(window_slug);
 CREATE INDEX IF NOT EXISTS idx_daily_shadow_positions_asset
   ON daily_shadow_positions(asset);
+
+-- Hourly BTC strategies: one decision row per (hour window, strategy), written for
+-- EVERY hour whether or not it traded, then settled from the Binance 1h candle, so
+-- the operator can score each strategy's calls (and would-have-bet hours) honestly.
+CREATE TABLE IF NOT EXISTS hourly_strategy_context (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,
+  window_slug TEXT NOT NULL,
+  window_start_ts INTEGER NOT NULL,
+  decision_side TEXT,
+  decision_reason TEXT NOT NULL,
+  signal_json TEXT,
+  factors_json TEXT,
+  up_bid REAL,
+  up_ask REAL,
+  down_bid REAL,
+  down_ask REAL,
+  hour_open REAL,
+  action TEXT NOT NULL,
+  position_id INTEGER,
+  mode TEXT,
+  hour_close REAL,
+  outcome_side TEXT,
+  settled_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_window_strategy
+  ON hourly_strategy_context(window_slug, strategy_id);
+CREATE INDEX IF NOT EXISTS idx_hourly_context_start
+  ON hourly_strategy_context(window_start_ts);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
@@ -224,6 +254,11 @@ POSITION_COLUMN_MIGRATIONS = {
     # executor was attached. Legacy rows are backfilled by joining
     # live_orders on window_slug.
     "mode": "TEXT",
+    # Hourly strategies (2026-09-14): each strategy owns one open-position slot.
+    # NULL strategy_id / market_timeframe = the legacy 5m loop's rows.
+    "strategy_id": "TEXT",
+    "market_timeframe": "TEXT",
+    "window_start_ts": "INTEGER",
 }
 
 # Issue #22: executable top-of-book quotes journaled per tick. Rows without
