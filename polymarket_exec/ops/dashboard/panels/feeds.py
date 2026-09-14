@@ -1,26 +1,22 @@
-"""FEEDS card: one row per upstream feed — what it feeds, source, delay, status.
+"""FEEDS card: one row per live upstream feed — what it feeds, source, delay, status.
 
-Replaces the ribbon's TICK/SPOT/REF/VOL/BOOK/EXEC chips. Rows are plain data
-(``FeedRow``) so new venues (Binance spot, Kraken, …) are one more row.
+Rows come from the always-on feed monitor (``polymarket_exec/ops/feed_monitor.py``),
+which checks every feed directly — so the card is live whether or not the bot
+loop is running. Rows are plain data (``FeedRow``) so new venues are one more row.
 
-Per-feed status comes from the last journaled tick's ``feed_source``; when that
-tick is stale or missing, tick-derived rows go grey instead of showing an old OK.
-Delays shown are the ones the app measures today: loop tick age, Chainlink WS
-print age, and time since the last live order. Other rows show "—".
+Delay is the age of the latest print for the Chainlink WS stream, and the
+round-trip time of the latest check for each REST feed.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from typing import Any
 
 import config as _config
+from polymarket_exec.ops import feed_monitor as fm
 
-from . import _shared as s
-
-# Live mode: no order action for this long while running is worth a look —
-# a bot that lost CLOB write access often keeps reading and journaling skips.
-ORDER_QUIET_AFTER_S = 300
+# A REST round trip slower than this is flagged (status stays OK).
+SLOW_MS = 2000.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +28,16 @@ class FeedRow:
     status: str
     level: str  # on | warn | down | idle
     delay_warn: bool = False
+    detail: str | None = None  # hover text: the error behind a bad status
+
+
+# (probe key, name, used for, source) — order is the card's row order.
+_REST_FEEDS = (
+    (fm.CHAINLINK_REST, "Chainlink BTC/USD", "window open", "crypto-price REST"),
+    (fm.GAMMA, "Polymarket Gamma", "market lookup", "REST"),
+    (fm.CLOB_BOOK, "Polymarket book", "UP/DOWN quotes", "CLOB REST"),
+    (fm.BINANCE, "Binance BTCUSDT", "vol backup", "REST klines"),
+)
 
 
 def _secs(v: float) -> str:
@@ -42,107 +48,56 @@ def _secs(v: float) -> str:
     return f"{int(v) // 60}m{int(v) % 60:02d}s"
 
 
-def build_rows(
-    *,
-    tick: dict[str, Any] | None,
-    is_live: bool,
-    last_live_at: str | None,
-    chainlink_age_s: float | None,
-    tick_seconds: float,
-) -> list[FeedRow]:
-    tick_age = s.tick_age_seconds(tick.get("created_at") if tick else None)
-    # Same cutoff as the loop's own check (paper._connectivity_from_tick): the
-    # runtime tick-interval knob, not the env default.
-    stale_after = int(max(tick_seconds * 3, 20))
-    fresh = tick_age is not None and tick_age <= stale_after
-    parts = s.parse_feed_source(tick.get("feed_source") if tick else None)
-
-    if tick_age is None:
-        loop = FeedRow("Bot loop", "decision tick", "journal", "—", "NO DATA", "warn")
-    elif fresh:
-        loop = FeedRow("Bot loop", "decision tick", "journal", f"{tick_age}s", "OK", "on")
-    else:
-        loop = FeedRow(
-            "Bot loop", "decision tick", "journal", _secs(tick_age), "STALE", "warn", True
-        )
-    rows = [loop]
-
-    def from_tick(row: FeedRow) -> FeedRow:
-        # No fresh tick → the recorded source status is history, not health.
-        if fresh:
-            return row
-        return FeedRow(row.name, row.role, row.source, row.delay, "—", "idle", row.delay_warn)
-
-    spot = parts.get("spot") or ""
-    if spot == "chainlink_ws":
-        spot_src, spot_status, spot_level = "Polymarket WS", "OK", "on"
-    elif spot.startswith("chainlink"):
-        spot_src, spot_status, spot_level = "REST fallback", "FALLBACK", "warn"
-    else:
-        spot_src, spot_status, spot_level = spot or "—", "DOWN", "down"
-    cl_delay, cl_warn = "—", False
-    if chainlink_age_s is not None:
-        cl_delay = _secs(chainlink_age_s)
-        cl_warn = chainlink_age_s > _config.CHAINLINK_STALE_SECONDS
-    rows.append(from_tick(FeedRow(
-        "Chainlink BTC/USD", "spot · vol", spot_src, cl_delay, spot_status, spot_level, cl_warn
-    )))
-
-    ref_ok = (parts.get("ref") or "").startswith("chainlink")
-    rows.append(from_tick(FeedRow(
-        "Chainlink BTC/USD", "window open", "REST", "—",
-        "OK" if ref_ok else "DOWN", "on" if ref_ok else "down",
-    )))
-
-    book_ok = bool(tick) and any(
-        tick.get(k) is not None
-        for k in ("up_best_ask", "down_best_ask", "up_best_bid", "down_best_bid")
-    )
-    rows.append(from_tick(FeedRow(
-        "Polymarket book", "UP/DOWN quotes", "CLOB REST", "—",
-        "OK" if book_ok else "EMPTY", "on" if book_ok else "warn",
-    )))
-
-    # A tick is only journaled after Gamma answered, so a fresh tick means OK.
-    rows.append(from_tick(FeedRow("Polymarket Gamma", "market lookup", "REST", "—", "OK", "on")))
-
-    vol = parts.get("vol") or ""
-    if vol == "chainlink_ws":
-        binance = FeedRow("Binance BTCUSDT", "vol backup", "REST klines", "—", "STANDBY", "idle")
-    elif vol.startswith("binance"):
-        binance = FeedRow("Binance BTCUSDT", "vol backup", "REST klines", "—", "IN USE", "warn")
-    else:
-        binance = FeedRow("Binance BTCUSDT", "vol backup", "REST klines", "—", "DOWN", "down")
-    rows.append(from_tick(binance))
-
-    if is_live:
-        live_age = s.tick_age_seconds(last_live_at)
-        if live_age is None:
-            rows.append(FeedRow("Polymarket orders", "order entry", "CLOB", "—", "NONE", "warn"))
-        else:
-            quiet = live_age > ORDER_QUIET_AFTER_S
-            rows.append(FeedRow(
-                "Polymarket orders", "order entry", "CLOB", f"{_secs(live_age)} ago",
-                "QUIET" if quiet else "OK", "warn" if quiet else "on", quiet,
-            ))
-    return rows
+def _ms(v: float) -> str:
+    return f"{v:.0f}ms" if v < 1000 else _secs(v / 1000)
 
 
-def render(
-    *,
-    tick: dict[str, Any] | None,
-    is_live: bool,
-    last_live_at: str | None,
-    chainlink_age_s: float | None,
-    tick_seconds: float,
-) -> str:
-    rows = build_rows(
-        tick=tick,
-        is_live=is_live,
-        last_live_at=last_live_at,
-        chainlink_age_s=chainlink_age_s,
-        tick_seconds=tick_seconds,
-    )
+def _ws_row(snap: fm.FeedsSnapshot) -> FeedRow:
+    name, role, source = "Chainlink BTC/USD", "spot · vol", "Polymarket WS"
+    age = snap.ws_print_age_s
+    delay = _secs(age) if age is not None else "—"
+    delay_warn = age is not None and age > _config.CHAINLINK_STALE_SECONDS
+    if snap.ws_fresh:
+        return FeedRow(name, role, source, delay, "OK", "on", delay_warn)
+    if snap.ws_connected:
+        return FeedRow(name, role, source, delay, "STALE", "warn", delay_warn,
+                       "connected, but no recent prints")
+    if snap.taken_at - snap.started_at <= _config.CHAINLINK_STALE_SECONDS:
+        return FeedRow(name, role, source, delay, "CONNECTING", "idle")
+    return FeedRow(name, role, source, delay, "DOWN", "down", delay_warn,
+                   "not connected (reconnecting)")
+
+
+def _rest_row(
+    snap: fm.FeedsSnapshot, key: str, name: str, role: str, source: str
+) -> FeedRow:
+    probe = snap.probes.get(key)
+    if probe is None:
+        return FeedRow(name, role, source, "—", "CHECKING", "idle")
+    delay = _ms(probe.latency_ms)
+    slow = probe.latency_ms > SLOW_MS
+    if snap.taken_at - probe.checked_at > snap.interval_s * 3:
+        return FeedRow(name, role, source, delay, "STALE", "warn", slow,
+                       f"last checked {_secs(snap.taken_at - probe.checked_at)} ago")
+    if probe.ok:
+        return FeedRow(name, role, source, delay, "OK", "on", slow)
+    if probe.detail == "empty book":
+        return FeedRow(name, role, source, delay, "EMPTY", "warn", slow, probe.detail)
+    return FeedRow(name, role, source, delay, "DOWN", "down", slow, probe.detail)
+
+
+def build_rows(snap: fm.FeedsSnapshot | None) -> list[FeedRow]:
+    if snap is None:
+        # Feed monitor not running (only outside the dashboard app).
+        names = [("Chainlink BTC/USD", "spot · vol", "Polymarket WS")] + [
+            (n, r, s) for _k, n, r, s in _REST_FEEDS
+        ]
+        return [FeedRow(n, r, s, "—", "OFF", "idle") for n, r, s in names]
+    return [_ws_row(snap)] + [_rest_row(snap, *feed) for feed in _REST_FEEDS]
+
+
+def render(snap: fm.FeedsSnapshot | None) -> str:
+    rows = build_rows(snap)
     issues = sum(r.level in ("warn", "down") for r in rows)
     note = "all OK" if not issues else f"{issues} issue{'s' if issues != 1 else ''}"
     body = "".join(
@@ -151,7 +106,9 @@ def render(
         f"<td class='feeds-role'>{escape(r.role)}</td>"
         f"<td class='feeds-role'>{escape(r.source)}</td>"
         f"<td class='feeds-delay{' warn' if r.delay_warn else ''}'>{escape(r.delay)}</td>"
-        f"<td><span class='feed {r.level}'>{escape(r.status)}</span></td>"
+        f"<td><span class='feed {r.level}'"
+        + (f" title='{escape(r.detail, quote=True)}'" if r.detail else "")
+        + f">{escape(r.status)}</span></td>"
         "</tr>"
         for r in rows
     )

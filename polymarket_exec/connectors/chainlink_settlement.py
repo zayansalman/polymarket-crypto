@@ -365,7 +365,9 @@ class ChainlinkWsFeed:
 
     def recent_closes(self, max_points: int = 120) -> list[float]:
         """Oldest-first list of recent 1s values for sigma estimation."""
-        values = [v for _, v in self._series]
+        # list() snapshots the deque in one step: the bot loop reads this from
+        # its own thread while the feed's event loop appends.
+        values = [v for _, v in list(self._series)]
         return values[-max_points:]
 
     def is_fresh(self) -> bool:
@@ -373,6 +375,10 @@ class ChainlinkWsFeed:
         if self._last_update_monotonic is None:
             return False
         return (time.monotonic() - self._last_update_monotonic) <= self._stale_after_s
+
+    def is_connected(self) -> bool:
+        """True while the socket is open and subscribed."""
+        return self._connected
 
     def stop(self) -> None:
         self._stopped = True
