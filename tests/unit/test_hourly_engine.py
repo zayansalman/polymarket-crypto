@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,7 +16,8 @@ from polymarket_bot import paper
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot.hourly import engine, ledger
 from polymarket_bot.hourly import market as hm
-from polymarket_exec.execution.live import LiveOrderResult
+from polymarket_exec.execution.gate import build_gate_from_config
+from polymarket_exec.execution.live import LiveExecutor, LiveOrderResult
 
 H = 1_789_326_000  # 3PM ET hour
 SLUG = hm.slug_for(H)
@@ -334,3 +336,70 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
     account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+
+
+# --- Kill switch: paper and live keep the same record through the real loop tick ------
+# Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending
+
+
+async def _loop_on_1h_with_kill_file(monkeypatch, tmp_path: Path, mode: str) -> tuple[Path, MagicMock | None]:
+    """Wire paper_tick_once for 1h with a real RiskGate whose kill file lives in tmp_path."""
+    kill = tmp_path / "KILL"
+    monkeypatch.setattr(_config, "KILL_SWITCH_PATH", kill)
+    gate = build_gate_from_config(is_live=mode == "live")
+    await gate.load()
+    account = None
+    if mode == "live":
+        account = _live_account()
+        account.gate = gate
+        account.cancel_open_all = AsyncMock(return_value=[])
+        account.enforce_kill_switch = partial(LiveExecutor.enforce_kill_switch, account)
+        monkeypatch.setattr(paper, "_live_executor", account)
+    monkeypatch.setattr(paper, "_risk_gate", gate)
+    monkeypatch.setattr(paper, "_timeframe", engine.TIMEFRAME)
+    monkeypatch.setattr(paper, "_make_settlement_client",
+                        lambda: httpx.AsyncClient(transport=httpx.MockTransport(_Venue())))
+    return kill, account
+
+
+async def _loop_tick(monkeypatch, now: int) -> None:
+    monkeypatch.setattr(paper, "_now", lambda: now)
+    await paper.paper_tick_once()
+
+
+async def _blocked_journal_rows() -> int:
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM live_orders WHERE status='BLOCKED'")
+        return int((await cur.fetchone())["n"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["paper", "live"])
+async def test_kill_file_holds_the_hour_pending_then_enters_after_removal(
+    test_db, monkeypatch, tmp_path, mode
+):
+    kill, account = await _loop_on_1h_with_kill_file(monkeypatch, tmp_path, mode)
+    kill.touch()
+    await _loop_tick(monkeypatch, H + 30)
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert await _positions() == [] and await _blocked_journal_rows() == 0
+
+    kill.unlink()
+    await _loop_tick(monkeypatch, H + 40)
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "ENTERED"
+    assert [p["mode"] for p in await _positions()] == [mode]
+    if account is not None:
+        assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["paper", "live"])
+async def test_kill_file_kept_past_the_deadline_records_missed_and_no_journal_row(
+    test_db, monkeypatch, tmp_path, mode
+):
+    kill, _ = await _loop_on_1h_with_kill_file(monkeypatch, tmp_path, mode)
+    kill.touch()
+    await _loop_tick(monkeypatch, H + 30)
+    await _loop_tick(monkeypatch, H + 121)
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert await _positions() == [] and await _blocked_journal_rows() == 0

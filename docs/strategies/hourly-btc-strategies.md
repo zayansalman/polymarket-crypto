@@ -42,6 +42,7 @@ Break-even hit rate at a 50¢ price:
   - **Pay the ask:** a marketable buy at the best ask, which fills now.
   - **Resting order:** a post-only buy at the best bid, cancelled at the entry deadline if unfilled.
 - **Entry deadline.** A setting, 120 s after H:00 by default. If a strategy has no entry by then, the hour is recorded as `MISSED` and nothing is chased later.
+- **Kill switch holds entries.** While the kill file exists, no strategy enters and the hour stays `PENDING`, the same way in paper and live. If the file is removed before the entry deadline, the entry goes ahead; if not, the hour is recorded as `MISSED`. (Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending)
 - **Size.** The operator's share count from the order-size ticket.
 - **Every hour is recorded for both strategies, bet or no bet.** The record holds:
   - the signal values and the decision;
