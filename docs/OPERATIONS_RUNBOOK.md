@@ -173,7 +173,9 @@ Every live boot, BEFORE any trading:
    journal (token, entry price, exchange-confirmed fill size) so the normal
    exit path flattens it. Shares its exit orders already sold are restored
    too, so a later exit or settlement never counts them twice; a row whose
-   exits already sold every share closes as `RECONCILED_FLAT`. Open rows
+   exits already sold every share closes as `RECONCILED_FLAT` (Claude,
+   2026-09-15, branch-review finding reconcile-resets-sold-size-double-books).
+   Open rows
    with no live order behind them (paper artifacts, never-filled entries)
    are closed harmlessly with reason `RECONCILED_*`.
 3. If the account state cannot be reconciled (CLOB unreachable, >1 open row),
