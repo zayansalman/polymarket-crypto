@@ -597,16 +597,52 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
                 ):
                     closed += 1
         if hourly:
-            snapshot = await hourly_engine.build_snapshot(client)
-            for pos in hourly:
-                bid = _current_price_for_side(snapshot, pos["side"])
-                if pos["window_slug"] != snapshot.window_slug or bid is None:
-                    # A past hour can't be sold; it settles from Binance on the next start.
-                    log.warning("force_close.hourly_left_for_settlement",
-                                position_id=pos["position_id"], window_slug=pos["window_slug"])
-                    continue
-                if await _close_position(pos, snapshot, bid, exit_reason):
-                    closed += 1
+            closed += await _force_close_hourly_rows(client, hourly, exit_reason)
+    return closed
+
+
+async def _force_close_hourly_rows(
+    client: httpx.AsyncClient, rows: list[dict[str, Any]], exit_reason: str
+) -> int:
+    """Sell this hour's 1h rows at their bid when the loop ran 1h; returns how many closed.
+
+    Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery:
+    a Stop after a 5m run never reads the hourly market, rows are matched to the
+    current hour by ``window_start_ts`` (two ET hours share a slug on the DST
+    fall-back day), and a failed hourly read is logged instead of raised so the
+    count of 5m rows already closed still reaches the caller. Every row left open
+    settles from the Binance candle on the next 1h start.
+    """
+    now = _now()
+    start = hourly_engine.market.hour_start(now)
+    sellable: list[dict[str, Any]] = []
+    for pos in rows:
+        if _timeframe != hourly_engine.TIMEFRAME:
+            reason = "loop_not_running_1h"
+        elif pos.get("window_start_ts") != start:
+            reason = "past_hour"
+        else:
+            sellable.append(pos)
+            continue
+        log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
+                    window_slug=pos["window_slug"], reason=reason)
+    if not sellable:
+        return 0
+    try:
+        snapshot = await hourly_engine.build_snapshot(client, now)
+    except Exception as e:  # noqa: BLE001 — the rows stay open and settle later
+        log.warning("force_close.hourly_snapshot_failed", error=f"{type(e).__name__}: {e}",
+                    positions_left_open=len(sellable))
+        return 0
+    closed = 0
+    for pos in sellable:
+        bid = _current_price_for_side(snapshot, pos["side"])
+        if pos["window_slug"] != snapshot.window_slug or bid is None:
+            log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
+                        window_slug=pos["window_slug"], reason="no_bid_or_other_market")
+            continue
+        if await _close_position(pos, snapshot, bid, exit_reason):
+            closed += 1
     return closed
 
 

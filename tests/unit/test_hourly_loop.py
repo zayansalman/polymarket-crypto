@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -76,6 +77,9 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
+    # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
+    monkeypatch.setattr(paper, "_timeframe", "1h")
+    monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 1
 
@@ -186,9 +190,11 @@ async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeyp
     await _insert_open_hourly_row(H - 3600, "paper")
     monkeypatch.setattr(paper, "_live_executor", None)
     monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(side_effect=AssertionError))
-    current_hour = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
-                                   up_best_bid=0.49, down_best_bid=0.50)
-    monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=current_hour))
+    # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery:
+    # a past-hour row is left by its window_start_ts, before any hourly read.
+    monkeypatch.setattr(paper, "_timeframe", "1h")
+    monkeypatch.setattr(paper, "_now", lambda: H + 600)
+    monkeypatch.setattr(engine, "build_snapshot", AsyncMock(side_effect=AssertionError))
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 0
     assert await paper.count_open_positions() == 1
@@ -196,6 +202,7 @@ async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeyp
     own_hour_no_bid = SimpleNamespace(window_slug=hm.slug_for(H - 3600), created_at="y",
                                       spot_price=1.0, up_best_bid=0.49, down_best_bid=None)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=own_hour_no_bid))
+    monkeypatch.setattr(paper, "_now", lambda: H - 3600 + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 0
     assert await paper.count_open_positions() == 1
@@ -212,9 +219,66 @@ async def test_live_stop_never_sells_a_past_hour_row(test_db, monkeypatch) -> No
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
+    # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
+    monkeypatch.setattr(paper, "_timeframe", "1h")
+    monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 0
 
     slot.submit_exit.assert_not_awaited()
     account.submit_exit.assert_not_called()
     assert await paper.count_open_positions(mode="live") == 1
+
+
+# Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
+async def _insert_open_5m_row() -> None:
+    async with _db.connect() as conn:
+        await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, mode) VALUES ('x', 'btc-updown-5m-1', 'Up', 'open', 0.5,"
+            " 2.5, 5, 'paper')"
+        )
+        await conn.commit()
+
+
+def _every_http_call_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(503))
+    monkeypatch.setattr(paper, "_make_settlement_client",
+                        lambda: httpx.AsyncClient(transport=transport))
+    five_minute = SimpleNamespace(window_slug="btc-updown-5m-1", created_at="y", spot_price=1.0,
+                                  up_best_bid=0.6, down_best_bid=0.4)
+    monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(return_value=five_minute))
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", None)
+    engine.reset_caches()
+
+
+@pytest.mark.asyncio
+async def test_stop_after_a_5m_run_never_reads_the_hourly_market(test_db, monkeypatch) -> None:
+    await _insert_open_hourly_row(H - 3600, "paper")
+    await _insert_open_hourly_row(H, "paper")
+    await _insert_open_5m_row()
+    _every_http_call_returns_503(monkeypatch)
+    monkeypatch.setattr(paper, "_now", lambda: H + 600)
+    hourly_snapshot = AsyncMock(wraps=engine.build_snapshot)
+    monkeypatch.setattr(engine, "build_snapshot", hourly_snapshot)
+
+    assert await controller._safe_force_close() == (1, None)
+
+    hourly_snapshot.assert_not_awaited()
+    assert await paper.count_open_positions() == 2  # both hourly rows wait for settlement
+
+
+@pytest.mark.asyncio
+async def test_stop_after_a_1h_run_keeps_the_5m_count_when_the_hourly_read_fails(
+    test_db, monkeypatch
+) -> None:
+    await _insert_open_hourly_row(H, "paper")
+    await _insert_open_5m_row()
+    _every_http_call_returns_503(monkeypatch)
+    monkeypatch.setattr(paper, "_timeframe", "1h")
+    monkeypatch.setattr(paper, "_now", lambda: H + 600)
+
+    assert await controller._safe_force_close() == (1, None)
+
+    assert await paper.count_open_positions() == 1  # the hourly row settles on the next 1h start
