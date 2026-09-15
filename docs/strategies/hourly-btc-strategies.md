@@ -48,6 +48,7 @@ Break-even hit rate at a 50¢ price:
   - A refusal before the order is sent (gate, no token id, venue minimum, kill switch) records `BLOCKED:<reason>`.
   - Any other live failure (an exception or timeout on the post, or a reply without success and an order id) may still have put an order on the book, and a re-post would be a second order. The hour ends as `UNCERTAIN:<status> <reason>`, nothing is re-posted, and the operator gets a notification to check the account's open orders and trades.
   - If a later tick still finds `SUBMITTING` (the attempt raised, or the process stopped mid-attempt), the hour ends as `UNCERTAIN:entry attempt did not finish`. Boot reconciliation still adopts any live fill the order journal recorded.
+  - That close-out also notifies the operator (`entry_attempt_unfinished`), in paper and live. If the process died right after a live post but before its journal write, the order can be on Polymarket with no journal entry, and boot reconciliation closes its ledger row as `RECONCILED_NO_LIVE_TRACE`. The hour is still never posted again; check the account's open orders and trades. (Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post)
 - **Size.** The operator's share count from the order-size ticket.
 - **Every hour is recorded for both strategies, bet or no bet.** The record holds:
   - the signal values and the decision;

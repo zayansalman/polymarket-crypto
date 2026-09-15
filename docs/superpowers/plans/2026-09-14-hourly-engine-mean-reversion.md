@@ -2075,6 +2075,10 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         # Row first, then the real order (the legacy loop's ordering): a failed
         # submit deletes the row, and a crash after submit leaves a row that boot
         # reconciliation adopts from the journal. RiskGate runs inside submit_entry.
+        # Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post:
+        # a crash between the post and its journal write leaves no journal entry, so
+        # reconciliation closes the row instead; the SUBMITTING record above is what
+        # stops a second post for this hour.
         position_id = await _insert_row(
             snapshot, strategy_id=strategy_id, side=side, price=ask, notional=notional,
             shares=shares, start=start, reason=reason, mode=mode,
@@ -2158,6 +2162,19 @@ async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool
             # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
             # an earlier tick started an entry and never recorded its result (it raised,
             # or the process stopped). Close the hour out; never enter again.
+            # Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post:
+            # a live post can land right before its journal write fails. Boot reconciliation
+            # then closes that row as RECONCILED_NO_LIVE_TRACE and nothing tracks the
+            # tokens, so tell the operator before closing the hour (notify first: if the
+            # record write fails, the next tick still finds SUBMITTING and repeats both).
+            await notify(
+                "entry_attempt_unfinished",
+                f"Entry attempt for {sid} ({snapshot.window_slug}) did not finish: the tick "
+                "failed or the bot stopped mid-order. No retry this hour. If the bot was "
+                "LIVE, an order may be on Polymarket with no ledger row; check the "
+                "account's open orders and trades.",
+                {"window_slug": snapshot.window_slug, "strategy_id": sid},
+            )
             await ledger.set_action(snapshot.window_slug, sid, UNFINISHED_ATTEMPT,
                                     expected_action=SUBMITTING)
             continue

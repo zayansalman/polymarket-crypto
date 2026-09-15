@@ -395,6 +395,147 @@ async def test_live_attempt_that_raised_is_not_retried_and_ends_uncertain(test_d
         "UNCERTAIN:entry attempt did not finish")
 
 
+# Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post: a live post
+# can reach Polymarket right before its journal write fails (the process dies, or sqlite
+# raises). Boot reconciliation then finds no trace and closes the row. The hour's SUBMITTING
+# record must still stop a second post, and the operator is told to check the account.
+
+
+class _ProcessDied(BaseException):
+    """Stands in for the process dying mid-tick: no ``except Exception`` catches it."""
+
+
+def _clob_client_whose_post_fills() -> MagicMock:
+    """CLOB client fake for a full executor boot: books answer, every post matches 5 shares."""
+    from types import SimpleNamespace
+
+    client = MagicMock()
+    client.get_order_book.return_value = SimpleNamespace(
+        asks=[SimpleNamespace(price="0.99", size="10"), SimpleNamespace(price="0.52", size="300")],
+        bids=[SimpleNamespace(price="0.48", size="300")], tick_size="0.01", min_order_size="5")
+    client.create_and_post_order.return_value = {
+        "success": True, "orderID": "0xE1", "status": "matched",
+        "makingAmount": "2.6", "takingAmount": "5"}
+    client.cancel_all.return_value = {"canceled": [], "not_canceled": {}}
+    return client
+
+
+async def _boot_live_executor(monkeypatch, client: MagicMock, tmp_path: Path):
+    """Build and start a real LiveExecutor (start runs boot reconciliation), then trade live."""
+    from polymarket_exec.execution.live import LiveExecutor
+
+    executor = LiveExecutor(
+        private_key="0x" + "1" * 64, funder="0xFUNDER", signature_type=2, max_trade_usd=3.0,
+        daily_loss_halt_usd=10.0, bankroll_cap_usd=30.0, max_entry_slippage=0.5,
+        exit_fill_timeout_seconds=1.0, kill_switch_path=tmp_path / "KILL", client=client,
+    )
+    await executor.start()
+    monkeypatch.setattr(paper, "_live_executor", executor)
+    monkeypatch.setattr(paper, "_risk_gate", executor.gate)
+    return executor
+
+
+def _fail_the_submitted_entry_journal_write(monkeypatch, exc: BaseException) -> None:
+    """Raise ``exc`` from the first SUBMITTED entry journal write, which runs after the post."""
+    from polymarket_exec.execution import live as live_module
+
+    real = live_module.journal_live_order
+    failed: list[dict] = []
+
+    async def journal_live_order(**fields):
+        if not failed and (fields.get("intent"), fields.get("status")) == ("ENTRY", "SUBMITTED"):
+            failed.append(fields)
+            raise exc
+        return await real(**fields)
+
+    monkeypatch.setattr(live_module, "journal_live_order", journal_live_order)
+
+
+async def _unfinished_attempt_notifications() -> int:
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM notification_feed "
+            "WHERE event_type = 'entry_attempt_unfinished'")
+        return int((await cur.fetchone())["n"])
+
+
+@pytest.mark.asyncio
+async def test_untraced_live_post_then_restart_is_not_posted_again_and_is_notified(
+    test_db, monkeypatch, tmp_path
+):
+    client = _clob_client_whose_post_fills()
+    await _boot_live_executor(monkeypatch, client, tmp_path)
+    _fail_the_submitted_entry_journal_write(monkeypatch, _ProcessDied())
+    with pytest.raises(_ProcessDied):
+        await _tick(monkeypatch, H + 30, _Venue())
+    assert client.create_and_post_order.call_count == 1
+
+    engine.reset_caches()  # restart: a new process boots a new executor, which reconciles
+    await _boot_live_executor(monkeypatch, client, tmp_path)
+    closed = [(r["state"], r["exit_reason"]) for r in await _positions()]
+    assert closed == [("closed", "RECONCILED_NO_LIVE_TRACE")]
+    for offset in (60, 90):  # both inside the 120 s entry deadline
+        await _tick(monkeypatch, H + offset, _Venue())
+    assert client.create_and_post_order.call_count == 1
+    assert [(r["state"], r["exit_reason"]) for r in await _positions()] == closed
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == (
+        engine.UNFINISHED_ATTEMPT)
+    assert await _unfinished_attempt_notifications() == 1
+
+
+@pytest.mark.asyncio
+async def test_untraced_live_post_in_a_running_loop_is_not_posted_again_after_stop_and_start(
+    test_db, monkeypatch, tmp_path
+):
+    import sqlite3
+
+    client = _clob_client_whose_post_fills()
+    executor = await _boot_live_executor(monkeypatch, client, tmp_path)
+    _fail_the_submitted_entry_journal_write(
+        monkeypatch, sqlite3.OperationalError("database is locked"))
+    with pytest.raises(sqlite3.OperationalError):  # the loop logs the failed tick, keeps going
+        await _tick(monkeypatch, H + 30, _Venue())
+    await _tick(monkeypatch, H + 35, _Venue())
+    assert await _unfinished_attempt_notifications() == 1
+
+    # Stop the way the loop's shutdown does: cancel, then flatten. Nothing tracks the
+    # untraced fill, so its row stays open until the next boot reconciliation closes it.
+    monkeypatch.setattr(paper, "_make_settlement_client",
+                        lambda: httpx.AsyncClient(transport=httpx.MockTransport(_Venue())))
+    await executor.cancel_open_all(reason="LOOP_STOP")
+    await paper.force_close_open_positions("STOP_REQUEST")
+    await _boot_live_executor(monkeypatch, client, tmp_path)  # Start
+    await _tick(monkeypatch, H + 50, _Venue())
+    assert client.create_and_post_order.call_count == 1
+    assert [(r["state"], r["exit_reason"]) for r in await _positions()] == [
+        ("closed", "RECONCILED_NO_LIVE_TRACE")]
+    assert await _unfinished_attempt_notifications() == 1
+
+
+@pytest.mark.asyncio
+async def test_deleted_row_whose_uncertain_record_was_never_written_is_not_posted_again(
+    test_db, monkeypatch
+):
+    account = await _go_live(monkeypatch, LiveOrderResult(ok=False, status="ERROR", reason="timeout"))
+    real_set_action = ledger.set_action
+
+    async def set_action(window_slug, strategy_id, action, *args, **kwargs):
+        if action.startswith(f"{engine.UNCERTAIN_PREFIX}ERROR"):
+            raise _ProcessDied()
+        return await real_set_action(window_slug, strategy_id, action, *args, **kwargs)
+
+    monkeypatch.setattr(ledger, "set_action", set_action)
+    with pytest.raises(_ProcessDied):
+        await _tick(monkeypatch, H + 30, _Venue())
+    assert await _positions() == []  # the failed submit deleted its row before the crash
+    await _tick(monkeypatch, H + 40, _Venue())
+    await _tick(monkeypatch, H + 50, _Venue())
+    assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == (
+        engine.UNFINISHED_ATTEMPT)
+    assert await _unfinished_attempt_notifications() == 1
+
+
 @pytest.mark.asyncio
 async def test_paper_attempt_that_raised_is_not_retried_and_ends_uncertain(test_db, monkeypatch):
     real_insert = engine._insert_row
