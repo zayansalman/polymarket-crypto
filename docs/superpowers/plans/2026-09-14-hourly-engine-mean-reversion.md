@@ -2436,6 +2436,8 @@ In `paper_tick_once`, replace the `async with _make_settlement_client() as clien
 ```python
     async with _make_settlement_client() as client:
         if _timeframe == hourly_engine.TIMEFRAME:
+            if _live_executor is None and _risk_gate is not None:
+                kill_active = _risk_gate.kill_switch_active()
             return await hourly_engine.tick(client, allow_entries=not kill_active)
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
@@ -2445,6 +2447,8 @@ In `paper_tick_once`, replace the `async with _make_settlement_client() as clien
         await _record_and_settle_shadow(snapshot, client)
     return snapshot
 ```
+
+The hourly branch decides the kill switch the same way in both modes (Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending). Live reads it from `enforce_kill_switch` (which also cancels resting orders); paper reads `_risk_gate.kill_switch_active()`. Both pass `allow_entries=False` while the KILL file exists, so the hour's row stays `PENDING`, enters once the file is removed inside the entry deadline, and is `MISSED` otherwise. Without this, paper reached `gate.block_reason`, which recorded a final `BLOCKED:KILL switch active` for the hour while live held it `PENDING`. The 5m branch is unchanged. Tests: `test_kill_switch_removed_inside_the_deadline_enters_in_both_modes` and `test_kill_switch_past_the_deadline_is_missed_in_both_modes` in `tests/unit/test_hourly_engine.py` drive `paper_tick_once` with a real `build_gate_from_config` gate in each mode.
 
 In `force_close_open_positions`, replace everything from `if not positions:` to the end of the function with:
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import MethodType
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -15,11 +16,13 @@ from polymarket_bot import paper
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot.hourly import engine, ledger
 from polymarket_bot.hourly import market as hm
-from polymarket_exec.execution.live import LiveOrderResult
+from polymarket_exec.execution.gate import build_gate_from_config
+from polymarket_exec.execution.live import LiveExecutor, LiveOrderResult
 
 H = 1_789_326_000  # 3PM ET hour
 SLUG = hm.slug_for(H)
 NEXT_SLUG = hm.slug_for(H + 3600)
+SID = engine.STRATEGIES[0][0]  # the strategy wired in this PR
 
 
 def _kline(open_s: int, o: float, c: float, hi: float, lo: float, tb_share: float) -> list:
@@ -181,6 +184,78 @@ async def test_disabled_strategy_records_nothing_and_kill_holds_entries(test_db,
     await _tick(monkeypatch, H + 31, _Venue(), allow=False)
     assert await _positions() == []
     assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+
+
+# Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending:
+# the KILL file must hold the hour's entry the same way in paper and live. It stays
+# PENDING while the file exists, enters once it is removed inside the deadline, and is
+# MISSED if the file outlives the deadline. Paper must never turn it into a final BLOCKED.
+async def _kill_parity_setup(monkeypatch, tmp_path: Path, mode: str) -> tuple[Path, MagicMock | None]:
+    kill = tmp_path / "KILL"
+    monkeypatch.setattr(_config, "KILL_SWITCH_PATH", kill)
+    monkeypatch.setattr(_config, "TRADE_MAX_USD", 3.0)
+    monkeypatch.setattr(_config, "TRADE_DAILY_LOSS_HALT_USD", 10.0)
+    monkeypatch.setattr(_config, "TRADE_BANKROLL_CAP_USD", None)
+    monkeypatch.setattr(_config, "TRADE_MAX_ENTRY_SLIPPAGE", 0.02)
+    gate = build_gate_from_config(is_live=mode == "live")
+    await gate.load()
+    monkeypatch.setattr(paper, "_risk_gate", gate)
+    monkeypatch.setattr(paper, "_timeframe", engine.TIMEFRAME)
+    venue = _Venue()
+    monkeypatch.setattr(paper, "_make_settlement_client",
+                        lambda: httpx.AsyncClient(transport=httpx.MockTransport(venue)))
+    if mode != "live":
+        return kill, None
+    account = _live_account()
+    account.gate = gate
+    account.cancel_open_all = AsyncMock(return_value=[])
+    account.enforce_kill_switch = MethodType(LiveExecutor.enforce_kill_switch, account)
+    monkeypatch.setattr(paper, "_live_executor", account)
+    return kill, account
+
+
+async def _paper_tick_at(monkeypatch, now: int) -> None:
+    monkeypatch.setattr(paper, "_now", lambda: now)
+    await paper.paper_tick_once()
+
+
+async def _blocked_journal_rows() -> int:
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM live_orders WHERE status='BLOCKED'")
+        return int((await cur.fetchone())["n"])
+
+
+@pytest.mark.parametrize("mode", ["paper", "live"])
+@pytest.mark.asyncio
+async def test_kill_switch_removed_inside_the_deadline_enters_in_both_modes(
+    test_db, tmp_path, monkeypatch, mode
+):
+    kill, account = await _kill_parity_setup(monkeypatch, tmp_path, mode)
+    kill.touch()
+    await _paper_tick_at(monkeypatch, H + 30)
+    assert (await ledger.get_decision(SLUG, SID))["action"] == "PENDING"
+    assert await _positions() == []
+    kill.unlink()
+    await _paper_tick_at(monkeypatch, H + 40)
+    assert (await ledger.get_decision(SLUG, SID))["action"] == "ENTERED"
+    assert [p["mode"] for p in await _positions()] == [mode]
+    assert await _blocked_journal_rows() == 0
+    if account is not None:
+        assert account.slots[SID].submit_entry.await_count == 1
+
+
+@pytest.mark.parametrize("mode", ["paper", "live"])
+@pytest.mark.asyncio
+async def test_kill_switch_past_the_deadline_is_missed_in_both_modes(
+    test_db, tmp_path, monkeypatch, mode
+):
+    kill, _ = await _kill_parity_setup(monkeypatch, tmp_path, mode)
+    kill.touch()
+    await _paper_tick_at(monkeypatch, H + 30)
+    await _paper_tick_at(monkeypatch, H + 121)
+    assert (await ledger.get_decision(SLUG, SID))["action"] == "MISSED"
+    assert await _positions() == []
+    assert await _blocked_journal_rows() == 0
 
 
 @pytest.mark.asyncio

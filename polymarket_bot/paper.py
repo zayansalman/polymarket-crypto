@@ -549,6 +549,14 @@ async def paper_tick_once() -> PaperSnapshot:
     await _knobs.refresh_cache()
     async with _make_settlement_client() as client:
         if _timeframe == hourly_engine.TIMEFRAME:
+            if _live_executor is None and _risk_gate is not None:
+                # Claude, 2026-09-15, branch-review finding
+                # kill-switch-paper-blocked-live-pending: decide the kill switch the
+                # same way in both modes, so an armed KILL holds the hour's entry
+                # PENDING in paper exactly as in live (it enters once the file is
+                # removed, or is MISSED at the deadline) instead of a final BLOCKED.
+                # Cancelling resting orders stays live-only. The 5m loop is unchanged.
+                kill_active = _risk_gate.kill_switch_active()
             return await hourly_engine.tick(client, allow_entries=not kill_active)
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
