@@ -35,7 +35,7 @@ Break-even hit rate at a 50¢ price:
 - **One decision per hour.**
   - Decide at the start of UTC hour H, using only candles that closed through H-1. Binance always returns the still-forming candle, and it is always dropped.
   - Hour H's real open is read from the forming kline.
-- **Hold to resolution.** Positions settle from the Binance 1-hour candle itself, not from Polymarket's resolution status. Gamma stops listing a resolved hourly market about 12 minutes after close.
+- **Hold to resolution.** Positions settle from the Binance 1-hour candle itself, not from Polymarket's resolution status. Gamma stops listing a resolved hourly market about 12 minutes after close. A position left open by an earlier run still settles while the bot runs BTC 5m, and an open 5m position still settles while it runs BTC 1h (Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled).
 - **Mode-agnostic.** A strategy never reads paper/live. The operator's global mode decides where the order goes, and paper and live run the identical decision.
 - **One open position per strategy.** Each strategy has its own slot, so both can hold a position in the same hour. This replaces the old one-position-total rule (operator decision, 2026-09-14). Every other RiskGate check still applies to every entry: loss halt, caps, slippage guard and kill switch.
 - **Order style is the operator's choice.** A dashboard setting picks one of:

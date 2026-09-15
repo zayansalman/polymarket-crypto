@@ -72,7 +72,7 @@
 | Create `polymarket_bot/hourly/ledger.py` | Context rows: `record_decision`, `get_decision`, `set_action`, `unsettled_windows`, `settle_window` |
 | Modify `db.py` (again) | `live_orders.strategy_id`; `journal_live_order(strategy_id=…)` |
 | Modify `polymarket_exec/execution/live.py` | Strategy slots: `slot_executor`, `cancel_open_all`, kill switch over every slot, per-slot boot reconciliation, hourly window resolution, journal rows tagged with the slot |
-| Modify `polymarket_bot/paper.py` | Paper settled closes net of taker fee; 5m paths ignore 1h rows; `_executor_for(pos)`; `run_paper_loop(..., timeframe)`; route 1h ticks to the engine; Stop cancels every slot and closes 1h rows at the current hour's bid |
+| Modify `polymarket_bot/paper.py` | Paper settled closes net of taker fee; 5m paths ignore 1h rows; `_executor_for(pos)`; `run_paper_loop(..., timeframe)`; route 1h ticks to the engine; Stop cancels every slot and closes 1h rows at the current hour's bid; every tick settles open rows of the other timeframe too, and a failed 5m read at Stop never skips selling the current hour's 1h rows (Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled) |
 | Create `polymarket_bot/hourly/engine.py` | `build_snapshot`, `settle_due`, `decide_hour`, `open_entries`, `tick` (paper and live) |
 | Modify `polymarket_bot/runtime_knobs.py` | `hourly_mean_reversion_enabled`, `hourly_entry_deadline_seconds` |
 | Modify `polymarket_bot/controller.py` | Pin the market selection at Start; pass timeframe to the runner |
@@ -2474,6 +2474,16 @@ In `force_close_open_positions`, replace everything from `if not positions:` to 
                     closed += 1
     return closed
 ```
+
+Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled: boot
+adopts open live rows of both timeframes into their slots, but the code above only settled
+the rows of the timeframe the loop was started on, so a live row left by a run on the other
+timeframe stayed open and its loss never reached the daily loss halt. Now a 5m tick calls
+`hourly_engine.settle_due(client, snapshot, _now())` right after `_close_due_positions`, and a
+1h tick first runs `_close_due_positions` with a 5m snapshot when an open 5m row exists (a
+failed 5m read is logged and the hourly tick still runs). In `force_close_open_positions` a
+failed 5m read or sell is logged, the current hour's 1h rows are still sold, and the 5m error
+is raised afterwards. Past-hour 1h rows settle on the next tick of any run.
 
 In `_detail_from_snapshot`, replace the `Polymarket Up:` line with a None-safe version:
 

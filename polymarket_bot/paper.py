@@ -549,14 +549,38 @@ async def paper_tick_once() -> PaperSnapshot:
     await _knobs.refresh_cache()
     async with _make_settlement_client() as client:
         if _timeframe == hourly_engine.TIMEFRAME:
+            await _close_due_5m_rows_during_1h_run(client)
             return await hourly_engine.tick(client, allow_entries=not kill_active)
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
         await _close_due_positions(snapshot, client)
+        # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
+        # boot adopts open 1h rows into their slots whatever timeframe runs, so a 5m run
+        # settles them from the Binance candle too, before any new entry.
+        await hourly_engine.settle_due(client, snapshot, _now())
         if not kill_active:
             await _maybe_open_position(snapshot)
         await _record_and_settle_shadow(snapshot, client)
     return snapshot
+
+
+async def _close_due_5m_rows_during_1h_run(client: httpx.AsyncClient) -> None:
+    """Run the 5m exit and settlement path for open 5m rows while the loop runs 1h.
+
+    Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
+    boot adopts open 5m rows into the account slot whatever timeframe runs, so a 1h
+    run settles them (and books their PnL) before the hourly tick. The 5m market is
+    only read when such a row exists, and a failed read is logged so the hourly tick
+    still runs; the row is retried on the next tick.
+    """
+    if not await _open_legacy_position_exists():
+        return
+    try:
+        snapshot = await _build_snapshot(client)
+        await _close_due_positions(snapshot, client)
+    except Exception as e:  # noqa: BLE001 — never block the hourly tick
+        log.warning("paper_tick.5m_rows_close_failed_during_1h_run",
+                    error=f"{type(e).__name__}: {e}")
 
 
 async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
@@ -588,25 +612,37 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
     hourly = [p for p in positions if p.get("market_timeframe") == hourly_engine.TIMEFRAME]
     legacy = [p for p in positions if p.get("market_timeframe") != hourly_engine.TIMEFRAME]
     closed = 0
+    legacy_error: Exception | None = None
     async with _make_settlement_client() as client:
         if legacy:
-            snapshot = await _build_snapshot(client)
-            for pos in legacy:
-                if await _close_position(
-                    pos, snapshot, _current_price_for_side(snapshot, pos["side"]), exit_reason
-                ):
-                    closed += 1
+            # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
+            # a failed 5m read or sell must not skip selling this hour's 1h rows below;
+            # the error is raised after both kinds of row were tried.
+            try:
+                snapshot = await _build_snapshot(client)
+                for pos in legacy:
+                    if await _close_position(
+                        pos, snapshot, _current_price_for_side(snapshot, pos["side"]), exit_reason
+                    ):
+                        closed += 1
+            except Exception as e:  # noqa: BLE001 — re-raised below
+                log.warning("force_close.5m_rows_failed", error=f"{type(e).__name__}: {e}")
+                legacy_error = e
         if hourly:
             snapshot = await hourly_engine.build_snapshot(client)
             for pos in hourly:
                 bid = _current_price_for_side(snapshot, pos["side"])
                 if pos["window_slug"] != snapshot.window_slug or bid is None:
-                    # A past hour can't be sold; it settles from Binance on the next start.
+                    # A past hour can't be sold; it settles from Binance on the next tick
+                    # of any run, 5m or 1h (Claude, 2026-09-15, branch-review finding
+                    # other-timeframe-live-rows-never-settled).
                     log.warning("force_close.hourly_left_for_settlement",
                                 position_id=pos["position_id"], window_slug=pos["window_slug"])
                     continue
                 if await _close_position(pos, snapshot, bid, exit_reason):
                     closed += 1
+    if legacy_error is not None:
+        raise legacy_error
     return closed
 
 
