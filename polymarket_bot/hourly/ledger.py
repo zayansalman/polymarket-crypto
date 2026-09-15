@@ -82,12 +82,21 @@ async def finalize_pending_past_deadline(now: int, deadline_s: int) -> int:
     submit, before the ENTERED write) becomes ENTERED with that position; every
     other row becomes MISSED. Uses the same test as the engine's current-hour check
     (now - window_start_ts > deadline), for every strategy, enabled or not.
+
+    Claude, 2026-09-15, branch-review finding pending-row-never-finalized: a position
+    row that boot reconciliation closed as RECONCILED_NO_LIVE_TRACE (no order was
+    placed) or RECONCILED_UNFILLED (the order never filled) holds no bet, so it does
+    not count and that hour becomes MISSED.
     """
     position_for_row = (
         "SELECT p.position_id FROM paper_positions p "
         "WHERE p.window_slug = hourly_strategy_context.window_slug "
         "AND p.strategy_id = hourly_strategy_context.strategy_id "
-        "AND p.market_timeframe = '1h'"
+        "AND p.market_timeframe = '1h' "
+        # Claude, 2026-09-15, branch-review finding pending-row-never-finalized: skip rows
+        # boot reconciliation closed because no order was placed or none filled.
+        "AND COALESCE(p.exit_reason, '') "
+        "NOT IN ('RECONCILED_NO_LIVE_TRACE', 'RECONCILED_UNFILLED')"
     )
     async with _db.connect() as conn:
         entered = await conn.execute(

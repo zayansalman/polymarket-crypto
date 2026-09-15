@@ -365,3 +365,22 @@ async def test_pending_decision_with_a_position_row_for_its_hour_is_entered_afte
     await _tick(monkeypatch, H + 3600 + 20, venue)
     row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
     assert (row["action"], row["position_id"]) == ("ENTERED", position_id)
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_reason", ["RECONCILED_NO_LIVE_TRACE", "RECONCILED_UNFILLED"])
+async def test_pending_decision_is_missed_when_boot_reconciliation_closed_its_row_as_no_bet(
+    test_db, monkeypatch, exit_reason
+):
+    await _tick(monkeypatch, H + 30, _Venue(), allow=False)
+    # Crash between the live row insert and a filled order: the next live start's boot
+    # reconciliation closes the row because no order was placed, or none filled.
+    await _insert_hourly(H, "live")
+    async with _db.connect() as conn:
+        await conn.execute(
+            "UPDATE paper_positions SET state = 'closed', exit_reason = ?", (exit_reason,))
+        await conn.commit()
+    await _tick(monkeypatch, H + 300, _Venue())
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("MISSED", None)
