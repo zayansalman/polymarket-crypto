@@ -572,12 +572,19 @@ async def _close_due_5m_rows_during_1h_run(client: httpx.AsyncClient) -> None:
     run settles them (and books their PnL) before the hourly tick. The 5m market is
     only read when such a row exists, and a failed read is logged so the hourly tick
     still runs; the row is retried on the next tick.
+
+    Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled
+    (review follow-up): without a live executor, live 5m rows are left open, the same
+    as ``hourly_engine.settle_due`` and ``force_close_open_positions`` do. A paper close
+    would book their loss on the paper leg and mark real tokens flat; they settle in
+    the next live run.
     """
-    if not await _open_legacy_position_exists():
+    include_live_rows = _live_executor is not None
+    if not await _open_legacy_position_exists(include_live_rows=include_live_rows):
         return
     try:
         snapshot = await _build_snapshot(client)
-        await _close_due_positions(snapshot, client)
+        await _close_due_positions(snapshot, client, include_live_rows=include_live_rows)
     except Exception as e:  # noqa: BLE001 — never block the hourly tick
         log.warning("paper_tick.5m_rows_close_failed_during_1h_run",
                     error=f"{type(e).__name__}: {e}")
@@ -648,12 +655,17 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
 
 # The 5m loop's rows (strategy-less legacy slot). Hourly strategy rows own their own slots.
 _LEGACY_ROWS_SQL = "(market_timeframe IS NULL OR market_timeframe != '1h')"
+# Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled
+# (review follow-up): appended when a run without a live executor must skip live rows.
+_NOT_LIVE_ROWS_SQL = " AND (mode IS NULL OR mode != 'live')"
 
 
-async def _open_legacy_position_exists() -> bool:
+async def _open_legacy_position_exists(*, include_live_rows: bool = True) -> bool:
+    live_filter = "" if include_live_rows else _NOT_LIVE_ROWS_SQL
     async with connect() as db:
         async with db.execute(
             f"SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open' AND {_LEGACY_ROWS_SQL}"
+            f"{live_filter}"
         ) as cur:
             return bool((await cur.fetchone())["n"])
 
@@ -1478,12 +1490,16 @@ async def _update_position_terms(
 
 
 async def _close_due_positions(
-    snapshot: PaperSnapshot, client: httpx.AsyncClient
+    snapshot: PaperSnapshot, client: httpx.AsyncClient, *, include_live_rows: bool = True
 ) -> None:
+    # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled
+    # (review follow-up): include_live_rows=False skips live rows for a 1h run without
+    # a live executor. The 5m tick keeps the default.
+    live_filter = "" if include_live_rows else _NOT_LIVE_ROWS_SQL
     async with connect() as db:
         async with db.execute(
-            f"SELECT * FROM paper_positions WHERE state = 'open' AND {_LEGACY_ROWS_SQL} "
-            "ORDER BY opened_at"
+            f"SELECT * FROM paper_positions WHERE state = 'open' AND {_LEGACY_ROWS_SQL}"
+            f"{live_filter} ORDER BY opened_at"
         ) as cur:
             positions = [dict(r) for r in await cur.fetchall()]
 

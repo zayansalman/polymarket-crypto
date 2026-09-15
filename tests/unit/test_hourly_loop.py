@@ -396,3 +396,41 @@ async def test_stop_still_sells_the_current_hour_row_when_the_5m_snapshot_fails(
 
     slot.submit_exit.assert_awaited_once_with(side_price=0.50, size=5.0, window_slug=SLUG)
     assert await paper.count_open_positions(mode="live") == 1  # only the 5m row is left
+
+
+# Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled
+# (review follow-up): without a live executor a live 5m row holds real tokens only a
+# live run may book, so a paper 1h tick leaves it open.
+@pytest.mark.asyncio
+async def test_paper_1h_tick_leaves_an_open_rolled_live_5m_row_open(test_db, monkeypatch) -> None:
+    async with _db.connect() as conn:
+        await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, mode) VALUES ('x', ?, 'Up', 'open', 0.5, 2.5, 5, 'live')",
+            (f"btc-updown-5m-{H - 300}",),
+        )
+        await conn.commit()
+    gate = MagicMock()
+    gate.record_realized_pnl = AsyncMock()
+    gate.refresh_overrides = AsyncMock()
+    gate.refresh_runtime_limits = AsyncMock()
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", gate)
+    monkeypatch.setattr(paper, "_timeframe", "1h")
+    monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(return_value=SimpleNamespace(
+        window_slug=FIVE_MIN_SLUG, created_at="y", spot_price=1.0,
+        up_best_bid=0.5, down_best_bid=0.5)))
+    connector = MagicMock()
+    connector.settle_window = AsyncMock(return_value=False)  # Up lost
+    make_connector = MagicMock(return_value=connector)
+    monkeypatch.setattr(paper, "_make_settlement_connector", make_connector)
+    hourly_snap = MagicMock()
+    tick = AsyncMock(return_value=hourly_snap)
+    monkeypatch.setattr(engine, "tick", tick)
+
+    assert await paper.paper_tick_once() is hourly_snap
+
+    tick.assert_awaited_once()
+    make_connector.assert_not_called()
+    gate.record_realized_pnl.assert_not_awaited()
+    assert await paper.count_open_positions(mode="live") == 1

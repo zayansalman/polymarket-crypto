@@ -2485,6 +2485,14 @@ failed 5m read is logged and the hourly tick still runs). In `force_close_open_p
 failed 5m read or sell is logged, the current hour's 1h rows are still sold, and the 5m error
 is raised afterwards. Past-hour 1h rows settle on the next tick of any run.
 
+Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled (review
+follow-up): a paper 1h run must not paper-close a live 5m row (that would book its loss on
+the paper leg and mark real tokens flat). `_close_due_positions` and
+`_open_legacy_position_exists` take a keyword `include_live_rows: bool = True`; when it is
+False their SELECT adds `AND (mode IS NULL OR mode != 'live')`. The 1h tick calls both with
+`include_live_rows=_live_executor is not None`; the 5m tick's call is unchanged. A live row
+only settles in a live run, the same rule `settle_due` applies to live 1h rows.
+
 In `_detail_from_snapshot`, replace the `Polymarket Up:` line with a None-safe version:
 
 ```python
