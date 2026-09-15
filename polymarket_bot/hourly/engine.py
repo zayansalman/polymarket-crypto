@@ -34,6 +34,13 @@ STRATEGIES: tuple[tuple[str, str], ...] = (
     (mean_reversion.STRATEGY_ID, "hourly_mean_reversion_enabled"),
 )
 
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+# decision-record actions for an entry attempt. SUBMITTING is written before any order
+# goes out; UNCERTAIN ends an hour whose order may have reached the venue.
+SUBMITTING = "SUBMITTING"
+UNCERTAIN_PREFIX = "UNCERTAIN:"
+UNFINISHED_ATTEMPT = f"{UNCERTAIN_PREFIX}entry attempt did not finish"
+
 _market_cache: dict[int, HourMarket] = {}
 _open_cache: dict[int, float] = {}
 
@@ -226,6 +233,11 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
     token = snapshot.up_token_id if side == "Up" else snapshot.down_token_id
     reason = (await ledger.get_decision(snapshot.window_slug, strategy_id) or {}).get(
         "decision_reason")
+    # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+    # record the attempt before any order goes out, in both modes. open_entries only
+    # enters from PENDING, so a tick that dies mid-attempt (or a restart within the
+    # hour) can never place a second order for this hour.
+    await ledger.set_action(snapshot.window_slug, strategy_id, SUBMITTING)
     if executor is not None:
         slot = executor.slot_executor(strategy_id)
         # The ledger says this strategy is flat in live: heal any phantom slot
@@ -245,10 +257,28 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         if not result.ok:
             await P._delete_position_row(position_id)
             if result.status == "BLOCKED":
+                # Refused before any post (gate, no token id, venue minimum, kill
+                # switch): nothing reached the venue.
                 await ledger.set_action(
                     snapshot.window_slug, strategy_id, f"BLOCKED:{result.reason}")
-            # Any other failure stays PENDING and retries until the entry deadline.
-            log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
+                log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
+                            status=result.status, reason=result.reason)
+                return
+            # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+            # every other failure happened at or after the post (an exception or timeout,
+            # or a response without success and an order id). The venue may still have
+            # accepted the order, and a re-post is a new order, so the hour ends here.
+            uncertain = f"{UNCERTAIN_PREFIX}{result.status} {result.reason}".strip()
+            await ledger.set_action(snapshot.window_slug, strategy_id, uncertain)
+            await notify(
+                "live_entry_uncertain",
+                f"LIVE entry for {strategy_id} may or may not be on Polymarket "
+                f"({result.status}: {result.reason}). No retry this hour; check the "
+                "account's open orders and trades.",
+                {"window_slug": snapshot.window_slug, "strategy_id": strategy_id,
+                 "token_id": token},
+            )
+            log.warning("hourly_engine.live_entry_outcome_unknown", strategy_id=strategy_id,
                         status=result.status, reason=result.reason)
             return
         ask = result.price or ask
@@ -295,6 +325,13 @@ async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool
         if not _knobs.cached(knob):
             continue
         row = await ledger.get_decision(snapshot.window_slug, sid)
+        if row is not None and row["action"] == SUBMITTING:
+            # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+            # an earlier tick started an entry and never recorded its result (it raised,
+            # or the process stopped). Close the hour out; never enter again.
+            await ledger.set_action(snapshot.window_slug, sid, UNFINISHED_ATTEMPT,
+                                    expected_action=SUBMITTING)
+            continue
         if row is None or row["action"] != "PENDING":
             continue
         if now - start > deadline:

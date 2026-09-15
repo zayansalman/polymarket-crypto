@@ -303,17 +303,116 @@ async def test_live_blocked_entry_is_recorded_once_and_leaves_no_row(test_db, mo
     assert row["action"] == "BLOCKED:daily loss halt: test"
 
 
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried: a failed
+# post may still have reached the book, so it ends the hour instead of retrying.
 @pytest.mark.asyncio
-async def test_live_order_error_retries_until_the_deadline(test_db, monkeypatch):
+async def test_live_order_error_ends_the_hour_as_uncertain_without_a_second_post(
+    test_db, monkeypatch
+):
     account = await _go_live(monkeypatch, LiveOrderResult(ok=False, status="ERROR", reason="venue"))
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     submit = account.slots["hourly_mean_reversion"].submit_entry
-    assert submit.await_count == 2 and await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert submit.await_count == 1 and await _positions() == []
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:ERROR venue"
     await _tick(monkeypatch, H + 121, _Venue())
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
-    assert submit.await_count == 2
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:ERROR venue"
+    assert submit.await_count == 1
+
+
+def _clob_client_whose_post_times_out() -> MagicMock:
+    """CLOB client fake: books answer, every order post raises what py_clob_client_v2 raises
+    when the HTTP request fails (for example a read timeout after the body was sent)."""
+    from types import SimpleNamespace
+
+    from py_clob_client_v2.exceptions import PolyApiException
+
+    client = MagicMock()
+    client.get_order_book.return_value = SimpleNamespace(
+        asks=[SimpleNamespace(price="0.99", size="10"), SimpleNamespace(price="0.52", size="300")],
+        bids=[SimpleNamespace(price="0.48", size="300")], tick_size="0.01", min_order_size="5")
+    client.create_and_post_order.side_effect = PolyApiException(error_msg="Request exception!")
+    return client
+
+
+@pytest.mark.asyncio
+async def test_live_post_exception_is_posted_once_per_hour_and_notified(
+    test_db, monkeypatch, tmp_path
+):
+    from polymarket_exec.execution.live import LiveExecutor
+
+    client = _clob_client_whose_post_times_out()
+    executor = LiveExecutor(
+        private_key="0x" + "1" * 64, funder="0xFUNDER", signature_type=2, max_trade_usd=3.0,
+        daily_loss_halt_usd=10.0, bankroll_cap_usd=30.0, max_entry_slippage=0.5,
+        exit_fill_timeout_seconds=1.0, kill_switch_path=tmp_path / "KILL", client=client,
+    )
+    monkeypatch.setattr(paper, "_live_executor", executor)
+    monkeypatch.setattr(paper, "_risk_gate", executor.gate)
+    for offset in (30, 35, 40, 45, 121):
+        await _tick(monkeypatch, H + offset, _Venue())
+    assert client.create_and_post_order.call_count == 1
+    assert await _positions() == []
+    action = (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"]
+    assert action.startswith("UNCERTAIN:ERROR ") and "Request exception!" in action
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT status FROM live_orders WHERE intent = 'ENTRY'")
+        assert [r["status"] for r in await cur.fetchall()] == ["ERROR"]
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM notification_feed WHERE event_type = 'live_entry_uncertain'")
+        assert (await cur.fetchone())["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_submitting_is_recorded_before_the_live_post(test_db, monkeypatch):
+    account = await _go_live(monkeypatch)
+    seen: list[str] = []
+    slot = account.slot_executor("hourly_mean_reversion")
+    entered = slot.submit_entry.return_value
+
+    async def submit_entry(**_kwargs):
+        seen.append((await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"])
+        return entered
+
+    slot.submit_entry.side_effect = submit_entry
+    await _tick(monkeypatch, H + 30, _Venue())
+    assert seen == ["SUBMITTING"]
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "ENTERED"
+
+
+@pytest.mark.asyncio
+async def test_live_attempt_that_raised_is_not_retried_and_ends_uncertain(test_db, monkeypatch):
+    account = await _go_live(monkeypatch)
+    slot = account.slot_executor("hourly_mean_reversion")
+    slot.submit_entry.side_effect = RuntimeError("journal write failed")
+    with pytest.raises(RuntimeError):
+        await _tick(monkeypatch, H + 30, _Venue())
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "SUBMITTING"
+    await _tick(monkeypatch, H + 35, _Venue())
+    await _tick(monkeypatch, H + 40, _Venue())
+    assert slot.submit_entry.await_count == 1
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == (
+        "UNCERTAIN:entry attempt did not finish")
+
+
+@pytest.mark.asyncio
+async def test_paper_attempt_that_raised_is_not_retried_and_ends_uncertain(test_db, monkeypatch):
+    real_insert = engine._insert_row
+    calls = {"n": 0}
+
+    async def insert_row(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return await real_insert(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_insert_row", insert_row)
+    with pytest.raises(RuntimeError):
+        await _tick(monkeypatch, H + 30, _Venue())
+    await _tick(monkeypatch, H + 35, _Venue())
+    assert calls["n"] == 1 and await _positions() == []
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == (
+        "UNCERTAIN:entry attempt did not finish")
 
 
 @pytest.mark.asyncio

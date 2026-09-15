@@ -64,6 +64,17 @@ async def test_set_action_and_settle_every_strategy_row(test_db) -> None:
     assert await ledger.unsettled_windows(H + 7200) == []
 
 
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried
+@pytest.mark.asyncio
+async def test_set_action_with_expected_action_only_replaces_that_action(test_db) -> None:
+    await _record()
+    await ledger.set_action(SLUG, "hourly_mean_reversion", "ENTERED", position_id=7)
+    await ledger.set_action(SLUG, "hourly_mean_reversion", "UNCERTAIN:x", expected_action="SUBMITTING")
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "ENTERED"
+    await ledger.set_action(SLUG, "hourly_mean_reversion", "UNCERTAIN:x", expected_action="ENTERED")
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:x"
+
+
 @pytest.mark.asyncio
 async def test_positions_table_has_strategy_columns(test_db) -> None:
     async with _db.connect() as conn:
