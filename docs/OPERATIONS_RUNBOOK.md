@@ -171,9 +171,11 @@ Every live boot, BEFORE any trading:
    cancelled too.
 2. Any **open ledger position is re-adopted** from the `live_orders`
    journal (token, entry price, exchange-confirmed fill size) so the normal
-   exit path flattens it. Open rows with no live order behind them (paper
-   artifacts, never-filled entries) are closed harmlessly with reason
-   `RECONCILED_*`.
+   exit path flattens it. Shares its exit orders already sold are restored
+   too, so a later exit or settlement never counts them twice; a row whose
+   exits already sold every share closes as `RECONCILED_FLAT`. Open rows
+   with no live order behind them (paper artifacts, never-filled entries)
+   are closed harmlessly with reason `RECONCILED_*`.
 3. If the account state cannot be reconciled (CLOB unreachable, >1 open row),
    boot is REFUSED with instructions — the bot never trades on top of unknown
    exposure.
