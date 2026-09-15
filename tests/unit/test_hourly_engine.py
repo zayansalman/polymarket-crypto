@@ -334,3 +334,34 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
     account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+async def test_pending_decision_from_a_stopped_hour_is_missed_on_a_later_tick(test_db, monkeypatch):
+    venue = _Venue(hour_close=109.0)
+    await _tick(monkeypatch, H + 30, venue, allow=False)  # entries held: the row stays PENDING
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    # Loop stopped before H's deadline; the next tick runs in hour H+1.
+    venue.end_hour = H + 3600
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert row["settled_at"] is not None and row["outcome_side"] == "Down"
+    assert row["action"] == "MISSED"
+    assert [p["window_slug"] for p in await _positions()] == [NEXT_SLUG]  # nothing chased in H
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+async def test_pending_decision_with_a_position_row_for_its_hour_is_entered_after_the_deadline(
+    test_db, monkeypatch
+):
+    venue = _Venue(hour_close=109.0)
+    await _tick(monkeypatch, H + 30, venue, allow=False)
+    # A crash after the live submit but before the ENTERED write leaves the position row.
+    await _insert_hourly(H, "live")
+    position_id = (await _positions())[0]["position_id"]
+    venue.end_hour = H + 3600
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("ENTERED", position_id)

@@ -688,6 +688,7 @@ git commit -m "feat(hourly): Hourly Mean Reversion signal (frozen rule, stdlib m
   - `async record_decision(*, strategy_id: str, window_slug: str, window_start_ts: int, side: str | None, reason: str, signal: dict, factors: dict, up_bid: float | None, up_ask: float | None, down_bid: float | None, down_ask: float | None, hour_open: float | None, mode: str, late: bool) -> bool` (sets `action` to `PENDING` when `side` is set and not late, `MISSED` when set and late, `NO_SIGNAL` when `side` is None; returns True iff a row was inserted)
   - `async get_decision(window_slug: str, strategy_id: str) -> dict | None`
   - `async set_action(window_slug: str, strategy_id: str, action: str, position_id: int | None = None) -> None`
+  - `async finalize_pending_past_deadline(now: int, deadline_s: int) -> int` (every `PENDING` row with `window_start_ts + deadline_s < now`, any hour and any strategy: `ENTERED` with its position when this strategy has a 1h position row for that hour, otherwise `MISSED`; returns rows changed) _(Claude, 2026-09-15, branch-review finding pending-row-never-finalized)_
   - `async unsettled_windows(now: int) -> list[int]` (distinct `window_start_ts` with `settled_at IS NULL` and `window_start_ts + 3600 <= now`)
   - `async settle_window(window_start_ts: int, hour_open: float, hour_close: float) -> None`
 
@@ -1468,7 +1469,7 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
   - knobs `hourly_mean_reversion_enabled` (bool, default True) and `hourly_entry_deadline_seconds` (int, default 120, 10–1800)
   - `reset_caches() -> None`
   - `async build_snapshot(client, now: int | None = None) -> PaperSnapshot`
-  - `async settle_due(client, snapshot, now: int) -> None`
+  - `async settle_due(client, snapshot, now: int) -> None` (first calls `ledger.finalize_pending_past_deadline(now, hourly_entry_deadline_seconds)` on every tick, so a `PENDING` row from an hour the loop stopped in is resolved on a later tick) _(Claude, 2026-09-15, branch-review finding pending-row-never-finalized)_
   - `async decide_hour(client, snapshot, now: int) -> dict[str, dict]` (strategy_id → decision row)
   - `async open_entries(snapshot, now: int, *, allow_entries: bool) -> None`
   - `async tick(client, *, allow_entries: bool = True) -> PaperSnapshot`

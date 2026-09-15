@@ -72,6 +72,39 @@ async def set_action(
         await conn.commit()
 
 
+async def finalize_pending_past_deadline(now: int, deadline_s: int) -> int:
+    """Resolve every PENDING row whose hour's entry deadline has passed; return rows changed.
+
+    Claude, 2026-09-15, branch-review finding pending-row-never-finalized: a row left
+    PENDING when no tick ran between its deadline and the hour's end (Stop, crash,
+    sleep, failing ticks, strategy disabled) otherwise stays PENDING forever. A row
+    whose hour already has this strategy's hourly position (crash after the live
+    submit, before the ENTERED write) becomes ENTERED with that position; every
+    other row becomes MISSED. Uses the same test as the engine's current-hour check
+    (now - window_start_ts > deadline), for every strategy, enabled or not.
+    """
+    position_for_row = (
+        "SELECT p.position_id FROM paper_positions p "
+        "WHERE p.window_slug = hourly_strategy_context.window_slug "
+        "AND p.strategy_id = hourly_strategy_context.strategy_id "
+        "AND p.market_timeframe = '1h'"
+    )
+    async with _db.connect() as conn:
+        entered = await conn.execute(
+            "UPDATE hourly_strategy_context SET action = 'ENTERED', "
+            f"position_id = ({position_for_row} ORDER BY p.position_id LIMIT 1) "
+            f"WHERE action = 'PENDING' AND window_start_ts + ? < ? AND EXISTS ({position_for_row})",
+            (deadline_s, now),
+        )
+        missed = await conn.execute(
+            "UPDATE hourly_strategy_context SET action = 'MISSED' "
+            "WHERE action = 'PENDING' AND window_start_ts + ? < ?",
+            (deadline_s, now),
+        )
+        await conn.commit()
+        return max(entered.rowcount, 0) + max(missed.rowcount, 0)
+
+
 async def unsettled_windows(now: int) -> list[int]:
     async with _db.connect() as conn:
         cur = await conn.execute(

@@ -308,6 +308,14 @@ async def settle_due(client: httpx.AsyncClient, snapshot: PaperSnapshot, now: in
     """Settle hourly positions and decision rows whose hour candle has closed on Binance."""
     from polymarket_bot import paper as P
 
+    # Claude, 2026-09-15, branch-review finding pending-row-never-finalized: every tick,
+    # before anything that can skip or fail, resolve PENDING rows of any hour (not only
+    # the current one) whose entry deadline has passed.
+    finalized = await ledger.finalize_pending_past_deadline(
+        now, int(_knobs.cached("hourly_entry_deadline_seconds")))
+    if finalized:
+        log.info("hourly_engine.pending_rows_finalized_after_deadline", rows=finalized)
+
     now_ms = now * 1000
     candles: dict[int, market.HourCandle | None] = {}
 

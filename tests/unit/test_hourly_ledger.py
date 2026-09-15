@@ -70,3 +70,34 @@ async def test_positions_table_has_strategy_columns(test_db) -> None:
         cur = await conn.execute("PRAGMA table_info(paper_positions)")
         cols = {r["name"] for r in await cur.fetchall()}
     assert {"strategy_id", "market_timeframe", "window_start_ts"} <= cols
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+async def test_pending_rows_past_the_deadline_are_finalized_for_every_hour(test_db) -> None:
+    prev_slug = "bitcoin-up-or-down-september-13-2026-2pm-et"
+    await _record(start=H - 3600, slug=prev_slug)
+    await _record(strategy_id="kronos_btc_finetune", start=H - 3600, slug=prev_slug)
+    await _record()
+    await _record(strategy_id="kronos_btc_finetune", side=None)
+    async with _db.connect() as conn:  # this strategy's position for the previous hour
+        cur = await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
+            " VALUES ('x', ?, 'Down', 'open', 0.5, 2.5, 5, 'kronos_btc_finetune', '1h', ?, 'live')",
+            (prev_slug, H - 3600),
+        )
+        position_id = cur.lastrowid
+        await conn.commit()
+
+    assert await ledger.finalize_pending_past_deadline(H + 120, 120) == 2  # H itself: not yet
+    prev = await ledger.get_decision(prev_slug, "hourly_mean_reversion")
+    assert prev["action"] == "MISSED" and prev["position_id"] is None
+    kronos = await ledger.get_decision(prev_slug, "kronos_btc_finetune")
+    assert (kronos["action"], kronos["position_id"]) == ("ENTERED", position_id)
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+
+    assert await ledger.finalize_pending_past_deadline(H + 121, 120) == 1
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(SLUG, "kronos_btc_finetune"))["action"] == "NO_SIGNAL"
+    assert await ledger.finalize_pending_past_deadline(H + 7200, 120) == 0

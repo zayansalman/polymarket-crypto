@@ -42,6 +42,7 @@ Break-even hit rate at a 50¢ price:
   - **Pay the ask:** a marketable buy at the best ask, which fills now.
   - **Resting order:** a post-only buy at the best bid, cancelled at the entry deadline if unfilled.
 - **Entry deadline.** A setting, 120 s after H:00 by default. If a strategy has no entry by then, the hour is recorded as `MISSED` and nothing is chased later.
+  - This also holds when the loop was not running at the deadline (Stop, crash, failing ticks, strategy switched off): the next tick, in any later hour, records that hour as `MISSED`, or as `ENTERED` if the strategy's position for that hour already exists. _(Claude, 2026-09-15, branch-review finding pending-row-never-finalized)_
 - **Size.** The operator's share count from the order-size ticket.
 - **Every hour is recorded for both strategies, bet or no bet.** The record holds:
   - the signal values and the decision;
