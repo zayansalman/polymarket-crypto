@@ -53,6 +53,8 @@ Break-even hit rate at a 50¢ price:
 
   Factors are observations for learning. None of them blocks a bet.
 
+  The record is kept per mode. If the operator switches between paper and live inside an hour, each run records its own decision, runs its own RiskGate check and writes its own action. A paper `BLOCKED` row does not stop the live run from trying, and a live entry is never filed under paper. (Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes)
+
 ---
 
 ## Strategy 1 — Kronos BTC Fine Tune

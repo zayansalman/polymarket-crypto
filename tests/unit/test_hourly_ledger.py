@@ -22,12 +22,13 @@ async def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 async def _record(strategy_id: str = "hourly_mean_reversion", side: str | None = "Down",
-                  late: bool = False, start: int = H, slug: str = SLUG) -> bool:
+                  late: bool = False, start: int = H, slug: str = SLUG,
+                  mode: str = "paper") -> bool:
     return await ledger.record_decision(
         strategy_id=strategy_id, window_slug=slug, window_start_ts=start, side=side,
         reason="enter Down: test", signal={"spot_fz": 2.5}, factors={"weekend": False},
         up_bid=0.49, up_ask=0.50, down_bid=0.50, down_ask=0.51, hour_open=77000.0,
-        mode="paper", late=late,
+        mode=mode, late=late,
     )
 
 
@@ -36,31 +37,31 @@ async def test_record_is_idempotent_per_hour_and_strategy(test_db) -> None:
     assert await _record() is True
     assert await _record() is False
     assert await _record(strategy_id="kronos_btc_finetune", side=None) is True
-    row = await ledger.get_decision(H, "hourly_mean_reversion")
+    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
     assert row["action"] == "PENDING" and row["decision_side"] == "Down"
     assert json.loads(row["signal_json"]) == {"spot_fz": 2.5}
-    assert (await ledger.get_decision(H, "kronos_btc_finetune"))["action"] == "NO_SIGNAL"
+    assert (await ledger.get_decision(H, "kronos_btc_finetune", mode="paper"))["action"] == "NO_SIGNAL"
 
 
 @pytest.mark.asyncio
 async def test_late_signal_is_recorded_missed(test_db) -> None:
     await _record(late=True)
-    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
 async def test_set_action_and_settle_every_strategy_row(test_db) -> None:
     await _record()
     await _record(strategy_id="kronos_btc_finetune", side=None)
-    await ledger.set_action(H, "hourly_mean_reversion", "ENTERED", position_id=7)
+    await ledger.set_action(H, "hourly_mean_reversion", "ENTERED", position_id=7, mode="paper")
     assert await ledger.unsettled_windows(H + 3599) == []
     assert await ledger.unsettled_windows(H + 3600) == [H]
     await ledger.settle_window(H, 77000.0, 76900.0)
     for sid in ("hourly_mean_reversion", "kronos_btc_finetune"):
-        row = await ledger.get_decision(H, sid)
+        row = await ledger.get_decision(H, sid, mode="paper")
         assert row["outcome_side"] == "Down" and row["hour_close"] == 76900.0
         assert row["settled_at"] is not None
-    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["position_id"] == 7
+    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["position_id"] == 7
     assert await ledger.unsettled_windows(H + 7200) == []
 
 
@@ -80,10 +81,54 @@ async def test_two_hours_with_the_same_slug_keep_their_own_rows(test_db) -> None
     shared = "bitcoin-up-or-down-november-1-2026-1am-et"
     assert await _record(start=first, slug=shared) is True
     assert await _record(start=second, slug=shared, side="Up") is True
-    await ledger.set_action(second, "hourly_mean_reversion", "ENTERED", position_id=9)
-    first_row = await ledger.get_decision(first, "hourly_mean_reversion")
-    second_row = await ledger.get_decision(second, "hourly_mean_reversion")
+    await ledger.set_action(second, "hourly_mean_reversion", "ENTERED", position_id=9, mode="paper")
+    first_row = await ledger.get_decision(first, "hourly_mean_reversion", mode="paper")
+    second_row = await ledger.get_decision(second, "hourly_mean_reversion", mode="paper")
     assert (first_row["decision_side"], first_row["action"], first_row["position_id"]) == (
         "Down", "PENDING", None)
     assert (second_row["decision_side"], second_row["action"], second_row["position_id"]) == (
         "Up", "ENTERED", 9)
+
+
+# Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes: a paper run and a
+# live run in the same hour each record and act on their own row.
+@pytest.mark.asyncio
+async def test_paper_and_live_keep_their_own_row_for_the_same_hour(test_db) -> None:
+    assert await _record(mode="paper") is True
+    assert await _record(mode="live") is True
+    assert await _record(mode="live") is False
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT mode, action FROM hourly_strategy_context ORDER BY mode")
+        assert [tuple(r) for r in await cur.fetchall()] == [
+            ("live", "PENDING"), ("paper", "PENDING")]
+    await ledger.set_action(H, "hourly_mean_reversion",
+                            "BLOCKED:daily loss halt: paper realized -50", mode="paper")
+    await ledger.set_action(H, "hourly_mean_reversion", "ENTERED", position_id=4, mode="live")
+    paper_row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    live_row = await ledger.get_decision(H, "hourly_mean_reversion", mode="live")
+    assert (paper_row["mode"], paper_row["action"], paper_row["position_id"]) == (
+        "paper", "BLOCKED:daily loss halt: paper realized -50", None)
+    assert (live_row["mode"], live_row["action"], live_row["position_id"]) == (
+        "live", "ENTERED", 4)
+    await ledger.settle_window(H, 77000.0, 76900.0)
+    for mode in ("paper", "live"):
+        row = await ledger.get_decision(H, "hourly_mean_reversion", mode=mode)
+        assert row["outcome_side"] == "Down" and row["settled_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_db_made_with_the_older_unique_indexes_accepts_a_row_per_mode(test_db) -> None:
+    # Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes: a DB created by
+    # an earlier build of this branch still has a two-column unique index; init_db replaces it.
+    async with _db.connect() as conn:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_window_strategy "
+            "ON hourly_strategy_context(window_slug, strategy_id)")
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy "
+            "ON hourly_strategy_context(window_start_ts, strategy_id)")
+        await conn.commit()
+    await _db.init_db()
+    assert await _record(mode="paper") is True
+    assert await _record(mode="live") is True

@@ -687,9 +687,10 @@ git commit -m "feat(hourly): Hourly Mean Reversion signal (frozen rule, stdlib m
 - Produces:
   - `paper_positions` columns `strategy_id TEXT`, `market_timeframe TEXT`, `window_start_ts INTEGER`
   - `async record_decision(*, strategy_id: str, window_slug: str, window_start_ts: int, side: str | None, reason: str, signal: dict, factors: dict, up_bid: float | None, up_ask: float | None, down_bid: float | None, down_ask: float | None, hour_open: float | None, mode: str, late: bool) -> bool` (sets `action` to `PENDING` when `side` is set and not late, `MISSED` when set and late, `NO_SIGNAL` when `side` is None; returns True iff a row was inserted)
-  - `async get_decision(window_start_ts: int, strategy_id: str) -> dict | None`
-  - `async set_action(window_start_ts: int, strategy_id: str, action: str, position_id: int | None = None) -> None`
+  - `async get_decision(window_start_ts: int, strategy_id: str, *, mode: str) -> dict | None`
+  - `async set_action(window_start_ts: int, strategy_id: str, action: str, position_id: int | None = None, *, mode: str) -> None`
   - Amended (Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision): rows are unique on `(window_start_ts, strategy_id)`, not the slug; the code blocks below predate this.
+  - Amended (Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes): rows are unique on `(window_start_ts, strategy_id, mode)`. The engine works out the mode once per tick and passes it to `decide_hour`, `open_entries` and every row lookup, so a paper run and a live run in the same hour each act on their own row. The code blocks below predate this.
   - `async unsettled_windows(now: int) -> list[int]` (distinct `window_start_ts` with `settled_at IS NULL` and `window_start_ts + 3600 <= now`)
   - `async settle_window(window_start_ts: int, hour_open: float, hour_close: float) -> None`
 
@@ -800,14 +801,17 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
   hour_open REAL,
   action TEXT NOT NULL,
   position_id INTEGER,
-  mode TEXT,
+  mode TEXT NOT NULL,
   hour_close REAL,
   outcome_side TEXT,
   settled_at TEXT
 );
 -- Amended: Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy
-  ON hourly_strategy_context(window_start_ts, strategy_id);
+-- Amended: Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes.
+DROP INDEX IF EXISTS idx_hourly_context_window_strategy;
+DROP INDEX IF EXISTS idx_hourly_context_start_strategy;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy_mode
+  ON hourly_strategy_context(window_start_ts, strategy_id, mode);
 ```
 
 In `POSITION_COLUMN_MIGRATIONS`, after `"mode": "TEXT",` add:

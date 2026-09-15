@@ -180,7 +180,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_shadow_positions_window
 CREATE INDEX IF NOT EXISTS idx_daily_shadow_positions_asset
   ON daily_shadow_positions(asset);
 
--- Hourly BTC strategies: one decision row per (hour window, strategy), written for
+-- Hourly BTC strategies: one decision row per (hour window, strategy, mode), written for
 -- EVERY hour whether or not it traded, then settled from the Binance 1h candle, so
 -- the operator can score each strategy's calls (and would-have-bet hours) honestly.
 CREATE TABLE IF NOT EXISTS hourly_strategy_context (
@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
   hour_open REAL,
   action TEXT NOT NULL,
   position_id INTEGER,
-  mode TEXT,
+  mode TEXT NOT NULL,
   hour_close REAL,
   outcome_side TEXT,
   settled_at TEXT
@@ -208,8 +208,14 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
 -- Keyed by the hour's UTC start, not its slug: on the November fall-back day two UTC hours
 -- share one ET-labelled slug (Claude, 2026-09-15, branch-review finding
 -- dst-fallback-slug-collision). The index also serves lookups by window_start_ts alone.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy
-  ON hourly_strategy_context(window_start_ts, strategy_id);
+-- Keyed by mode too: a paper run and a live run in the same hour each record and act on
+-- their own row (Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes).
+-- The older two-column unique indexes are dropped so a DB made by an earlier build accepts
+-- the second mode's row; CREATE ... IF NOT EXISTS alone would leave them in place.
+DROP INDEX IF EXISTS idx_hourly_context_window_strategy;
+DROP INDEX IF EXISTS idx_hourly_context_start_strategy;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy_mode
+  ON hourly_strategy_context(window_start_ts, strategy_id, mode);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
