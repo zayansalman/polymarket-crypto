@@ -22,6 +22,8 @@ log = get_logger("hourly_market")
 
 HOUR_S = 3600
 BINANCE_FAPI = "https://fapi.binance.com"
+# Gamma series "btc-up-or-down-hourly", which holds every BTC hourly Up/Down event.
+BTC_HOURLY_SERIES_ID = "10114"
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,28 @@ def _tokens(row: dict[str, Any]) -> tuple[str, str] | None:
     return str(tokens[up]), str(tokens[1 - up])
 
 
+def _utc_ts(value: Any) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def _utc_iso(ts: int) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _hour_market(row: dict[str, Any], start_ts: int, slug: str) -> HourMarket | None:
+    tokens = _tokens(row)
+    if tokens is None:
+        return None
+    # The venue's own slug: unique per market, unlike the ET label (see discover).
+    real_slug = str(row.get("slug") or slug)
+    return HourMarket(real_slug, str(row.get("question") or real_slug), start_ts, *tokens)
+
+
 async def discover(client: httpx.AsyncClient, start_ts: int) -> HourMarket | None:
     """The hourly BTC market for the hour starting at ``start_ts``, or None."""
     slug = slug_for(start_ts)
@@ -89,19 +113,53 @@ async def discover(client: httpx.AsyncClient, start_ts: int) -> HourMarket | Non
     resp.raise_for_status()
     rows = resp.json()
     row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
-    if row is None:
+    if row is not None:
+        event_start = row.get("eventStartTime")
+        if not event_start or _utc_ts(event_start) == start_ts:
+            return _hour_market(row, start_ts, slug)
+        log.warning("hourly_market.event_start_mismatch", slug=slug,
+                    event_start=event_start, expected=start_ts)
+    # Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision.
+    # On the November fall-back day two UTC hours carry the same ET label: for 2026-11-01,
+    # 05:00Z (1am EDT) and 06:00Z (1am EST) both map to ...-november-1-2026-1am-et. Gamma
+    # slugs are unique, so that slug can name at most one of them. Source, read-only Gamma GET
+    # on 2026-09-15 for the last fall-back day, 2025-11-02: series btc-up-or-down-hourly
+    # (id 10114) went from bitcoin-up-or-down-november-2-12am-et (eventStartTime 04:00Z)
+    # straight to bitcoin-up-or-down-november-2-2am-et (07:00Z); no market existed for either
+    # 1am ET hour, and the slug ...-november-2-1am-et returned nothing. So when the slug lookup
+    # misses, ask the series for the market whose eventStartTime is this UTC hour.
+    return await _discover_by_event_start(client, start_ts, slug)
+
+
+async def _discover_by_event_start(
+    client: httpx.AsyncClient, start_ts: int, slug: str
+) -> HourMarket | None:
+    resp = await client.get(
+        f"{_config.POLYMARKET_GAMMA_API}/events",
+        params={
+            "series_id": BTC_HOURLY_SERIES_ID,
+            "end_date_min": _utc_iso(start_ts),
+            "end_date_max": _utc_iso(start_ts + 2 * HOUR_S),
+        },
+    )
+    resp.raise_for_status()
+    events = resp.json()
+    matches = [
+        m
+        for e in (events if isinstance(events, list) else [])
+        if isinstance(e, dict)
+        for m in (e.get("markets") or [])
+        if isinstance(m, dict) and _utc_ts(m.get("eventStartTime")) == start_ts
+        and _tokens(m) is not None
+    ]
+    if not matches:
         return None
-    event_start = row.get("eventStartTime")
-    if event_start:
-        started = int(datetime.fromisoformat(str(event_start).replace("Z", "+00:00")).timestamp())
-        if started != start_ts:
-            log.warning("hourly_market.event_start_mismatch", slug=slug,
-                        event_start=event_start, expected=start_ts)
-            return None
-    tokens = _tokens(row)
-    if tokens is None:
-        return None
-    return HourMarket(slug, str(row.get("question") or slug), start_ts, tokens[0], tokens[1])
+    # Prefer a full hour: on 2026-03-08 Gamma listed a zero-length market (march-8-2026-1am-et,
+    # eventStartTime = endDate = 06:00Z) beside the real 06:00Z-07:00Z one.
+    matches.sort(key=lambda m: _utc_ts(m.get("endDate")) != start_ts + HOUR_S)
+    log.info("hourly_market.found_by_event_start", requested_slug=slug,
+             slug=matches[0].get("slug"), start=start_ts)
+    return _hour_market(matches[0], start_ts, slug)
 
 
 def _klines_url(market: str) -> str:

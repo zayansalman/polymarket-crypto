@@ -17,6 +17,7 @@ Written 2026-09-14. Evidence details, scripts and pre-registrations are summaris
 | Slug | `bitcoin-up-or-down-<month>-<day>-<year>-<h><am\|pm>-et` (labelled by the ET start hour) |
 | Resolves | **Up** if the Binance BTC/USDT 1-hour candle that starts at the title time closes at or above its open. Ties go to Up. |
 | Candle timing | Gamma `eventStartTime` is the candle start in UTC; `endDate` is one hour later |
+| November fall-back day | Two UTC hours get the same `1am-et` label, but a Gamma slug names only one market. On 2025-11-02 Polymarket listed neither 1am ET hour (read-only Gamma check, 2026-09-15). If the slug lookup misses, the bot takes the series market whose `eventStartTime` is the UTC hour. Hourly records are keyed by that UTC start, not the slug. (Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision) |
 | Listed | about 2 days ahead; the book is usually 1 cent wide |
 | Fees | taker `0.07 × p × (1 − p)` per share (about 1.75¢ at 50¢); makers pay nothing |
 | Order rules | tick 0.01, minimum 5 shares |

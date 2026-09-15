@@ -36,31 +36,31 @@ async def test_record_is_idempotent_per_hour_and_strategy(test_db) -> None:
     assert await _record() is True
     assert await _record() is False
     assert await _record(strategy_id="kronos_btc_finetune", side=None) is True
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    row = await ledger.get_decision(H, "hourly_mean_reversion")
     assert row["action"] == "PENDING" and row["decision_side"] == "Down"
     assert json.loads(row["signal_json"]) == {"spot_fz": 2.5}
-    assert (await ledger.get_decision(SLUG, "kronos_btc_finetune"))["action"] == "NO_SIGNAL"
+    assert (await ledger.get_decision(H, "kronos_btc_finetune"))["action"] == "NO_SIGNAL"
 
 
 @pytest.mark.asyncio
 async def test_late_signal_is_recorded_missed(test_db) -> None:
     await _record(late=True)
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
 async def test_set_action_and_settle_every_strategy_row(test_db) -> None:
     await _record()
     await _record(strategy_id="kronos_btc_finetune", side=None)
-    await ledger.set_action(SLUG, "hourly_mean_reversion", "ENTERED", position_id=7)
+    await ledger.set_action(H, "hourly_mean_reversion", "ENTERED", position_id=7)
     assert await ledger.unsettled_windows(H + 3599) == []
     assert await ledger.unsettled_windows(H + 3600) == [H]
     await ledger.settle_window(H, 77000.0, 76900.0)
     for sid in ("hourly_mean_reversion", "kronos_btc_finetune"):
-        row = await ledger.get_decision(SLUG, sid)
+        row = await ledger.get_decision(H, sid)
         assert row["outcome_side"] == "Down" and row["hour_close"] == 76900.0
         assert row["settled_at"] is not None
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["position_id"] == 7
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["position_id"] == 7
     assert await ledger.unsettled_windows(H + 7200) == []
 
 
@@ -70,3 +70,20 @@ async def test_positions_table_has_strategy_columns(test_db) -> None:
         cur = await conn.execute("PRAGMA table_info(paper_positions)")
         cols = {r["name"] for r in await cur.fetchall()}
     assert {"strategy_id", "market_timeframe", "window_start_ts"} <= cols
+
+
+@pytest.mark.asyncio
+async def test_two_hours_with_the_same_slug_keep_their_own_rows(test_db) -> None:
+    # Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision: on 2026-11-01 the
+    # 05:00Z and 06:00Z hours are both "1am ET", so rows are keyed by the UTC hour start.
+    first, second = 1_793_509_200, 1_793_512_800
+    shared = "bitcoin-up-or-down-november-1-2026-1am-et"
+    assert await _record(start=first, slug=shared) is True
+    assert await _record(start=second, slug=shared, side="Up") is True
+    await ledger.set_action(second, "hourly_mean_reversion", "ENTERED", position_id=9)
+    first_row = await ledger.get_decision(first, "hourly_mean_reversion")
+    second_row = await ledger.get_decision(second, "hourly_mean_reversion")
+    assert (first_row["decision_side"], first_row["action"], first_row["position_id"]) == (
+        "Down", "PENDING", None)
+    assert (second_row["decision_side"], second_row["action"], second_row["position_id"]) == (
+        "Up", "ENTERED", 9)

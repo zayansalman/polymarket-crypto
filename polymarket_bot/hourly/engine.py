@@ -129,7 +129,9 @@ async def decide_hour(
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
-        row = await ledger.get_decision(snapshot.window_slug, sid)
+        # Keyed by the UTC hour start (Claude, 2026-09-15, branch-review finding
+        # dst-fallback-slug-collision): two fall-back-day hours share one ET slug.
+        row = await ledger.get_decision(start, sid)
         if row is None:
             pending.append(sid)
         else:
@@ -164,7 +166,7 @@ async def decide_hour(
             down_bid=snapshot.down_best_bid, down_ask=snapshot.down_best_ask,
             hour_open=snapshot.reference_price, mode=mode, late=late,
         )
-        rows[sid] = await ledger.get_decision(snapshot.window_slug, sid) or {}
+        rows[sid] = await ledger.get_decision(start, sid) or {}
     return rows
 
 
@@ -224,7 +226,7 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         shares = min(shares, top)
     notional = shares * ask
     token = snapshot.up_token_id if side == "Up" else snapshot.down_token_id
-    reason = (await ledger.get_decision(snapshot.window_slug, strategy_id) or {}).get(
+    reason = (await ledger.get_decision(start, strategy_id) or {}).get(
         "decision_reason")
     if executor is not None:
         slot = executor.slot_executor(strategy_id)
@@ -245,8 +247,7 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         if not result.ok:
             await P._delete_position_row(position_id)
             if result.status == "BLOCKED":
-                await ledger.set_action(
-                    snapshot.window_slug, strategy_id, f"BLOCKED:{result.reason}")
+                await ledger.set_action(start, strategy_id, f"BLOCKED:{result.reason}")
             # Any other failure stays PENDING and retries until the entry deadline.
             log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
                         status=result.status, reason=result.reason)
@@ -268,7 +269,7 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
                     notional_usd=notional, error=blocked, mode="paper",
                     strategy_id=strategy_id,
                 )
-                await ledger.set_action(snapshot.window_slug, strategy_id, f"BLOCKED:{blocked}")
+                await ledger.set_action(start, strategy_id, f"BLOCKED:{blocked}")
                 log.info("hourly_engine.entry_blocked", strategy_id=strategy_id, reason=blocked)
                 return
         position_id = await _insert_row(
@@ -277,7 +278,7 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         )
         if gate is not None:
             await gate.record_buy_notional(round(ask * shares, 4))
-    await ledger.set_action(snapshot.window_slug, strategy_id, "ENTERED", position_id)
+    await ledger.set_action(start, strategy_id, "ENTERED", position_id)
     label = "LIVE" if executor is not None else "Paper"
     await notify(
         f"{mode}_entry",
@@ -294,11 +295,11 @@ async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
-        row = await ledger.get_decision(snapshot.window_slug, sid)
+        row = await ledger.get_decision(start, sid)
         if row is None or row["action"] != "PENDING":
             continue
         if now - start > deadline:
-            await ledger.set_action(snapshot.window_slug, sid, "MISSED")
+            await ledger.set_action(start, sid, "MISSED")
             continue
         if allow_entries:
             await _enter(snapshot, sid, str(row["decision_side"]), start)
@@ -370,12 +371,13 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     # One clock read per tick: the snapshot's market and every decision, entry and
     # settlement step must agree on the hour, even when a tick straddles H:00.
     now = P._now()
+    start = market.hour_start(now)
     snapshot = await build_snapshot(client, now)
     await settle_due(client, snapshot, now)
     rows = await decide_hour(client, snapshot, now)
     await open_entries(snapshot, now, allow_entries=allow_entries)
     for sid in list(rows):
-        rows[sid] = await ledger.get_decision(snapshot.window_slug, sid) or rows[sid]
+        rows[sid] = await ledger.get_decision(start, sid) or rows[sid]
     snapshot.reason = _reason_line(rows)
     entered = [r for r in rows.values() if r.get("action") == "ENTERED"]
     if entered:

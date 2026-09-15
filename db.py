@@ -205,10 +205,11 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
   outcome_side TEXT,
   settled_at TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_window_strategy
-  ON hourly_strategy_context(window_slug, strategy_id);
-CREATE INDEX IF NOT EXISTS idx_hourly_context_start
-  ON hourly_strategy_context(window_start_ts);
+-- Keyed by the hour's UTC start, not its slug: on the November fall-back day two UTC hours
+-- share one ET-labelled slug (Claude, 2026-09-15, branch-review finding
+-- dst-fallback-slug-collision). The index also serves lookups by window_start_ts alone.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy
+  ON hourly_strategy_context(window_start_ts, strategy_id);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {

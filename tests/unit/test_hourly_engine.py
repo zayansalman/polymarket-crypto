@@ -113,7 +113,7 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
     assert (p["side"], p["strategy_id"], p["market_timeframe"], p["window_start_ts"]) == (
         "Down", "hourly_mean_reversion", "1h", H)
     assert p["entry_price"] == 0.52 and p["shares"] == 5.0 and p["mode"] == "paper"
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    row = await ledger.get_decision(H, "hourly_mean_reversion")
     assert row["action"] == "ENTERED" and row["position_id"] == p["position_id"]
 
     venue.end_hour = H + 3600
@@ -121,7 +121,7 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
     closed = (await _positions())[0]
     assert closed["state"] == "closed" and closed["exit_price"] == 1.0
     assert closed["realized_pnl_usd"] == pytest.approx(5 * (1 - 0.52) - 5 * 0.07 * 0.52 * 0.48)
-    settled = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    settled = await ledger.get_decision(H, "hourly_mean_reversion")
     assert settled["outcome_side"] == "Down" and settled["hour_close"] == 109.0
 
 
@@ -146,14 +146,14 @@ async def test_hour_candle_not_closed_on_binance_keeps_position_and_record_open(
     await _tick(monkeypatch, H + 30, venue)
     await _tick(monkeypatch, H + 3600 + 5, venue)  # local clock past H+1; Binance has no H+1 candle yet
     assert (await _positions())[0]["state"] == "open"
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["settled_at"] is None
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["settled_at"] is None
 
 
 @pytest.mark.asyncio
 async def test_after_deadline_signal_is_missed_and_no_entry(test_db, monkeypatch):
     await _tick(monkeypatch, H + 121, _Venue())
     assert await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
@@ -165,7 +165,7 @@ async def test_gate_block_is_recorded_once_and_journaled(test_db, monkeypatch):
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     assert await _positions() == []
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    row = await ledger.get_decision(H, "hourly_mean_reversion")
     assert row["action"] == "BLOCKED:daily loss halt: test"
     async with _db.connect() as conn:
         cur = await conn.execute("SELECT COUNT(*) AS n FROM live_orders WHERE status='BLOCKED'")
@@ -176,11 +176,11 @@ async def test_gate_block_is_recorded_once_and_journaled(test_db, monkeypatch):
 async def test_disabled_strategy_records_nothing_and_kill_holds_entries(test_db, monkeypatch):
     await _knobs.set("hourly_mean_reversion_enabled", False)
     await _tick(monkeypatch, H + 30, _Venue())
-    assert await ledger.get_decision(SLUG, "hourly_mean_reversion") is None
+    assert await ledger.get_decision(H, "hourly_mean_reversion") is None
     await _knobs.set("hourly_mean_reversion_enabled", True)
     await _tick(monkeypatch, H + 31, _Venue(), allow=False)
     assert await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -201,7 +201,7 @@ async def test_waits_until_previous_hour_is_closed(test_db, monkeypatch):
     venue = _Venue()
     venue.end_hour = H - 3600  # Binance hasn't produced a closed H-1 candle yet
     await _tick(monkeypatch, H + 2, venue)
-    assert await ledger.get_decision(SLUG, "hourly_mean_reversion") is None
+    assert await ledger.get_decision(H, "hourly_mean_reversion") is None
 
 
 # --- Live mode: the same decision, routed through the strategy's live slot ---------
@@ -261,7 +261,7 @@ async def test_own_open_row_blocks_a_second_entry_in_paper_and_live(test_db, mon
     await _insert_hourly(H, "paper")
     await _tick(monkeypatch, H + 30, _Venue())
     assert len(await _positions()) == 1
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "PENDING"
     await _insert_hourly(H, "live")
     account = await _go_live(monkeypatch)
     await _tick(monkeypatch, H + 40, _Venue())
@@ -282,7 +282,7 @@ async def test_live_entry_uses_the_strategy_slot_and_settles_through_it(test_db,
     p = (await _positions())[0]
     assert (p["mode"], p["strategy_id"], p["entry_price"], p["shares"]) == (
         "live", "hourly_mean_reversion", 0.52, 5.0)
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["mode"] == "live"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["mode"] == "live"
 
     venue.end_hour = H + 3600
     await _tick(monkeypatch, H + 3600 + 20, venue)
@@ -299,7 +299,7 @@ async def test_live_blocked_entry_is_recorded_once_and_leaves_no_row(test_db, mo
     await _tick(monkeypatch, H + 40, _Venue())
     assert await _positions() == []
     assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    row = await ledger.get_decision(H, "hourly_mean_reversion")
     assert row["action"] == "BLOCKED:daily loss halt: test"
 
 
@@ -310,9 +310,9 @@ async def test_live_order_error_retries_until_the_deadline(test_db, monkeypatch)
     await _tick(monkeypatch, H + 40, _Venue())
     submit = account.slots["hourly_mean_reversion"].submit_entry
     assert submit.await_count == 2 and await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "PENDING"
     await _tick(monkeypatch, H + 121, _Venue())
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(H, "hourly_mean_reversion"))["action"] == "MISSED"
     assert submit.await_count == 2
 
 
@@ -334,3 +334,69 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
     account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+
+
+# --- US fall-back day: two UTC hours share one ET-labelled slug -------------------------
+# Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision.
+# On 2026-11-01, 05:00Z is 1am EDT and 06:00Z is 1am EST, so slug_for gives both hours
+# bitcoin-up-or-down-november-1-2026-1am-et. Gamma slugs are unique, so at most one of the two
+# markets can carry that slug. Polymarket listed neither 1am ET hour on 2025-11-02, so the real
+# slug of a second 1am market is unknown; this stand-in only has to differ from the first.
+FIRST_1AM_ET = 1_793_509_200
+SECOND_1AM_ET = 1_793_512_800
+SECOND_1AM_ET_SLUG = "stand-in-slug-for-the-06-00z-hour-on-2026-11-01"
+
+
+def _gamma_market(slug: str, start: int) -> dict:
+    iso = hm.datetime.fromtimestamp(start, hm.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = hm.datetime.fromtimestamp(start + 3600, hm.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"slug": slug, "question": slug, "eventStartTime": iso, "endDate": end,
+            "outcomes": json.dumps(["Up", "Down"]),
+            "clobTokenIds": json.dumps([f"up-{start}", f"down-{start}"])}
+
+
+class _FallBackDayVenue(_Venue):
+    """_Venue whose Gamma lists both 1am ET hours of 2026-11-01; the ET slug holds 05:00Z."""
+
+    MARKETS = ((hm.slug_for(FIRST_1AM_ET), FIRST_1AM_ET), (SECOND_1AM_ET_SLUG, SECOND_1AM_ET))
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        url, p = str(request.url), request.url.params
+        if url.startswith(f"{_config.POLYMARKET_GAMMA_API}/markets"):
+            return httpx.Response(200, json=[
+                _gamma_market(s, t) for s, t in self.MARKETS if s == p["slug"]])
+        if url.startswith(f"{_config.POLYMARKET_GAMMA_API}/events"):
+            lo, hi = (int(hm.datetime.fromisoformat(p[k].replace("Z", "+00:00")).timestamp())
+                      for k in ("end_date_min", "end_date_max"))
+            return httpx.Response(200, json=[
+                {"slug": s, "markets": [_gamma_market(s, t)]}
+                for s, t in self.MARKETS if lo <= t + 3600 <= hi])
+        return super().__call__(request)
+
+
+@pytest.mark.asyncio
+async def test_second_1am_et_hour_on_fall_back_day_trades_and_settles_the_first(
+    test_db, monkeypatch
+):
+    venue = _FallBackDayVenue(hour_close=109.0)  # both hours close below their open: Down wins
+    venue.end_hour = FIRST_1AM_ET
+    await _tick(monkeypatch, FIRST_1AM_ET + 30, venue)
+    assert [p["window_start_ts"] for p in await _positions()] == [FIRST_1AM_ET]
+
+    venue.end_hour = SECOND_1AM_ET
+    snap = await _tick(monkeypatch, SECOND_1AM_ET + 20, venue)
+
+    assert snap.window_slug == SECOND_1AM_ET_SLUG
+    first, second = await _positions()
+    assert (first["window_start_ts"], first["state"], first["exit_price"]) == (
+        FIRST_1AM_ET, "closed", 1.0)
+    assert (second["window_start_ts"], second["window_slug"], second["state"]) == (
+        SECOND_1AM_ET, SECOND_1AM_ET_SLUG, "open")
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT * FROM hourly_strategy_context ORDER BY window_start_ts")
+        rows = [dict(r) for r in await cur.fetchall()]
+    assert [(r["window_start_ts"], r["action"], r["position_id"]) for r in rows] == [
+        (FIRST_1AM_ET, "ENTERED", first["position_id"]),
+        (SECOND_1AM_ET, "ENTERED", second["position_id"]),
+    ]
+    assert rows[0]["outcome_side"] == "Down" and rows[1]["settled_at"] is None

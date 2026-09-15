@@ -1,4 +1,4 @@
-"""Hourly strategy decision record: one row per (hour, strategy), actions, and settlement."""
+"""Hourly strategy decision record: one row per (UTC hour start, strategy), actions, settlement."""
 from __future__ import annotations
 
 import json
@@ -49,25 +49,28 @@ async def record_decision(
         return cur.rowcount == 1
 
 
-async def get_decision(window_slug: str, strategy_id: str) -> dict[str, Any] | None:
+# Rows are looked up by the hour's UTC start, never its ET slug: on the November fall-back day
+# two hours share one slug (Claude, 2026-09-15, branch-review finding
+# dst-fallback-slug-collision).
+async def get_decision(window_start_ts: int, strategy_id: str) -> dict[str, Any] | None:
     async with _db.connect() as conn:
         cur = await conn.execute(
-            "SELECT * FROM hourly_strategy_context WHERE window_slug = ? AND strategy_id = ?",
-            (window_slug, strategy_id),
+            "SELECT * FROM hourly_strategy_context WHERE window_start_ts = ? AND strategy_id = ?",
+            (window_start_ts, strategy_id),
         )
         row = await cur.fetchone()
         return dict(row) if row else None
 
 
 async def set_action(
-    window_slug: str, strategy_id: str, action: str, position_id: int | None = None
+    window_start_ts: int, strategy_id: str, action: str, position_id: int | None = None
 ) -> None:
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE hourly_strategy_context SET action = ?, "
             "position_id = COALESCE(?, position_id) "
-            "WHERE window_slug = ? AND strategy_id = ?",
-            (action[:240], position_id, window_slug, strategy_id),
+            "WHERE window_start_ts = ? AND strategy_id = ?",
+            (action[:240], position_id, window_start_ts, strategy_id),
         )
         await conn.commit()
 
