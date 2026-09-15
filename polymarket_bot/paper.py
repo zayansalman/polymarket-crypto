@@ -604,28 +604,29 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
 async def _force_close_hourly_rows(
     client: httpx.AsyncClient, rows: list[dict[str, Any]], exit_reason: str
 ) -> int:
-    """Sell this hour's 1h rows at their bid when the loop ran 1h; returns how many closed.
+    """Sell this hour's 1h rows at their bid; returns how many closed.
 
     Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery:
-    a Stop after a 5m run never reads the hourly market, rows are matched to the
-    current hour by ``window_start_ts`` (two ET hours share a slug on the DST
-    fall-back day), and a failed hourly read is logged instead of raised so the
-    count of 5m rows already closed still reaches the caller. Every row left open
-    settles from the Binance candle on the next 1h start.
+    Stop reads the hourly market only when a current-hour 1h row is open, rows are
+    matched to the current hour by ``window_start_ts`` (two ET hours share a slug on
+    the DST fall-back day), and a failed hourly read is logged instead of raised so
+    the count of 5m rows already closed still reaches the caller. Every row left
+    open settles from the Binance candle on the next 1h start.
+
+    Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
+    (review follow-up): the timeframe that last ran is not checked. It resets to 5m
+    on restart, and a 5m live run adopts open 1h live rows, so its final flatten
+    must still be able to sell them.
     """
     now = _now()
     start = hourly_engine.market.hour_start(now)
     sellable: list[dict[str, Any]] = []
     for pos in rows:
-        if _timeframe != hourly_engine.TIMEFRAME:
-            reason = "loop_not_running_1h"
-        elif pos.get("window_start_ts") != start:
-            reason = "past_hour"
-        else:
-            sellable.append(pos)
+        if pos.get("window_start_ts") != start:
+            log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
+                        window_slug=pos["window_slug"], reason="past_hour")
             continue
-        log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
-                    window_slug=pos["window_slug"], reason=reason)
+        sellable.append(pos)
     if not sellable:
         return 0
     try:

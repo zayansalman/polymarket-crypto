@@ -72,7 +72,7 @@
 | Create `polymarket_bot/hourly/ledger.py` | Context rows: `record_decision`, `get_decision`, `set_action`, `unsettled_windows`, `settle_window` |
 | Modify `db.py` (again) | `live_orders.strategy_id`; `journal_live_order(strategy_id=…)` |
 | Modify `polymarket_exec/execution/live.py` | Strategy slots: `slot_executor`, `cancel_open_all`, kill switch over every slot, per-slot boot reconciliation, hourly window resolution, journal rows tagged with the slot |
-| Modify `polymarket_bot/paper.py` | Paper settled closes net of taker fee; 5m paths ignore 1h rows; `_executor_for(pos)`; `run_paper_loop(..., timeframe)`; route 1h ticks to the engine; Stop cancels every slot and, only when the loop ran 1h, closes 1h rows at the current hour's bid (other 1h rows wait for settlement; a failed hourly read never hides the 5m close count — Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery) |
+| Modify `polymarket_bot/paper.py` | Paper settled closes net of taker fee; 5m paths ignore 1h rows; `_executor_for(pos)`; `run_paper_loop(..., timeframe)`; route 1h ticks to the engine; Stop cancels every slot and closes 1h rows at the current hour's bid (other 1h rows wait for settlement; a failed hourly read never hides the 5m close count — Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery) |
 | Create `polymarket_bot/hourly/engine.py` | `build_snapshot`, `settle_due`, `decide_hour`, `open_entries`, `tick` (paper and live) |
 | Modify `polymarket_bot/runtime_knobs.py` | `hourly_mean_reversion_enabled`, `hourly_entry_deadline_seconds` |
 | Modify `polymarket_bot/controller.py` | Pin the market selection at Start; pass timeframe to the runner |
@@ -2342,7 +2342,6 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
     # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
-    monkeypatch.setattr(paper, "_timeframe", "1h")
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 1
@@ -2476,15 +2475,11 @@ async def _force_close_hourly_rows(
     start = hourly_engine.market.hour_start(now)
     sellable: list[dict[str, Any]] = []
     for pos in rows:
-        if _timeframe != hourly_engine.TIMEFRAME:
-            reason = "loop_not_running_1h"
-        elif pos.get("window_start_ts") != start:
-            reason = "past_hour"
-        else:
-            sellable.append(pos)
+        if pos.get("window_start_ts") != start:
+            log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
+                        window_slug=pos["window_slug"], reason="past_hour")
             continue
-        log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
-                    window_slug=pos["window_slug"], reason=reason)
+        sellable.append(pos)
     if not sellable:
         return 0
     try:
@@ -2507,10 +2502,15 @@ async def _force_close_hourly_rows(
 
 Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery: the hourly
 branch originally read the hourly market on every Stop that found an open 1h row, whatever
-timeframe had run, and a failed read discarded the count of 5m rows already closed. Stop now
-sells 1h rows only after a 1h run, matches the current hour by `window_start_ts` (two ET hours
-share a slug on the DST fall-back day), and logs a failed hourly read instead of raising. Rows
-left open settle from the Binance candle on the next 1h start.
+timeframe had run, and a failed read discarded the count of 5m rows already closed. Stop reads
+the hourly market only when a current-hour 1h row is open, matches the current hour by
+`window_start_ts` (two ET hours share a slug on the DST fall-back day), and logs a failed hourly
+read instead of raising. Rows left open settle from the Binance candle on the next 1h start.
+
+Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery (review
+follow-up): Stop does not check which timeframe last ran. That value resets to 5m on restart,
+and a 5m live run adopts open 1h live rows at boot, so its final flatten must still sell a
+current-hour 1h row.
 
 In `_detail_from_snapshot`, replace the `Polymarket Up:` line with a None-safe version:
 

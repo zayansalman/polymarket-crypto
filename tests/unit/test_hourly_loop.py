@@ -78,7 +78,6 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
     # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
-    monkeypatch.setattr(paper, "_timeframe", "1h")
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 1
@@ -192,7 +191,6 @@ async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeyp
     monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(side_effect=AssertionError))
     # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery:
     # a past-hour row is left by its window_start_ts, before any hourly read.
-    monkeypatch.setattr(paper, "_timeframe", "1h")
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(side_effect=AssertionError))
 
@@ -220,7 +218,6 @@ async def test_live_stop_never_sells_a_past_hour_row(test_db, monkeypatch) -> No
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
     # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
-    monkeypatch.setattr(paper, "_timeframe", "1h")
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 0
@@ -254,9 +251,10 @@ def _every_http_call_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_after_a_5m_run_never_reads_the_hourly_market(test_db, monkeypatch) -> None:
+async def test_stop_with_only_past_hour_1h_rows_never_reads_the_hourly_market(
+    test_db, monkeypatch
+) -> None:
     await _insert_open_hourly_row(H - 3600, "paper")
-    await _insert_open_hourly_row(H, "paper")
     await _insert_open_5m_row()
     _every_http_call_returns_503(monkeypatch)
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
@@ -266,17 +264,14 @@ async def test_stop_after_a_5m_run_never_reads_the_hourly_market(test_db, monkey
     assert await controller._safe_force_close() == (1, None)
 
     hourly_snapshot.assert_not_awaited()
-    assert await paper.count_open_positions() == 2  # both hourly rows wait for settlement
+    assert await paper.count_open_positions() == 1  # the past-hour row waits for settlement
 
 
 @pytest.mark.asyncio
-async def test_stop_after_a_1h_run_keeps_the_5m_count_when_the_hourly_read_fails(
-    test_db, monkeypatch
-) -> None:
+async def test_stop_keeps_the_5m_count_when_the_hourly_read_fails(test_db, monkeypatch) -> None:
     await _insert_open_hourly_row(H, "paper")
     await _insert_open_5m_row()
     _every_http_call_returns_503(monkeypatch)
-    monkeypatch.setattr(paper, "_timeframe", "1h")
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await controller._safe_force_close() == (1, None)
