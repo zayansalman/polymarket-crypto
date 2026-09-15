@@ -2033,10 +2033,12 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
     if ask is None or ask <= 0 or (top is not None and top <= 0):
         return  # no executable ask this tick: retry until the deadline
     gate = P._risk_gate
-    shares = max(gate.trade_shares if gate is not None else DEFAULT_MIN_ORDER_SIZE,
-                 DEFAULT_MIN_ORDER_SIZE)
+    shares = gate.trade_shares if gate is not None else DEFAULT_MIN_ORDER_SIZE
+    # Cap to the top-of-book ask size first, then raise to the venue minimum.
+    # Claude, 2026-09-15, branch-review finding thin-top-sizing-paper-vs-live
     if top is not None:
         shares = min(shares, top)
+    shares = max(shares, DEFAULT_MIN_ORDER_SIZE)
     notional = shares * ask
     token = snapshot.up_token_id if side == "Up" else snapshot.down_token_id
     reason = (await ledger.get_decision(snapshot.window_slug, strategy_id) or {}).get(

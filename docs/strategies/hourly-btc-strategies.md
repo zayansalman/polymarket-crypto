@@ -42,7 +42,7 @@ Break-even hit rate at a 50¢ price:
   - **Pay the ask:** a marketable buy at the best ask, which fills now.
   - **Resting order:** a post-only buy at the best bid, cancelled at the entry deadline if unfilled.
 - **Entry deadline.** A setting, 120 s after H:00 by default. If a strategy has no entry by then, the hour is recorded as `MISSED` and nothing is chased later.
-- **Size.** The operator's share count from the order-size ticket.
+- **Size.** The operator's share count from the order-size ticket, capped at the shares on the best ask, then raised to the 5-share venue minimum. Paper and live both size, gate and book that same amount, so a best ask holding only 3 shares still means a 5-share order. (Claude, 2026-09-15, branch-review finding thin-top-sizing-paper-vs-live)
 - **Every hour is recorded for both strategies, bet or no bet.** The record holds:
   - the signal values and the decision;
   - the book at decision time;

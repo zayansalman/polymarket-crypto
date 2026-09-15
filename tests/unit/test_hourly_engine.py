@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -15,7 +16,7 @@ from polymarket_bot import paper
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot.hourly import engine, ledger
 from polymarket_bot.hourly import market as hm
-from polymarket_exec.execution.live import LiveOrderResult
+from polymarket_exec.execution.live import LiveExecutor, LiveOrderResult
 
 H = 1_789_326_000  # 3PM ET hour
 SLUG = hm.slug_for(H)
@@ -334,3 +335,88 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
     account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+
+
+# --- Thin top-of-book ask: paper and live size, gate and book the same clip ----------
+# Claude, 2026-09-15, branch-review finding thin-top-sizing-paper-vs-live
+
+
+class _ThinTopVenue(_Venue):
+    """Same venue, but the best ask level holds only 3 shares (below the 5-share minimum)."""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(f"{_config.POLYMARKET_CLOB_API}/book"):
+            return httpx.Response(200, json={
+                "bids": [{"price": "0.48", "size": "300"}],
+                "asks": [{"price": "0.52", "size": "3"}],
+            })
+        return super().__call__(request)
+
+
+def _thin_top_clob_client() -> MagicMock:
+    client = MagicMock()
+    # py-clob-client lists levels worst -> best (best is last).
+    client.get_order_book.return_value = SimpleNamespace(
+        asks=[SimpleNamespace(price="0.99", size="100"), SimpleNamespace(price="0.52", size="3")],
+        bids=[SimpleNamespace(price="0.48", size="300")],
+        tick_size="0.01", min_order_size="5",
+    )
+    client.create_and_post_order.return_value = {
+        "success": True, "errorMsg": "", "orderID": "0xTHIN", "status": "live"}
+    return client
+
+
+async def _thin_top_setup(monkeypatch, tmp_path, mode: str, max_trade_usd: float):
+    """Real account executor + RiskGate on a mocked CLOB client; records every gate notional."""
+    client = _thin_top_clob_client()
+    account = LiveExecutor(
+        private_key="0x" + "1" * 64, funder="0xFUNDER", signature_type=2,
+        max_trade_usd=max_trade_usd, daily_loss_halt_usd=10.0, bankroll_cap_usd=30.0,
+        max_entry_slippage=0.5, exit_fill_timeout_seconds=5.0,
+        kill_switch_path=tmp_path / "KILL", client=client,
+    )
+    gate = account.gate
+    gate_notionals: list[float] = []
+    real_block_reason = gate.block_reason
+
+    def recording_block_reason(req):
+        gate_notionals.append(req.notional_usd)
+        return real_block_reason(req)
+
+    monkeypatch.setattr(gate, "block_reason", recording_block_reason)
+    monkeypatch.setattr(paper, "_risk_gate", gate)
+    monkeypatch.setattr(paper, "_live_executor", account if mode == "live" else None)
+    return client, gate, gate_notionals
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["paper", "live"])
+async def test_thin_top_ask_books_the_venue_minimum_and_gates_on_its_notional(
+    test_db, monkeypatch, tmp_path, mode,
+):
+    client, gate, gate_notionals = await _thin_top_setup(monkeypatch, tmp_path, mode, 3.0)
+    await _tick(monkeypatch, H + 30, _ThinTopVenue())
+    rows = await _positions()
+    assert [(r["mode"], r["shares"]) for r in rows] == [(mode, 5.0)]
+    assert rows[0]["notional_usd"] == pytest.approx(2.6)
+    assert gate_notionals and all(n == pytest.approx(2.6) for n in gate_notionals)
+    assert gate.daily_buy_notional == pytest.approx(2.6)
+    if mode == "live":
+        assert client.create_and_post_order.call_args.args[0].size == 5.0
+    else:
+        client.create_and_post_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["paper", "live"])
+async def test_thin_top_ask_venue_minimum_over_the_per_trade_cap_blocks_in_both_modes(
+    test_db, monkeypatch, tmp_path, mode,
+):
+    client, gate, gate_notionals = await _thin_top_setup(monkeypatch, tmp_path, mode, 2.0)
+    await _tick(monkeypatch, H + 30, _ThinTopVenue())
+    assert await _positions() == []
+    client.create_and_post_order.assert_not_called()
+    assert gate.daily_buy_notional == 0.0
+    assert gate_notionals and all(n == pytest.approx(2.6) for n in gate_notionals)
+    action = (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"]
+    assert action.startswith("BLOCKED:per-trade cap: 2.60 USD exceeds 2.00 USD")
