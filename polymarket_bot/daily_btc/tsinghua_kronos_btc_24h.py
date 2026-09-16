@@ -62,6 +62,13 @@ def _is_probability(value: object) -> bool:
             and math.isfinite(value) and 0.0 <= value <= 1.0)
 
 
+def _edge(probability: float, ask: float | None) -> float | None:
+    """``probability - ask`` rounded to 9 decimals; None if the ask is missing, zero or negative."""
+    if ask is None or not ask > 0:
+        return None
+    return round(probability - ask, 9)
+
+
 def decide(
     result: ForecastResult,
     *,
@@ -71,6 +78,14 @@ def decide(
     down_ask: float | None,
     edge_threshold: float,
 ) -> Decision:
+    """The bet for one window from one forecast.
+
+    Up edge = P(up) - Up ask; Down edge = (1 - P(up)) - Down ask. Both are rounded to 9
+    decimals before the threshold comparison, so float noise never decides a bet (0.6 - 0.55
+    is 0.04999999999999993 unrounded). An ask that is missing, zero or negative gives no edge.
+    The larger edge is bought if it is at least ``edge_threshold``; equal edges go to Up
+    (Claude, 2026-09-16).
+    """
     spec = KRONOS_MINI_WITH_TOKENIZER_2K
     signal: dict[str, Any] = {
         "strategy": DISPLAY_NAME,
@@ -94,8 +109,8 @@ def decide(
         return Decision(None, f"unavailable: {NOT_A_PROBABILITY}", signal, available=False)
     p = float(result.upside_prob)
     se = math.sqrt(p * (1 - p) / PATHS)
-    up_edge = p - up_ask if up_ask is not None and up_ask > 0 else None
-    down_edge = (1 - p) - down_ask if down_ask is not None and down_ask > 0 else None
+    up_edge = _edge(p, up_ask)
+    down_edge = _edge(1 - p, down_ask)
     signal.update({
         "p_up": p, "sampling_se": se, "last_close": result.last_close,
         "final_closes": list(result.final_closes), "worker_seconds": result.seconds,
@@ -106,6 +121,7 @@ def decide(
     best: tuple[str, float] | None = None
     if up_edge is not None and up_edge >= edge_threshold:
         best = ("Up", up_edge)
+    # Strictly greater: equal edges stay with Up.
     if down_edge is not None and down_edge >= edge_threshold and (best is None or down_edge > best[1]):
         best = ("Down", down_edge)
     if best is None:

@@ -50,6 +50,31 @@ def test_buys_down_and_skips_below_the_threshold() -> None:
     assert skip.side is None and skip.available and skip.reason.startswith("no bet")
 
 
+def _decide(p: float, up_ask: float | None, down_ask: float | None) -> rule.Decision:
+    return rule.decide(_result(p), candles=CANDLES, reference_ts=REF, up_ask=up_ask,
+                       down_ask=down_ask, edge_threshold=0.05)
+
+
+def test_an_edge_exactly_at_the_threshold_bets() -> None:
+    d = _decide(0.6, up_ask=0.55, down_ask=0.5)  # 0.6 - 0.55 is 0.04999999999999993 unrounded
+    assert d.side == "Up" and d.signal["up_edge"] == 0.05
+
+
+def test_the_larger_edge_wins_and_equal_edges_go_to_up() -> None:
+    assert _decide(0.6, up_ask=0.50, down_ask=0.20).side == "Down"  # Up 0.10, Down 0.20
+    assert _decide(0.6, up_ask=0.40, down_ask=0.30).side == "Up"    # Up 0.20, Down 0.10
+    tie = _decide(0.6, up_ask=0.45, down_ask=0.25)  # both 0.15 once rounded
+    assert tie.signal["up_edge"] == tie.signal["down_edge"] == 0.15
+    assert tie.side == "Up"
+
+
+def test_zero_or_negative_asks_are_ignored() -> None:
+    down_only = _decide(0.1, up_ask=0.0, down_ask=0.5)
+    assert down_only.side == "Down" and down_only.signal["up_edge"] is None
+    up_only = _decide(0.9, up_ask=0.5, down_ask=-0.1)
+    assert up_only.side == "Up" and up_only.signal["down_edge"] is None
+
+
 def test_missing_asks_and_unavailable_forecasts() -> None:
     no_book = rule.decide(_result(0.9), candles=CANDLES, reference_ts=REF, up_ask=None,
                           down_ask=None, edge_threshold=0.05)
