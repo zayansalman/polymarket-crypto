@@ -91,7 +91,10 @@ async def set_action(
     mode: str,
     expected_action: str | None = None,
 ) -> bool:
-    """Set the row's action (and position, when given); True iff a row changed.
+    """Set the row's action (and position, when given); True iff a row matched.
+
+    SQLite counts every row the WHERE clause matched, including a row that already
+    held these values.
 
     ``expected_action`` applies the update only while the row still holds that action, so
     closing out an unfinished attempt never overwrites a result written meanwhile (Claude,
