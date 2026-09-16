@@ -125,6 +125,22 @@ KNOBS: dict[str, Knob] = {
         "runtime.hourly.entry_deadline_seconds", 120, "int",
         "Entry deadline after the hour opens", 10, 1800, unit="s", group="Hourly BTC",
     ),
+    # --- Daily BTC strategies (polymarket_bot/daily_btc/engine.py) ----------
+    # Tsinghua-Kronos BTC 24h: name Zayan (operator) 2026-09-16; defaults Claude 2026-09-16.
+    "daily_btc_tsinghua_kronos_btc_24h_enabled": Knob(
+        "runtime.daily_btc.tsinghua_kronos_btc_24h_enabled", True, "bool",
+        "Tsinghua-Kronos BTC 24h enabled", group="Daily BTC",
+    ),
+    "daily_btc_tsinghua_kronos_btc_24h_edge_threshold": Knob(
+        "runtime.daily_btc.tsinghua_kronos_btc_24h_edge_threshold", 0.05, "float",
+        "Tsinghua-Kronos BTC 24h: minimum forecast-minus-price edge", 0.0, 0.5,
+        group="Daily BTC",
+    ),
+    "daily_btc_entry_deadline_seconds": Knob(
+        "runtime.daily_btc.entry_deadline_seconds", 300, "int",
+        "Daily BTC entry deadline after the noon-ET window opens", 30, 3600, unit="s",
+        group="Daily BTC",
+    ),
 }
 
 # In-memory mirror of the last `refresh_cache()` read, for sync call sites.

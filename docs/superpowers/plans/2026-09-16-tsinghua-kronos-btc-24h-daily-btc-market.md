@@ -2315,8 +2315,8 @@ git commit -m "feat(live): daily BTC rows resolve after their noon-ET window; 50
   - `TIMEFRAME = "1d"`; `SETTLE_GRACE_S = 120`; `STRATEGIES`; `reset_caches()`
   - `async market_for(client, window) -> DayMarket`
   - `async build_snapshot(client, now: int | None = None) -> PaperSnapshot`
-  - `async decide_window(client, snapshot, market, now) -> dict[str, dict]`
-  - `async open_entries(snapshot, market, now, *, allow_entries: bool) -> None`
+  - `async decide_window(client, snapshot, market, now, *, mode: str) -> dict[str, dict]`
+  - `async open_entries(snapshot, market, now, *, allow_entries: bool, mode: str) -> None`
   - `async settle_due(client, snapshot, now: int) -> None` (needs no Gamma read)
   - `async tick(client, *, allow_entries: bool = True) -> PaperSnapshot`
   - Knobs:
@@ -2928,6 +2928,12 @@ python3 -m ruff check polymarket_exec/ polymarket_bot/ tests/ tools/
 git add polymarket_bot/daily_btc/engine.py polymarket_bot/runtime_knobs.py tests/unit/test_daily_btc_engine.py tests/unit/test_runtime_knobs.py
 git commit -m "feat(daily_btc): engine - Tsinghua-Kronos BTC 24h decision, entry and settlement, paper and live"
 ```
+
+**Built (Claude, 2026-09-16).** Changes from the code above; the committed files are the reference:
+- `tick` reads the mode once, as the hourly engine does, and passes `mode=` to `decide_window` and `open_entries`. There is no `_mode()` helper.
+- Tests: the fixture copies the knob cache per test, so the disabled-strategy test does not leave its value behind. `_iso` uses `datetime.fromtimestamp(ts, UTC)`, and the unused `hm` import is gone.
+- Three more tests: a forecast that ends past the deadline is recorded as MISSED and not entered; an attempt left SUBMITTING in an ended window becomes the unfinished-attempt record with one notice; a paper run leaves live 1d rows open and settles paper ones.
+- `test_runtime_knobs.py` does not pin the knob list, so it is unchanged.
 
 ---
 
