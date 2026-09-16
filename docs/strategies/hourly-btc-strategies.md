@@ -54,6 +54,7 @@ Break-even hit rate at a 50¢ price:
   - That close-out also notifies the operator (`entry_attempt_unfinished`), in paper and live. If the process died right after a live post but before its journal write, the order can be on Polymarket with no journal entry, and boot reconciliation closes its ledger row as `RECONCILED_NO_LIVE_TRACE`. The hour is still never posted again; check the account's open orders and trades. (Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post)
 - **Kill switch holds entries.** While the kill file exists, no strategy enters and the hour stays `PENDING`, the same way in paper and live. If the file is removed before the entry deadline, the entry goes ahead; if not, the hour is recorded as `MISSED`. (Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending)
 - **Size.** The operator's share count from the order-size ticket.
+- **Size.** The operator's share count from the order-size ticket, capped at the shares on the best ask, then raised to the 5-share venue minimum. Paper and live both size, gate and book that same amount, so a best ask holding only 3 shares still means a 5-share order. (Claude, 2026-09-15, branch-review finding thin-top-sizing-paper-vs-live)
 - **Every hour is recorded for both strategies, bet or no bet.** The record holds:
   - the signal values and the decision;
   - the book at decision time;
