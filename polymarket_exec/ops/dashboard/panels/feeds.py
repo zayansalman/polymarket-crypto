@@ -69,6 +69,9 @@ _MACRO_FEEDS = (
 WS_STALE_S = 120.0
 # A socket that has not connected yet this soon after start is "connecting", not down.
 WS_CONNECT_GRACE_S = 30.0
+# A rate-limited macro source is retried on the recorder's first tick after its wait ends,
+# behind any sources ahead of it in that pass: its row stays WAIT for a tick plus this.
+MACRO_WAIT_GRACE_S = 30.0
 
 
 def _secs(v: float) -> str:
@@ -167,12 +170,22 @@ def _macro_row(macro: mr.MacroSnapshot, key: str, name: str, role: str, source: 
         return FeedRow(name, role, source, "—", "CHECKING", "idle")
     age = macro.taken_at - st.last_ok_at if st.last_ok_at is not None else None
     delay = _age(age) if age is not None else "—"
+    stale_after = 2 * st.cadence_s + macro.tick_s
     if not st.ok:
-        if st.retry_after and st.next_attempt_at is not None \
-                and st.next_attempt_at > macro.taken_at:
-            return FeedRow(name, role, source, delay, "WAIT", "idle", False, st.detail)
-        return FeedRow(name, role, source, delay, "DOWN", "down", False, st.detail)
-    if age is not None and age > 2 * st.cadence_s + macro.tick_s:
+        waiting = (
+            st.retry_after
+            and st.next_attempt_at is not None
+            and macro.taken_at < st.next_attempt_at + macro.tick_s + MACRO_WAIT_GRACE_S
+        )
+        if not waiting:
+            return FeedRow(name, role, source, delay, "DOWN", "down", False, st.detail)
+        # A rate limit that never lifts is an outage: no data for too long (or, never had
+        # any, the recorder running that long) is STALE, not a quiet WAIT.
+        no_data_for = age if age is not None else macro.taken_at - macro.started_at
+        if no_data_for > stale_after:
+            return FeedRow(name, role, source, delay, "STALE", "warn", True, st.detail)
+        return FeedRow(name, role, source, delay, "WAIT", "idle", False, st.detail)
+    if age is not None and age > stale_after:
         return FeedRow(name, role, source, delay, "STALE", "warn", True,
                        f"last success {delay} ago")
     return FeedRow(name, role, source, delay, "OK", "on")

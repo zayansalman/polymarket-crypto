@@ -182,11 +182,12 @@ MT = 1_000_000.0
 H6 = 6 * 3600.0
 
 
-def _macro(statuses: dict, tick_s: float = 60.0) -> mr.MacroSnapshot:
+def _macro(statuses: dict, tick_s: float = 60.0,
+           started_at: float = MT - 50_000.0) -> mr.MacroSnapshot:
     base = {s.key: mr.MacroFeedStatus(s.cadence_s, None, None, None, None, None, None)
             for s in mr.default_sources()}
     base.update(statuses)
-    return mr.MacroSnapshot(MT, MT - 50_000.0, tick_s, base)
+    return mr.MacroSnapshot(MT, started_at, tick_s, base)
 
 
 def _ok(age: float, cadence: float = H6) -> mr.MacroFeedStatus:
@@ -216,13 +217,15 @@ def test_macro_row_states() -> None:
     down = mr.MacroFeedStatus(H6, False, MT - (5 * 3600 + 180), MT - 60, MT + 840, 119,
                               "HTTP 403 from www.bls.gov/schedule/news_release/bls.ics")
     stale = _ok(2 * H6 + 60 + 1)
-    waiting = mr.MacroFeedStatus(3600.0, False, MT - (2 * 86_400 + 4 * 3600 + 5), MT - 10,
-                                 MT + 290, 8, "rate limited (HTTP 429); next try in 300s", True)
+    # Rate limited again and again for two days: still waiting, but that is an outage.
+    limited_for_days = mr.MacroFeedStatus(
+        3600.0, False, MT - (2 * 86_400 + 4 * 3600 + 5), MT - 10, MT + 290, 8,
+        "rate limited (HTTP 429); next try in 300s", True)
     rows = {r.name: r for r in feeds.build_rows(None, None, _macro({
         mr.BLS_SCHEDULE: down,
         mr.BEA_SCHEDULE: _ok(42),
         mr.CENSUS_SCHEDULE: stale,
-        mr.FF_WEEK: waiting,
+        mr.FF_WEEK: limited_for_days,
     }))}
     bls = rows["BLS schedule"]
     assert (bls.status, bls.level, bls.delay, bls.detail) == (
@@ -234,8 +237,8 @@ def test_macro_row_states() -> None:
         "STALE", "warn", True, "12h01m")
     assert rows["Fed calendar"].status == "CHECKING"
     ff = rows["ForexFactory week"]
-    assert (ff.status, ff.level, ff.delay, ff.detail) == (
-        "WAIT", "idle", "2d04h", "rate limited (HTTP 429); next try in 300s")
+    assert (ff.status, ff.level, ff.delay, ff.delay_warn, ff.detail) == (
+        "STALE", "warn", "2d04h", True, "rate limited (HTTP 429); next try in 300s")
     # Exactly 2 × cadence + tick old is still OK; a RetryAfter whose time has passed is DOWN.
     edge = {r.name: r for r in feeds.build_rows(None, None, _macro({
         mr.CENSUS_SCHEDULE: _ok(2 * H6 + 60),
@@ -245,11 +248,45 @@ def test_macro_row_states() -> None:
     assert edge["Census schedule"].status == "OK"
     assert (edge["ForexFactory week"].status, edge["ForexFactory week"].delay) == ("DOWN", "—")
     html = feeds.render(None, None, _macro({mr.BLS_SCHEDULE: down, mr.CENSUS_SCHEDULE: stale,
-                                            mr.FF_WEEK: waiting}))
+                                            mr.FF_WEEK: limited_for_days}))
     assert "BLS schedule" in html and "ForexFactory week" in html
     assert "HTTP 403 from www.bls.gov" in html
-    # DOWN and STALE are issues; WAIT and CHECKING are not. The monitor-off rows are OFF (idle).
-    assert "2 issues" in html
+    # DOWN and STALE are issues; CHECKING is not. The monitor-off rows are OFF (idle).
+    assert "3 issues" in html
+
+
+def test_macro_wait_row_lasts_until_the_retry_tick_and_not_past_the_stale_limit() -> None:
+    detail = "rate limited (HTTP 429); next try in 300s"
+    limit = 2 * 3600 + 60  # 2 x cadence + tick for the hourly ForexFactory feed
+
+    def limited(last_ok_age: float | None, wait_left: float) -> mr.MacroFeedStatus:
+        last_ok = None if last_ok_age is None else MT - last_ok_age
+        return mr.MacroFeedStatus(3600.0, False, last_ok, MT - 300, MT + wait_left, 8, detail,
+                                  True)
+
+    def ff_row(status: mr.MacroFeedStatus, up_for: float = 50_000.0) -> feeds.FeedRow:
+        snap = _macro({mr.FF_WEEK: status}, started_at=MT - up_for)
+        return {r.name: r for r in feeds.build_rows(None, None, snap)}["ForexFactory week"]
+
+    row = ff_row(limited(1800, 120))
+    assert (row.status, row.level, row.delay, row.delay_warn, row.detail) == (
+        "WAIT", "idle", "30m", False, detail)
+    # The wait just ended; the retry runs on the recorder's next tick (60s) plus a margin.
+    assert ff_row(limited(1800, -5)).status == "WAIT"
+    assert ff_row(limited(1800, -89)).status == "WAIT"
+    assert (ff_row(limited(1800, -91)).status, ff_row(limited(1800, -91)).level) == (
+        "DOWN", "down")
+    # Still waiting, but no data for longer than 2 x cadence + tick: STALE, an issue.
+    assert ff_row(limited(limit, 120)).status == "WAIT"
+    old = ff_row(limited(limit + 1, 120))
+    assert (old.status, old.level, old.delay_warn, old.detail) == ("STALE", "warn", True, detail)
+    # Never succeeded: how long the recorder has been running decides.
+    assert ff_row(limited(None, 120), up_for=limit).status == "WAIT"
+    never = ff_row(limited(None, 120), up_for=limit + 1)
+    assert (never.status, never.level, never.delay, never.delay_warn) == (
+        "STALE", "warn", "—", True)
+    assert "all OK" in feeds.render(None, None, _macro({mr.FF_WEEK: limited(1800, -5)}))
+    assert "1 issue<" in feeds.render(None, None, _macro({mr.FF_WEEK: limited(limit + 1, 120)}))
 
 
 @pytest.mark.parametrize(
