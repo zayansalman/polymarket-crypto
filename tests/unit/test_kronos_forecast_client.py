@@ -118,11 +118,12 @@ async def test_success_line_is_parsed_from_an_isolated_worker_that_cannot_see_th
             sys.exit(5)
         print("torch warning line")
         print(json.dumps({"ok": True, "upside_prob": 0.5, "last_close": 100.0,
-                          "final_closes": [101.0, 99.0], "seconds": 0.5}))
+                          "final_closes": [101.0, 99.0], "seconds": 0.5, "torch": "2.10.0"}))
     """, FAKE_KEY=FAKE_KEY))
     result = await kc.run_forecast(REQUEST)
     assert result == kc.ForecastResult(ok=True, upside_prob=0.5, last_close=100.0,
-                                       final_closes=(101.0, 99.0), seconds=0.5)
+                                       final_closes=(101.0, 99.0), seconds=0.5,
+                                       torch_version="2.10.0")
 
 
 GOOD_RESULT = {"ok": True, "upside_prob": 0.5, "last_close": 100.0,
@@ -170,6 +171,16 @@ async def test_an_unreadable_last_line_is_a_failure(
     result = await kc.run_forecast(REQUEST)
     assert result == kc.ForecastResult(
         ok=False, error="Kronos worker returned an unreadable result: " + repr(line)[:200])
+
+
+@pytest.mark.parametrize(("torch_field", "expected"), [
+    ({}, None), ({"torch": None}, None), ({"torch": 2.1}, None), ({"torch": " "}, None),
+    ({"torch": "2.10.0+cpu"}, "2.10.0+cpu"), ({"torch": "v" * 100}, "v" * 40),
+])
+def test_the_torch_version_is_optional_and_short(torch_field: dict, expected: str | None) -> None:
+    result = kc.parse_worker_result({**GOOD_RESULT, **torch_field}, paths=2)
+    assert result is not None and result.ok is True
+    assert result.torch_version == expected
 
 
 @pytest.mark.asyncio

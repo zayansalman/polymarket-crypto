@@ -77,6 +77,7 @@ class ForecastResult:
     final_closes: tuple[float, ...] = ()
     seconds: float | None = None
     error: str | None = None
+    torch_version: str | None = None  # the worker's torch.__version__, when it reports one
 
 
 def _failed(error: str) -> ForecastResult:
@@ -199,7 +200,8 @@ def parse_worker_result(data: Any, paths: int) -> ForecastResult | None:
 
     Accepted only: ``ok`` exactly true, ``upside_prob`` a finite number in [0, 1],
     ``final_closes`` a list of ``paths`` finite numbers, ``last_close`` and ``seconds``
-    finite numbers.
+    finite numbers. The optional ``torch`` version is kept only as a non-blank string, cut
+    to 40 characters.
     """
     if not isinstance(data, dict) or data.get("ok") is not True:
         return None
@@ -211,12 +213,15 @@ def parse_worker_result(data: Any, paths: int) -> ForecastResult | None:
         return None
     if not (_finite_number(data.get("last_close")) and _finite_number(data.get("seconds"))):
         return None
+    torch_version = data.get("torch")
     return ForecastResult(
         ok=True,
         upside_prob=float(prob),
         last_close=float(data["last_close"]),
         final_closes=tuple(float(v) for v in closes),
         seconds=float(data["seconds"]),
+        torch_version=((torch_version.strip()[:40] or None)
+                       if isinstance(torch_version, str) else None),
     )
 
 
