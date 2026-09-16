@@ -66,10 +66,14 @@ async def main() -> int:
     ours = [a for a, _ in pairs]
     pub = [b for _, b in pairs]
     n = len(pairs)
+    if n < 2:
+        print(f"hours={n}: need at least 2 compared hours for a correlation")
+        return 1
     mae = sum(abs(a - b) for a, b in pairs) / n
     ma, mb = sum(ours) / n, sum(pub) / n
     cov = sum((a - ma) * (b - mb) for a, b in pairs)
-    corr = cov / math.sqrt(sum((a - ma) ** 2 for a in ours) * sum((b - mb) ** 2 for b in pub))
+    spread = math.sqrt(sum((a - ma) ** 2 for a in ours) * sum((b - mb) ** 2 for b in pub))
+    corr = cov / spread if spread > 0 else float("nan")
     wide = sum(1 for a, b in pairs
                if abs(a - b) > 2 * math.sqrt(max(b * (1 - b), 1 / 30) * 2 / rule.PATHS))
     print(f"hours={n} mean_abs_gap={mae:.3f} correlation={corr:.3f} gaps_beyond_2se={wide}")
