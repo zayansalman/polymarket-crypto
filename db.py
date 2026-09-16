@@ -216,6 +216,36 @@ DROP INDEX IF EXISTS idx_hourly_context_window_strategy;
 DROP INDEX IF EXISTS idx_hourly_context_start_strategy;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy_mode
   ON hourly_strategy_context(window_start_ts, strategy_id, mode);
+
+-- Daily BTC strategies (Tsinghua-Kronos BTC 24h, 2026-09-16): one decision row per
+-- (noon-ET window, strategy, mode), written for EVERY window whether or not it traded,
+-- then settled from the two Binance 1-minute closes the market resolves on.
+-- Keyed by the window's reference time and by mode, like hourly_strategy_context
+-- (branch-review findings dst-fallback-slug-collision and decision-row-shared-across-modes).
+CREATE TABLE IF NOT EXISTS btc_daily_market_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  window_slug TEXT NOT NULL,
+  reference_ts INTEGER NOT NULL,
+  settle_ts INTEGER NOT NULL,
+  decision_side TEXT,
+  decision_reason TEXT NOT NULL,
+  signal_json TEXT,
+  up_bid REAL,
+  up_ask REAL,
+  down_bid REAL,
+  down_ask REAL,
+  action TEXT NOT NULL,
+  position_id INTEGER,
+  reference_close REAL,
+  settle_close REAL,
+  outcome TEXT,
+  settled_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_btc_daily_decisions_window_strategy_mode
+  ON btc_daily_market_decisions(reference_ts, strategy_id, mode);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {

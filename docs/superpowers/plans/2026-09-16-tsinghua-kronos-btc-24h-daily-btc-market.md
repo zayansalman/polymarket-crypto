@@ -1307,6 +1307,16 @@ Then run Task 1 Step 12 (the real-model check against the published numbers). It
 - Create: `polymarket_bot/daily_btc/ledger.py`
 - Test: `tests/unit/test_daily_btc_ledger.py`
 
+**Adapted to the merged hourly code (Claude, 2026-09-16, while building this task):**
+- `get_decision` and `set_action` take the same arguments, in the same order, as `polymarket_bot/hourly/ledger.py`: `mode` is keyword-only and comes after `action`. The planned daily order (`mode` before `action`, positional) differed from the hourly one. Both are plain strings, so a call written in the other ledger's order would silently match no row.
+- `stale_rows` is replaced by `finalize_ended_windows`, which applies the merged hourly rules (`finalize_ended_hours`, branch-review finding pending-row-never-finalized) to daily windows. Those rules are:
+  - It covers every mode, not only the running one.
+  - A window's position counts in any state, except rows that boot reconciliation closed as never placed or never filled.
+  - SUBMITTING becomes the unfinished-attempt action.
+  - PENDING becomes MISSED.
+  - Task 7 calls it at the top of `settle_due`, as the hourly engine does. That replaces the planned `_finalize_past_windows`.
+- The tests add the finalization cases and drop the `stale_rows` ones.
+
 **Interfaces:**
 - Consumes: `DayMarket`, `DayWindow` (Task 0).
 - Produces:
@@ -1316,16 +1326,16 @@ Then run Task 1 Step 12 (the real-model check against the published numbers). It
     - else `MISSED` if late;
     - else `NO_SIGNAL` if side is None;
     - else `PENDING`.
-  - `async get_decision(reference_ts: int, strategy_id: str, mode: str) -> dict | None`
-  - `async set_action(reference_ts, strategy_id, mode, action, position_id=None, *, expected_action=None) -> bool` (True iff a row changed)
+  - `async get_decision(reference_ts: int, strategy_id: str, *, mode: str) -> dict | None`
+  - `async set_action(reference_ts, strategy_id, action, position_id=None, *, mode, expected_action=None) -> bool` (True iff a row changed)
+  - `async finalize_ended_windows(current_reference_ts: int, unfinished_action: str) -> dict[str, int]`: closes out PENDING/SUBMITTING rows of windows before `current_reference_ts` and returns `{"entered", "unfinished", "missed"}` counts. The rules are those of `polymarket_bot.hourly.ledger.finalize_ended_hours`.
   - `async unsettled_windows(now_ts: int, grace_s: int) -> list[tuple[int, int]]`: distinct `(reference_ts, settle_ts)` with `settled_at IS NULL` and `settle_ts + grace_s <= now_ts`
   - `async settle_window(reference_ts: int, reference_close: float, settle_close: float, result: str) -> None` (`result` is `"Up"`, `"Down"` or `"tie"`)
-  - `async stale_rows(now_ts: int, deadline_s: int, actions: tuple[str, ...]) -> list[dict]`: rows in the given actions whose `reference_ts + deadline_s < now_ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-"""Daily BTC decision record: one row per (window, strategy, mode), actions and settlement."""
+"""Daily BTC decision record: one row per (window, strategy, mode), actions, finalization, settlement."""
 from __future__ import annotations
 
 import json
@@ -1342,7 +1352,12 @@ from polymarket_bot.daily_btc.market import DayMarket, window_for
 WINDOW = window_for(date(2026, 9, 17))  # Sep 16 noon ET -> Sep 17 noon ET
 MARKET = DayMarket("bitcoin-up-or-down-on-september-17-2026", "Bitcoin Up or Down on September 17?",
                    WINDOW, "111", "222", 0.07, 1.0)
+PREV_WINDOW = window_for(date(2026, 9, 16))  # Sep 15 noon ET -> Sep 16 noon ET
+PREV_MARKET = DayMarket("bitcoin-up-or-down-on-september-16-2026",
+                        "Bitcoin Up or Down on September 16?", PREV_WINDOW, "333", "444", 0.07, 1.0)
 SID = "tsinghua_kronos_btc_24h"
+SECOND_SID = "second_daily_btc_strategy_in_this_test"
+UNFINISHED = "UNCERTAIN:entry attempt did not finish"
 
 
 @pytest_asyncio.fixture
@@ -1353,12 +1368,27 @@ async def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 async def _record(mode: str = "paper", side: str | None = "Up", *, late: bool = False,
-                  available: bool = True) -> bool:
+                  available: bool = True, market: DayMarket = MARKET,
+                  strategy_id: str = SID) -> bool:
     return await ledger.record_decision(
-        strategy_id=SID, mode=mode, market=MARKET, side=side, reason="enter Up: test",
+        strategy_id=strategy_id, mode=mode, market=market, side=side, reason="enter Up: test",
         signal={"p_up": 0.6}, up_bid=0.5, up_ask=0.52, down_bid=0.48, down_ask=0.5,
         late=late, available=available,
     )
+
+
+async def _insert_position(*, strategy_id: str, mode: str, reference_ts: int,
+                           timeframe: str = "1d", state: str = "open",
+                           exit_reason: str | None = None) -> int:
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode,"
+            " exit_reason) VALUES ('x', 'slug', 'Up', ?, 0.52, 2.6, 5, ?, ?, ?, ?, ?)",
+            (state, strategy_id, timeframe, reference_ts, mode, exit_reason),
+        )
+        await conn.commit()
+        return int(cur.lastrowid)
 
 
 @pytest.mark.asyncio
@@ -1366,11 +1396,14 @@ async def test_one_row_per_window_strategy_and_mode(test_db) -> None:
     assert await _record() is True
     assert await _record() is False
     assert await _record(mode="live") is True
-    paper = await ledger.get_decision(WINDOW.reference_ts, SID, "paper")
+    paper = await ledger.get_decision(WINDOW.reference_ts, SID, mode="paper")
     assert paper["action"] == ledger.PENDING and paper["decision_side"] == "Up"
     assert paper["window_slug"] == MARKET.slug and paper["settle_ts"] == WINDOW.settle_ts
     assert json.loads(paper["signal_json"]) == {"p_up": 0.6}
-    assert (await ledger.get_decision(WINDOW.reference_ts, SID, "live"))["mode"] == "live"
+    assert (paper["up_bid"], paper["up_ask"], paper["down_bid"], paper["down_ask"]) == (
+        0.5, 0.52, 0.48, 0.5)
+    assert (await ledger.get_decision(WINDOW.reference_ts, SID, mode="live"))["mode"] == "live"
+    assert await ledger.get_decision(PREV_WINDOW.reference_ts, SID, mode="paper") is None
 
 
 @pytest.mark.asyncio
@@ -1381,23 +1414,27 @@ async def test_one_row_per_window_strategy_and_mode(test_db) -> None:
 ])
 async def test_action_mapping(test_db, side, late, available, action) -> None:
     await _record(side=side, late=late, available=available)
-    assert (await ledger.get_decision(WINDOW.reference_ts, SID, "paper"))["action"] == action
+    assert (await ledger.get_decision(WINDOW.reference_ts, SID, mode="paper"))["action"] == action
 
 
 @pytest.mark.asyncio
-async def test_set_action_with_expected_action(test_db) -> None:
+async def test_set_action_with_expected_action_only_replaces_that_action(test_db) -> None:
     await _record()
-    assert await ledger.set_action(WINDOW.reference_ts, SID, "paper", "SUBMITTING",
+    await _record(mode="live")
+    ref = WINDOW.reference_ts
+    assert await ledger.set_action(ref, SID, "SUBMITTING", mode="paper",
                                    expected_action="PENDING") is True
-    assert await ledger.set_action(WINDOW.reference_ts, SID, "paper", "MISSED",
+    assert await ledger.set_action(ref, SID, "MISSED", mode="paper",
                                    expected_action="PENDING") is False
-    assert await ledger.set_action(WINDOW.reference_ts, SID, "paper", "ENTERED", 7) is True
-    row = await ledger.get_decision(WINDOW.reference_ts, SID, "paper")
+    assert await ledger.set_action(ref, SID, "ENTERED", 7, mode="paper") is True
+    row = await ledger.get_decision(ref, SID, mode="paper")
     assert (row["action"], row["position_id"]) == ("ENTERED", 7)
+    assert (await ledger.get_decision(ref, SID, mode="live"))["action"] == "PENDING"
+    assert await ledger.set_action(PREV_WINDOW.reference_ts, SID, "MISSED", mode="paper") is False
 
 
 @pytest.mark.asyncio
-async def test_settlement_and_stale_rows(test_db) -> None:
+async def test_settlement_of_every_row_in_the_window(test_db) -> None:
     await _record()
     await _record(mode="live", side=None)
     assert await ledger.unsettled_windows(WINDOW.settle_ts + 119, 120) == []
@@ -1405,13 +1442,65 @@ async def test_settlement_and_stale_rows(test_db) -> None:
         (WINDOW.reference_ts, WINDOW.settle_ts)]
     await ledger.settle_window(WINDOW.reference_ts, 100.0, 100.0, "tie")
     for mode in ("paper", "live"):
-        row = await ledger.get_decision(WINDOW.reference_ts, SID, mode)
-        assert (row["reference_close"], row["settle_close"], row["outcome"]) == (100.0, 100.0, "tie")
+        row = await ledger.get_decision(WINDOW.reference_ts, SID, mode=mode)
+        assert (row["reference_close"], row["settle_close"], row["outcome"]) == (
+            100.0, 100.0, "tie")
         assert row["settled_at"] is not None
     assert await ledger.unsettled_windows(WINDOW.settle_ts + 999, 120) == []
-    stale = await ledger.stale_rows(WINDOW.reference_ts + 301, 300, ("PENDING",))
-    assert [r["mode"] for r in stale] == ["paper"]
-    assert await ledger.stale_rows(WINDOW.reference_ts + 300, 300, ("PENDING",)) == []
+
+
+# Same rules as the hourly record's finalize_ended_hours (Claude, 2026-09-15, branch-review
+# finding pending-row-never-finalized), for noon-ET windows (Claude, 2026-09-16).
+@pytest.mark.asyncio
+async def test_open_decisions_of_ended_windows_are_finalized_per_strategy_and_mode(
+    test_db,
+) -> None:
+    prev = PREV_WINDOW.reference_ts
+    await _record(market=PREV_MARKET)
+    await _record(market=PREV_MARKET, strategy_id=SECOND_SID)
+    await _record(market=PREV_MARKET, strategy_id=SECOND_SID, mode="live")
+    await _record()
+    await _record(strategy_id=SECOND_SID, side=None)
+    position_id = await _insert_position(strategy_id=SECOND_SID, mode="live", reference_ts=prev)
+    await ledger.set_action(prev, SID, "SUBMITTING", mode="paper")
+
+    counts = await ledger.finalize_ended_windows(WINDOW.reference_ts, UNFINISHED)
+
+    assert counts == {"entered": 1, "unfinished": 1, "missed": 1}
+    row = await ledger.get_decision(prev, SID, mode="paper")
+    assert (row["action"], row["position_id"]) == (UNFINISHED, None)
+    row = await ledger.get_decision(prev, SECOND_SID, mode="live")
+    assert (row["action"], row["position_id"]) == ("ENTERED", position_id)
+    row = await ledger.get_decision(prev, SECOND_SID, mode="paper")  # live position: not its own
+    assert (row["action"], row["position_id"]) == ("MISSED", None)
+    # The current window is left to the engine's entry step.
+    assert (await ledger.get_decision(WINDOW.reference_ts, SID, mode="paper"))["action"] == (
+        "PENDING")
+    assert (await ledger.get_decision(WINDOW.reference_ts, SECOND_SID, mode="paper"))[
+        "action"] == "NO_SIGNAL"
+    assert await ledger.finalize_ended_windows(WINDOW.reference_ts, "x") == {
+        "entered": 0, "unfinished": 0, "missed": 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("timeframe", "state", "exit_reason", "action"), [
+    ("1d", "closed", "STOP_REQUEST", "ENTERED"),  # sold at Stop: the entry went through
+    ("1d", "closed", "RECONCILED_NO_LIVE_TRACE", "MISSED"),  # boot found no order placed
+    ("1d", "closed", "RECONCILED_UNFILLED", "MISSED"),  # boot found the order never filled
+    ("1h", "open", None, "MISSED"),  # an hourly position is not this window's
+])
+async def test_ended_window_links_only_its_own_daily_position(
+    test_db, timeframe, state, exit_reason, action
+) -> None:
+    prev = PREV_WINDOW.reference_ts
+    await _record(market=PREV_MARKET)
+    position_id = await _insert_position(strategy_id=SID, mode="paper", reference_ts=prev,
+                                         timeframe=timeframe, state=state,
+                                         exit_reason=exit_reason)
+    await ledger.finalize_ended_windows(WINDOW.reference_ts, UNFINISHED)
+    row = await ledger.get_decision(prev, SID, mode="paper")
+    linked = position_id if action == "ENTERED" else None
+    assert (row["action"], row["position_id"]) == (action, linked)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1425,6 +1514,8 @@ Expected: FAIL with `ImportError: cannot import name 'ledger'`
 -- Daily BTC strategies (Tsinghua-Kronos BTC 24h, 2026-09-16): one decision row per
 -- (noon-ET window, strategy, mode), written for EVERY window whether or not it traded,
 -- then settled from the two Binance 1-minute closes the market resolves on.
+-- Keyed by the window's reference time and by mode, like hourly_strategy_context
+-- (branch-review findings dst-fallback-slug-collision and decision-row-shared-across-modes).
 CREATE TABLE IF NOT EXISTS btc_daily_market_decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
@@ -1454,7 +1545,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_btc_daily_decisions_window_strategy_mode
 - [ ] **Step 4: Write the ledger** — `polymarket_bot/daily_btc/ledger.py`
 
 ```python
-"""Daily BTC decision record: one row per (noon-ET window, strategy, mode), actions, settlement."""
+"""Daily BTC decision record: one row per (noon-ET window, strategy, mode), actions, settlement.
+
+The operations and their signatures match polymarket_bot.hourly.ledger, so both engines
+read and write their records the same way (Claude, 2026-09-16).
+"""
 from __future__ import annotations
 
 import json
@@ -1485,6 +1580,12 @@ async def record_decision(
     late: bool,
     available: bool,
 ) -> bool:
+    """INSERT OR IGNORE the window's decision; True iff this call wrote the row.
+
+    The action is UNAVAILABLE when the forecast could not run; else MISSED when the decision
+    came after the entry deadline (the engine then skips the model, so there is no side);
+    else NO_SIGNAL without a side; else PENDING (Claude, 2026-09-16).
+    """
     if not available:
         action = UNAVAILABLE
     elif late:
@@ -1510,7 +1611,12 @@ async def record_decision(
         return cur.rowcount == 1
 
 
-async def get_decision(reference_ts: int, strategy_id: str, mode: str) -> dict[str, Any] | None:
+# Rows are looked up by the window's reference time and by mode, as in the hourly record
+# (Claude, 2026-09-15, branch-review findings dst-fallback-slug-collision and
+# decision-row-shared-across-modes).
+async def get_decision(
+    reference_ts: int, strategy_id: str, *, mode: str
+) -> dict[str, Any] | None:
     async with _db.connect() as conn:
         cur = await conn.execute(
             "SELECT * FROM btc_daily_market_decisions "
@@ -1524,26 +1630,85 @@ async def get_decision(reference_ts: int, strategy_id: str, mode: str) -> dict[s
 async def set_action(
     reference_ts: int,
     strategy_id: str,
-    mode: str,
     action: str,
     position_id: int | None = None,
     *,
+    mode: str,
     expected_action: str | None = None,
 ) -> bool:
-    sql = ("UPDATE btc_daily_market_decisions SET action = ?, "
-           "position_id = COALESCE(?, position_id) "
-           "WHERE reference_ts = ? AND strategy_id = ? AND mode = ?")
-    params: list[Any] = [action[:240], position_id, reference_ts, strategy_id, mode]
-    if expected_action is not None:
-        sql += " AND action = ?"
-        params.append(expected_action)
+    """Set the row's action (and position, when given); True iff a row changed.
+
+    ``expected_action`` applies the update only while the row still holds that action, so
+    closing out an unfinished attempt never overwrites a result written meanwhile (Claude,
+    2026-09-15, branch-review finding hourly-ambiguous-post-error-retried).
+    """
     async with _db.connect() as conn:
-        cur = await conn.execute(sql, params)
+        cur = await conn.execute(
+            "UPDATE btc_daily_market_decisions SET action = ?, "
+            "position_id = COALESCE(?, position_id) "
+            "WHERE reference_ts = ? AND strategy_id = ? AND mode = ? "
+            "AND (? IS NULL OR action = ?)",
+            (action[:240], position_id, reference_ts, strategy_id, mode,
+             expected_action, expected_action),
+        )
         await conn.commit()
         return cur.rowcount > 0
 
 
+async def finalize_ended_windows(
+    current_reference_ts: int, unfinished_action: str
+) -> dict[str, int]:
+    """Close out decisions still PENDING or SUBMITTING in windows that already ended.
+
+    The same rules as polymarket_bot.hourly.ledger.finalize_ended_hours (Claude, 2026-09-15,
+    branch-review finding pending-row-never-finalized), applied to noon-ET windows (Claude,
+    2026-09-16). A row left open when no tick ran before its window ended (Stop, crash,
+    sleep, failing ticks, strategy switched off) otherwise stays open forever. The current
+    window is left to the engine's entry step. For each ended window, per strategy and mode:
+    - ENTERED with the position, when this strategy has a 1d position for that window in
+      that mode that boot reconciliation did not close as never placed
+      (RECONCILED_NO_LIVE_TRACE) or never filled (RECONCILED_UNFILLED);
+    - otherwise an attempt that was started (SUBMITTING) becomes ``unfinished_action``
+      (branch-review finding hourly-ambiguous-post-error-retried: never assume it failed);
+    - otherwise MISSED.
+    """
+    position_for_row = (
+        "SELECT p.position_id FROM paper_positions p "
+        "WHERE p.window_start_ts = btc_daily_market_decisions.reference_ts "
+        "AND p.strategy_id = btc_daily_market_decisions.strategy_id "
+        "AND p.mode = btc_daily_market_decisions.mode "
+        "AND p.market_timeframe = '1d' "
+        "AND COALESCE(p.exit_reason, '') "
+        "NOT IN ('RECONCILED_NO_LIVE_TRACE', 'RECONCILED_UNFILLED')"
+    )
+    async with _db.connect() as conn:
+        entered = await conn.execute(
+            "UPDATE btc_daily_market_decisions SET action = 'ENTERED', "
+            f"position_id = ({position_for_row} ORDER BY p.position_id LIMIT 1) "
+            "WHERE action IN ('PENDING', 'SUBMITTING') AND reference_ts < ? "
+            f"AND EXISTS ({position_for_row})",
+            (current_reference_ts,),
+        )
+        unfinished = await conn.execute(
+            "UPDATE btc_daily_market_decisions SET action = ? "
+            "WHERE action = 'SUBMITTING' AND reference_ts < ?",
+            (unfinished_action[:240], current_reference_ts),
+        )
+        missed = await conn.execute(
+            "UPDATE btc_daily_market_decisions SET action = 'MISSED' "
+            "WHERE action = 'PENDING' AND reference_ts < ?",
+            (current_reference_ts,),
+        )
+        await conn.commit()
+        return {
+            "entered": max(entered.rowcount, 0),
+            "unfinished": max(unfinished.rowcount, 0),
+            "missed": max(missed.rowcount, 0),
+        }
+
+
 async def unsettled_windows(now_ts: int, grace_s: int) -> list[tuple[int, int]]:
+    """Distinct (reference_ts, settle_ts) of unsettled rows whose settlement minute + grace passed."""
     async with _db.connect() as conn:
         cur = await conn.execute(
             "SELECT DISTINCT reference_ts, settle_ts FROM btc_daily_market_decisions "
@@ -1556,6 +1721,7 @@ async def unsettled_windows(now_ts: int, grace_s: int) -> list[tuple[int, int]]:
 async def settle_window(
     reference_ts: int, reference_close: float, settle_close: float, result: str
 ) -> None:
+    """Settle every row of one window; ``result`` is "Up", "Down" or "tie"."""
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE btc_daily_market_decisions SET reference_close = ?, settle_close = ?, "
@@ -1563,17 +1729,6 @@ async def settle_window(
             (reference_close, settle_close, result, _db.utc_now_iso(), reference_ts),
         )
         await conn.commit()
-
-
-async def stale_rows(now_ts: int, deadline_s: int, actions: tuple[str, ...]) -> list[dict[str, Any]]:
-    marks = ", ".join("?" for _ in actions)
-    async with _db.connect() as conn:
-        cur = await conn.execute(
-            f"SELECT * FROM btc_daily_market_decisions WHERE action IN ({marks}) "
-            "AND reference_ts + ? < ? ORDER BY reference_ts, id",
-            (*actions, deadline_s, now_ts),
-        )
-        return [dict(r) for r in await cur.fetchall()]
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -1976,6 +2131,10 @@ git commit -m "feat(live): daily BTC rows resolve after their noon-ET window; 50
 
 ### Task 7: Daily BTC engine and knobs (starts after Tasks 4–6)
 
+**Updated while building Tasks 4–6 (Claude, 2026-09-16).** The code below already uses what those tasks built:
+- The daily ledger takes `mode=` as a keyword, as the hourly ledger does.
+- The planned `_finalize_past_windows` (current mode only, open rows only) is gone. `settle_due` starts with `ledger.finalize_ended_windows(...)`, the hourly `finalize_ended_hours` rules, and sends one operator notice when an earlier window's attempt did not finish. `open_entries` no longer finalizes.
+
 **Files:**
 - Create: `polymarket_bot/daily_btc/engine.py`
 - Modify: `polymarket_bot/runtime_knobs.py` (three knobs)
@@ -1987,7 +2146,7 @@ git commit -m "feat(live): daily BTC rows resolve after their noon-ET window; 50
   - Task 2: `forecast_input.fetch_forecast_candles`
   - Task 3: `tsinghua_kronos_btc_24h.request_for`, `decide`, `STRATEGY_ID`, `DISPLAY_NAME`
   - Task 4: `ledger.*`
-  - Task 5: `strategy_slot_entry.advance`, `SlotWindow`, `open_row_for`, `PENDING`, `SUBMITTING`, `MISSED`, `ENTERED`, `UNFINISHED_ATTEMPT`
+  - Task 5: `strategy_slot_entry.advance`, `SlotWindow`, `UNFINISHED_ATTEMPT`
   - Task 6: `slot.record_settlement(..., payout=)`
   - From `polymarket_bot.paper`, imported lazily inside functions: `PaperSnapshot`, `_now`, `_fetch_clob_book`, `_log_tick`, `_close_position`, `_live_executor`, `connect`
 - Produces:
@@ -2154,14 +2313,14 @@ async def test_noon_decision_enters_once_and_settles_net_of_the_fee(test_db, mon
     assert (pos["side"], pos["entry_price"], pos["shares"], pos["market_timeframe"],
             pos["window_start_ts"], pos["strategy_id"], pos["mode"]) == (
         "Up", 0.52, 5.0, "1d", S, SID, "paper")
-    row = await ledger.get_decision(S, SID, "paper")
+    row = await ledger.get_decision(S, SID, mode="paper")
     assert row["action"] == "ENTERED" and row["position_id"] == pos["position_id"]
 
     await _tick(monkeypatch, venue, E + engine.SETTLE_GRACE_S + 10)
     closed = (await _positions())[0]
     assert closed["state"] == "closed" and closed["exit_price"] == 1.0
     assert closed["realized_pnl_usd"] == pytest.approx(5 * (1 - 0.52) - 5 * 0.07 * 0.52 * 0.48)
-    settled = await ledger.get_decision(S, SID, "paper")
+    settled = await ledger.get_decision(S, SID, mode="paper")
     assert (settled["reference_close"], settled["settle_close"], settled["outcome"]) == (
         100.0, 101.0, "Up")
 
@@ -2176,7 +2335,7 @@ async def test_exact_tie_settles_at_half(test_db, monkeypatch):
     closed = (await _positions())[0]
     assert closed["exit_price"] == 0.5
     assert closed["realized_pnl_usd"] == pytest.approx(5 * (0.5 - 0.52) - 5 * 0.07 * 0.52 * 0.48)
-    assert (await ledger.get_decision(S, SID, "paper"))["outcome"] == "tie"
+    assert (await ledger.get_decision(S, SID, mode="paper"))["outcome"] == "tie"
 
 
 @pytest.mark.asyncio
@@ -2185,7 +2344,7 @@ async def test_unavailable_forecast_is_recorded_and_notified_once(test_db, monke
     await _tick(monkeypatch, venue, S + 10)
     await _tick(monkeypatch, venue, S + 20)
     assert await _positions() == []
-    row = await ledger.get_decision(S, SID, "paper")
+    row = await ledger.get_decision(S, SID, mode="paper")
     assert row["action"] == "UNAVAILABLE" and "timed out" in row["decision_reason"]
     assert engine.notify.await_count == 1
 
@@ -2195,7 +2354,7 @@ async def test_late_start_is_missed_without_running_the_model(test_db, monkeypat
     venue, fake = _Venue(), _forecast(monkeypatch)
     await _tick(monkeypatch, venue, S + 301)
     fake.assert_not_awaited()
-    assert (await ledger.get_decision(S, SID, "paper"))["action"] == "MISSED"
+    assert (await ledger.get_decision(S, SID, mode="paper"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
@@ -2204,7 +2363,7 @@ async def test_waits_until_binance_has_closed_the_hour_before_noon(test_db, monk
     venue.noon_candle_ready = False
     await _tick(monkeypatch, venue, S + 2)
     fake.assert_not_awaited()
-    assert await ledger.get_decision(S, SID, "paper") is None
+    assert await ledger.get_decision(S, SID, mode="paper") is None
 
 
 @pytest.mark.asyncio
@@ -2213,7 +2372,7 @@ async def test_disabled_strategy_records_nothing(test_db, monkeypatch):
     venue, fake = _Venue(), _forecast(monkeypatch)
     await _tick(monkeypatch, venue, S + 10)
     fake.assert_not_awaited()
-    assert await ledger.get_decision(S, SID, "paper") is None
+    assert await ledger.get_decision(S, SID, mode="paper") is None
 
 
 @pytest.mark.asyncio
@@ -2225,7 +2384,7 @@ async def test_pending_decision_from_a_past_window_becomes_missed(test_db, monke
                                  down_bid=None, down_ask=None, late=False, available=True)
     venue, _ = _Venue(), _forecast(monkeypatch, p=0.5)  # no bet today
     await _tick(monkeypatch, venue, S + 10)
-    assert (await ledger.get_decision(old.reference_ts, SID, "paper"))["action"] == "MISSED"
+    assert (await ledger.get_decision(old.reference_ts, SID, mode="paper"))["action"] == "MISSED"
 
 
 def _live_account() -> MagicMock:
@@ -2332,13 +2491,13 @@ class _DailyDecision:
         self.reference_ts, self.strategy_id, self.mode = reference_ts, strategy_id, mode
 
     async def reason(self) -> str | None:
-        row = await ledger.get_decision(self.reference_ts, self.strategy_id, self.mode)
+        row = await ledger.get_decision(self.reference_ts, self.strategy_id, mode=self.mode)
         return (row or {}).get("decision_reason")
 
     async def set_action(self, action: str, position_id: int | None = None, *,
                          expected_action: str | None = None) -> bool:
-        return await ledger.set_action(self.reference_ts, self.strategy_id, self.mode, action,
-                                       position_id, expected_action=expected_action)
+        return await ledger.set_action(self.reference_ts, self.strategy_id, action, position_id,
+                                       mode=self.mode, expected_action=expected_action)
 
 
 async def market_for(client: httpx.AsyncClient, window: market.DayWindow) -> market.DayMarket:
@@ -2424,7 +2583,7 @@ async def decide_window(
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
-        row = await ledger.get_decision(window.reference_ts, sid, mode)
+        row = await ledger.get_decision(window.reference_ts, sid, mode=mode)
         if row is None:
             pending.append(sid)
         else:
@@ -2439,7 +2598,7 @@ async def decide_window(
                 reason=f"missed: the window opened {elapsed} s ago, past the {deadline} s deadline",
                 signal={}, **_book(snapshot), late=True, available=True,
             )
-            rows[sid] = await ledger.get_decision(window.reference_ts, sid, mode) or {}
+            rows[sid] = await ledger.get_decision(window.reference_ts, sid, mode=mode) or {}
         return rows
     candles = await forecast_input.fetch_forecast_candles(client, window, now)
     if candles is None:
@@ -2473,36 +2632,8 @@ async def decide_window(
             )
         log.info("daily_btc_engine.decided", strategy_id=sid, mode=mode, side=decision.side,
                  available=decision.available, window_slug=m.slug)
-        rows[sid] = await ledger.get_decision(window.reference_ts, sid, mode) or {}
+        rows[sid] = await ledger.get_decision(window.reference_ts, sid, mode=mode) or {}
     return rows
-
-
-async def _finalize_past_windows(current_reference_ts: int, now: int, deadline: int) -> None:
-    """PENDING / SUBMITTING rows of earlier windows in this mode get a final action."""
-    mode = _mode()
-    for row in await ledger.stale_rows(now, deadline, (slot_entry.PENDING, slot_entry.SUBMITTING)):
-        if row["mode"] != mode or int(row["reference_ts"]) >= current_reference_ts:
-            continue
-        ref, sid = int(row["reference_ts"]), str(row["strategy_id"])
-        held = await slot_entry.open_row_for(sid, mode)
-        if (held is not None and held.get("market_timeframe") == TIMEFRAME
-                and int(held.get("window_start_ts") or 0) == ref):
-            await ledger.set_action(ref, sid, mode, slot_entry.ENTERED, int(held["position_id"]),
-                                    expected_action=row["action"])
-        elif row["action"] == slot_entry.SUBMITTING:
-            await notify(
-                "entry_attempt_unfinished",
-                f"Entry attempt for {DISPLAY_NAMES.get(sid, sid)} ({row['window_slug']}) did not "
-                "finish: the tick failed or the bot stopped mid-order. If the bot was LIVE, an "
-                "order may be on Polymarket without a ledger row; check the account's open "
-                "orders and trades.",
-                {"window_slug": row["window_slug"], "strategy_id": sid},
-            )
-            await ledger.set_action(ref, sid, mode, slot_entry.UNFINISHED_ATTEMPT,
-                                    expected_action=slot_entry.SUBMITTING)
-        else:
-            await ledger.set_action(ref, sid, mode, slot_entry.MISSED,
-                                    expected_action=slot_entry.PENDING)
 
 
 async def open_entries(
@@ -2513,7 +2644,7 @@ async def open_entries(
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
-        row = await ledger.get_decision(m.window.reference_ts, sid, mode)
+        row = await ledger.get_decision(m.window.reference_ts, sid, mode=mode)
         if row is None:
             continue
         await slot_entry.advance(
@@ -2522,12 +2653,31 @@ async def open_entries(
             allow_entries=allow_entries,
             decision=_DailyDecision(m.window.reference_ts, sid, mode),
         )
-    await _finalize_past_windows(m.window.reference_ts, now, deadline)
 
 
 async def settle_due(client: httpx.AsyncClient, snapshot: PaperSnapshot, now: int) -> None:
     """Settle daily positions and decision rows whose settlement minute has closed on Binance."""
     from polymarket_bot import paper as P
+
+    # As in the hourly engine (Claude, 2026-09-15, branch-review finding
+    # pending-row-never-finalized): every tick, before anything that can skip or fail,
+    # close out decisions left open in windows that already ended, in every mode. The
+    # current window is handled by open_entries.
+    finalized = await ledger.finalize_ended_windows(
+        market.current_window(now).reference_ts, slot_entry.UNFINISHED_ATTEMPT)
+    if any(finalized.values()):
+        log.info("daily_btc_engine.ended_windows_finalized", **finalized)
+    if finalized["unfinished"]:
+        # Same operator warning as the hourly engine's (branch-review finding
+        # hourly-reentry-after-untraced-post): a live order may exist with no ledger row.
+        await notify(
+            "entry_attempt_unfinished",
+            f"{finalized['unfinished']} daily BTC entry attempt(s) in an earlier window did "
+            "not finish: the bot stopped or its tick failed mid-order. If the bot was LIVE, an "
+            "order may be on Polymarket with no ledger row; check the account's open orders "
+            "and trades.",
+            finalized,
+        )
 
     closes: dict[int, float | None] = {}
 
@@ -2592,7 +2742,7 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     await open_entries(snapshot, m, now, allow_entries=allow_entries)
     mode = _mode()
     for sid in list(rows):
-        rows[sid] = await ledger.get_decision(m.window.reference_ts, sid, mode) or rows[sid]
+        rows[sid] = await ledger.get_decision(m.window.reference_ts, sid, mode=mode) or rows[sid]
     snapshot.reason = _reason_line(rows)
     entered = [r for r in rows.values() if r.get("action") == ledger.ENTERED]
     if entered:
@@ -2601,7 +2751,7 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     return snapshot
 ```
 
-`stale_rows` passes `deadline_s` to the SQL as `reference_ts + ? < ?`, so rows of the current window inside the deadline never appear.
+`settle_due` finalizes ended windows first, as the hourly engine does, so the step also runs when a 1h or 5m run settles 1d rows (Task 8). The current window's PENDING and SUBMITTING rows are left to `open_entries`.
 
 - [ ] **Step 5: Run the tests**
 
