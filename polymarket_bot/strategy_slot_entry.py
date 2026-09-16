@@ -12,7 +12,9 @@ only the window and the decision record are now arguments. Behaviour sources:
   crash-after-entry-marks-missed; open rows only, in both modes: review by Claude session
   polymarket-crypto-95, 2026-09-16;
 - sizing on a thin top-of-book ask: Claude, 2026-09-15, branch-review finding
-  thin-top-sizing-paper-vs-live.
+  thin-top-sizing-paper-vs-live;
+- the live executor is read once per step and a tick whose mode no longer matches it does
+  nothing: Claude, 2026-09-17, review of the strategy_slot_entry extraction.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
 
 if TYPE_CHECKING:
     from polymarket_bot.paper import PaperSnapshot
+    from polymarket_exec.execution.live import LiveExecutor
 
 log = get_logger("strategy_slot_entry")
 
@@ -123,12 +126,18 @@ async def insert_row(
 
 
 async def enter(
-    snapshot: PaperSnapshot, window: SlotWindow, side: str, decision: DecisionHandle
+    snapshot: PaperSnapshot, window: SlotWindow, side: str, decision: DecisionHandle, *,
+    executor: LiveExecutor | None,
 ) -> None:
+    """Enter the window: through ``executor``'s strategy slot when it is set, else on paper.
+
+    ``executor`` is the live executor ``advance`` read for this tick. This step never reads
+    ``polymarket_bot.paper._live_executor`` itself, so the order and the decision record
+    always share one mode (Claude, 2026-09-17, review of the strategy_slot_entry extraction).
+    """
     from polymarket_bot import paper as P
 
     strategy_id = window.strategy_id
-    executor = P._live_executor
     mode = "live" if executor is not None else "paper"
     if await open_row_for(strategy_id, mode) is not None:
         return  # this strategy's slot is still held (previous window settling): retry next tick
@@ -246,7 +255,9 @@ async def advance(
 ) -> None:
     """One entry step for a strategy's recorded decision in this window and mode.
 
-    The checks run in the hourly engine's order after the branch-review fixes:
+    First, a tick whose ``mode`` differs from the mode the live executor gives (the operator
+    switched mode while the tick ran) does nothing. Then the checks run in the hourly
+    engine's order after the branch-review fixes:
     1. PENDING or SUBMITTING, and this window's position is still open: record ENTERED with
        it (in live, only while the strategy's slot tracks the entry);
     2. SUBMITTING: tell the operator, then record the unfinished attempt;
@@ -258,7 +269,21 @@ async def advance(
     from polymarket_bot import paper as P
 
     strategy_id = window.strategy_id
+    # Claude, 2026-09-17, review of the strategy_slot_entry extraction: read the executor
+    # once and hand it to enter(). ``decision`` and ``mode`` come from the tick. A runner
+    # that resumes after the operator switched mode (an abandoned paper tick once LIVE is
+    # running) would otherwise post a real order while its SUBMITTING, ENTERED or UNCERTAIN
+    # records land on the paper row; the live row stays PENDING and the live loop can post
+    # a second order for the same window. The reverse (a live tick after the live loop
+    # stopped) would book a paper entry on the live record. Such a tick writes nothing: the
+    # loop in the current mode handles this window with its own record.
     executor = P._live_executor
+    executor_mode = "live" if executor is not None else "paper"
+    if executor_mode != mode:
+        log.warning("strategy_slot_entry.mode_changed_mid_tick", strategy_id=strategy_id,
+                    timeframe=window.timeframe, tick_mode=mode, executor_mode=executor_mode,
+                    window_slug=snapshot.window_slug)
+        return
     if action in (PENDING, SUBMITTING):
         # Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: the
         # entry went through but the tick stopped before recording ENTERED (the ledger
@@ -302,4 +327,4 @@ async def advance(
         await decision.set_action(MISSED)
         return
     if allow_entries:
-        await enter(snapshot, window, str(side), decision)
+        await enter(snapshot, window, str(side), decision, executor=executor)

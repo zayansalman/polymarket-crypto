@@ -185,3 +185,67 @@ async def test_live_entry_for_a_daily_window_goes_through_the_strategy_slot(
     assert (row["market_timeframe"], row["window_start_ts"], row["mode"]) == ("1d", START, "live")
     assert decision.actions == [(entry.SUBMITTING, None, None),
                                 (entry.ENTERED, row["position_id"], None)]
+
+
+# Claude, 2026-09-17, review of the strategy_slot_entry extraction: a runner can resume a tick
+# after the operator switched mode (an abandoned paper runner once LIVE is running). The
+# tick's mode then differs from the live executor's, and the step does nothing: no order, no
+# position row, no decision write, no notice. The loop in the new mode handles the window.
+async def _position_count() -> int:
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM paper_positions")
+        return int((await cur.fetchone())["n"])
+
+
+def _mode_changed_warning(tick_mode: str, executor_mode: str) -> tuple[str, dict]:
+    return ("strategy_slot_entry.mode_changed_mid_tick",
+            {"strategy_id": SID, "timeframe": "1d", "tick_mode": tick_mode,
+             "executor_mode": executor_mode, "window_slug": SLUG})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["PENDING", "SUBMITTING"])
+@pytest.mark.parametrize("same_window_row", [False, True])
+async def test_paper_tick_with_a_live_executor_present_posts_nothing_and_records_nothing(
+    test_db, monkeypatch, action, same_window_row
+) -> None:
+    account, slot = _live_account(monkeypatch)
+    slot.tracks_position = True
+    if same_window_row:
+        await _insert_row(mode="paper")
+    log = MagicMock()
+    monkeypatch.setattr(entry, "log", log)
+    decision = _Decision()
+    await _advance(action, now=START + 10, decision=decision, mode="paper")
+    account.slot_executor.assert_not_called()
+    slot.resync_flat.assert_not_awaited()
+    slot.submit_entry.assert_not_awaited()
+    assert decision.actions == []
+    assert await _position_count() == (1 if same_window_row else 0)
+    entry.notify.assert_not_awaited()
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM live_orders")
+        assert (await cur.fetchone())["n"] == 0
+    assert [(c.args[0], c.kwargs) for c in log.warning.call_args_list] == [
+        _mode_changed_warning("paper", "live")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["PENDING", "SUBMITTING"])
+@pytest.mark.parametrize("same_window_row", [False, True])
+async def test_live_tick_without_a_live_executor_enters_nothing_and_records_nothing(
+    test_db, monkeypatch, action, same_window_row
+) -> None:
+    assert paper._live_executor is None  # the live loop stopped while this tick ran
+    if same_window_row:
+        await _insert_row(mode="live")
+    log = MagicMock()
+    monkeypatch.setattr(entry, "log", log)
+    decision = _Decision()
+    await _advance(action, now=START + 10, decision=decision, mode="live")
+    assert decision.actions == []
+    assert await _position_count() == (1 if same_window_row else 0)
+    assert await entry.open_row_for(SID, "paper") is None
+    entry.notify.assert_not_awaited()
+    assert [(c.args[0], c.kwargs) for c in log.warning.call_args_list] == [
+        _mode_changed_warning("live", "paper")]

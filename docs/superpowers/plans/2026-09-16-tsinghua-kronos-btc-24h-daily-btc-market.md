@@ -1783,8 +1783,8 @@ git commit -m "feat(daily_btc): per-window, per-mode decision record for daily B
   - `async def open_row_for(strategy_id: str, mode: str) -> dict | None`: the strategy's open row in this mode, or None.
   - `async def _same_window_open_position_id(window: SlotWindow, mode: str) -> int | None` (private): the still-open position of this strategy for this window and mode.
   - `async def insert_row(snapshot, window: SlotWindow, *, side, price, notional, shares, reason, mode) -> int`
-  - `async def enter(snapshot, window: SlotWindow, side: str, decision: DecisionHandle) -> None`
-  - `async def advance(snapshot, window: SlotWindow, *, action: str, side: str | None, now: int, deadline_s: int, allow_entries: bool, mode: str, decision: DecisionHandle) -> None`
+  - `async def enter(snapshot, window: SlotWindow, side: str, decision: DecisionHandle, *, executor: LiveExecutor | None) -> None`: `executor` is the one `advance` read; `enter` never reads `polymarket_bot.paper._live_executor` itself (Claude, 2026-09-17, review of the strategy_slot_entry extraction).
+  - `async def advance(snapshot, window: SlotWindow, *, action: str, side: str | None, now: int, deadline_s: int, allow_entries: bool, mode: str, decision: DecisionHandle) -> None`: reads `polymarket_bot.paper._live_executor` once. When the mode it gives differs from `mode`, it logs `strategy_slot_entry.mode_changed_mid_tick` (warning) and returns before the link and entry steps (same review).
 
 - [ ] **Step 1: Read the merged hourly entry code**
 
