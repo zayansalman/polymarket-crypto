@@ -1,0 +1,1 @@
+B=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test; n=$(wc -l < $B/backtest_results.jsonl); echo "done: $n/500"; ps -axo etime,command | grep "[b]acktest.py --hours" | grep -v zsh | cut -c1-12; head -n "$n" $B/backtest_results.jsonl > $B/interim.jsonl; python3 $B/analyze.py $B/interim.jsonl

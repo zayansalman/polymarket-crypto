@@ -15,7 +15,8 @@ import httpx
 from db import journal_live_order, notify
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
-from polymarket_bot.hourly import ledger, market, mean_reversion
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as spot_taker_push_rule
+from polymarket_bot.hourly import ledger, market
 from polymarket_bot.hourly.market import HOUR_S, HourMarket
 from polymarket_exec.execution.gate import EntryRequest
 from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
@@ -27,12 +28,22 @@ log = get_logger("hourly_engine")
 
 TIMEFRAME = "1h"
 _ET = ZoneInfo("America/New_York")
-_CANDLES = mean_reversion.WINDOW + 2
+# One closed candle beyond the rule's window, plus Binance's still-forming candle, which
+# fetch_closed_candles drops.
+_CANDLES = spot_taker_push_rule.WINDOW + 2
 
-# (strategy_id, enable knob). Kronos BTC Fine Tune joins in PR 2.
+# (strategy_id, enable knob). "Kronos BTCUSDT 1h fine-tune (Hugging Face lc2004): next-hour
+# Up chance vs Polymarket price" joins in a later change.
 STRATEGIES: tuple[tuple[str, str], ...] = (
-    (mean_reversion.STRATEGY_ID, "hourly_mean_reversion_enabled"),
+    (spot_taker_push_rule.STRATEGY_ID, "hourly_btcusdt_1h_spot_taker_push_reversal_enabled"),
 )
+
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+# decision-record actions for an entry attempt. SUBMITTING is written before any order
+# goes out; UNCERTAIN ends an hour whose order may have reached the venue.
+SUBMITTING = "SUBMITTING"
+UNCERTAIN_PREFIX = "UNCERTAIN:"
+UNFINISHED_ATTEMPT = f"{UNCERTAIN_PREFIX}entry attempt did not finish"
 
 _market_cache: dict[int, HourMarket] = {}
 _open_cache: dict[int, float] = {}
@@ -118,18 +129,21 @@ def _factors(start_ts: int) -> dict[str, Any]:
 
 
 async def decide_hour(
-    client: httpx.AsyncClient, snapshot: PaperSnapshot, now: int
+    client: httpx.AsyncClient, snapshot: PaperSnapshot, now: int, *, mode: str
 ) -> dict[str, dict[str, Any]]:
-    """Record this hour's decision for every enabled strategy (once), return the rows."""
-    from polymarket_bot import paper as P
-
+    """Record this hour's decision for every enabled strategy (once per mode), return the rows."""
     start = market.hour_start(now)
     rows: dict[str, dict[str, Any]] = {}
     pending: list[str] = []
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
-        row = await ledger.get_decision(snapshot.window_slug, sid)
+        # Keyed by the UTC hour start (Claude, 2026-09-15, branch-review finding
+        # dst-fallback-slug-collision): two fall-back-day hours share one ET slug.
+        # Keyed by mode too (Claude, 2026-09-15, branch-review finding
+        # decision-row-shared-across-modes): a paper row decided earlier in the hour does not
+        # stand in for the live run's own decision, gate check and action, or the reverse.
+        row = await ledger.get_decision(start, sid, mode=mode)
         if row is None:
             pending.append(sid)
         else:
@@ -145,16 +159,16 @@ async def decide_hour(
     )
     prev_ms = (start - HOUR_S) * 1000
     if not (
-        len(spot) >= mean_reversion.WINDOW and len(perp) >= mean_reversion.WINDOW
+        len(spot) >= spot_taker_push_rule.WINDOW
+        and len(perp) >= spot_taker_push_rule.WINDOW
         and spot[-1].open_time_ms == prev_ms and perp[-1].open_time_ms == prev_ms
     ):
         log.info("hourly_engine.waiting_for_previous_hour", window_slug=snapshot.window_slug)
         return rows
     late = now - start > _knobs.cached("hourly_entry_deadline_seconds")
-    mode = "live" if P._live_executor is not None else "paper"
     for sid in pending:
-        if sid == mean_reversion.STRATEGY_ID:
-            d = mean_reversion.decide(spot, perp)
+        if sid == spot_taker_push_rule.STRATEGY_ID:
+            d = spot_taker_push_rule.decide(spot, perp)
         else:  # pragma: no cover - PR 2 adds Kronos
             continue
         await ledger.record_decision(
@@ -164,7 +178,7 @@ async def decide_hour(
             down_bid=snapshot.down_best_bid, down_ask=snapshot.down_best_ask,
             hour_open=snapshot.reference_price, mode=mode, late=late,
         )
-        rows[sid] = await ledger.get_decision(snapshot.window_slug, sid) or {}
+        rows[sid] = await ledger.get_decision(start, sid, mode=mode) or {}
     return rows
 
 
@@ -179,6 +193,28 @@ async def _open_row_for(strategy_id: str, mode: str) -> bool:
             (strategy_id, mode),
         ) as cur:
             return bool((await cur.fetchone())["n"])
+
+
+async def _same_hour_open_position_id(strategy_id: str, start: int, mode: str) -> int | None:
+    """This strategy's still-open position for this hour and mode, if the entry went through.
+
+    Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed. Only open rows
+    count, in both modes (review by Claude session polymarket-crypto-95, 2026-09-16): a row
+    already closed (sold at Stop, or closed by boot reconciliation) can't show whether a live
+    order filled, so paper and live both leave that hour as an unfinished attempt.
+    """
+    from polymarket_bot import paper as P
+
+    async with P.connect() as db:
+        async with db.execute(
+            "SELECT position_id FROM paper_positions "
+            "WHERE state = 'open' AND strategy_id = ? AND market_timeframe = ? "
+            "AND window_start_ts = ? AND mode = ? "
+            "ORDER BY position_id DESC LIMIT 1",
+            (strategy_id, TIMEFRAME, start, mode),
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row["position_id"]) if row else None
 
 
 async def _insert_row(
@@ -218,14 +254,23 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
     if ask is None or ask <= 0 or (top is not None and top <= 0):
         return  # no executable ask this tick: retry until the deadline
     gate = P._risk_gate
-    shares = max(gate.trade_shares if gate is not None else DEFAULT_MIN_ORDER_SIZE,
-                 DEFAULT_MIN_ORDER_SIZE)
+    shares = gate.trade_shares if gate is not None else DEFAULT_MIN_ORDER_SIZE
+    # Cap to the top-of-book ask size first, then raise to the venue minimum, so a
+    # thin top level (e.g. 3 shares) still sizes to the 5 shares live will post:
+    # paper and live gate on, book and count the same notional.
+    # Claude, 2026-09-15, branch-review finding thin-top-sizing-paper-vs-live
     if top is not None:
         shares = min(shares, top)
+    shares = max(shares, DEFAULT_MIN_ORDER_SIZE)
     notional = shares * ask
     token = snapshot.up_token_id if side == "Up" else snapshot.down_token_id
-    reason = (await ledger.get_decision(snapshot.window_slug, strategy_id) or {}).get(
+    reason = (await ledger.get_decision(start, strategy_id, mode=mode) or {}).get(
         "decision_reason")
+    # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+    # record the attempt before any order goes out, in both modes. open_entries only
+    # enters from PENDING, so a tick that dies mid-attempt (or a restart within the
+    # hour) can never place a second order for this hour.
+    await ledger.set_action(start, strategy_id, SUBMITTING, mode=mode)
     if executor is not None:
         slot = executor.slot_executor(strategy_id)
         # The ledger says this strategy is flat in live: heal any phantom slot
@@ -234,6 +279,10 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         # Row first, then the real order (the legacy loop's ordering): a failed
         # submit deletes the row, and a crash after submit leaves a row that boot
         # reconciliation adopts from the journal. RiskGate runs inside submit_entry.
+        # Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post:
+        # a crash between the post and its journal write leaves no journal entry, so
+        # reconciliation closes the row instead; the SUBMITTING record above is what
+        # stops a second post for this hour.
         position_id = await _insert_row(
             snapshot, strategy_id=strategy_id, side=side, price=ask, notional=notional,
             shares=shares, start=start, reason=reason, mode=mode,
@@ -245,10 +294,28 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         if not result.ok:
             await P._delete_position_row(position_id)
             if result.status == "BLOCKED":
+                # Refused before any post (gate, no token id, venue minimum, kill
+                # switch): nothing reached the venue.
                 await ledger.set_action(
-                    snapshot.window_slug, strategy_id, f"BLOCKED:{result.reason}")
-            # Any other failure stays PENDING and retries until the entry deadline.
-            log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
+                    start, strategy_id, f"BLOCKED:{result.reason}", mode=mode)
+                log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
+                            status=result.status, reason=result.reason)
+                return
+            # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+            # every other failure happened at or after the post (an exception or timeout,
+            # or a response without success and an order id). The venue may still have
+            # accepted the order, and a re-post is a new order, so the hour ends here.
+            uncertain = f"{UNCERTAIN_PREFIX}{result.status} {result.reason}".strip()
+            await ledger.set_action(start, strategy_id, uncertain, mode=mode)
+            await notify(
+                "live_entry_uncertain",
+                f"LIVE entry for {strategy_id} may or may not be on Polymarket "
+                f"({result.status}: {result.reason}). No retry this hour; check the "
+                "account's open orders and trades.",
+                {"window_slug": snapshot.window_slug, "strategy_id": strategy_id,
+                 "token_id": token},
+            )
+            log.warning("hourly_engine.live_entry_outcome_unknown", strategy_id=strategy_id,
                         status=result.status, reason=result.reason)
             return
         ask = result.price or ask
@@ -268,7 +335,7 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
                     notional_usd=notional, error=blocked, mode="paper",
                     strategy_id=strategy_id,
                 )
-                await ledger.set_action(snapshot.window_slug, strategy_id, f"BLOCKED:{blocked}")
+                await ledger.set_action(start, strategy_id, f"BLOCKED:{blocked}", mode=mode)
                 log.info("hourly_engine.entry_blocked", strategy_id=strategy_id, reason=blocked)
                 return
         position_id = await _insert_row(
@@ -277,7 +344,7 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         )
         if gate is not None:
             await gate.record_buy_notional(round(ask * shares, 4))
-    await ledger.set_action(snapshot.window_slug, strategy_id, "ENTERED", position_id)
+    await ledger.set_action(start, strategy_id, "ENTERED", position_id, mode=mode)
     label = "LIVE" if executor is not None else "Paper"
     await notify(
         f"{mode}_entry",
@@ -288,17 +355,62 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
              price=ask, shares=shares, window_slug=snapshot.window_slug)
 
 
-async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool) -> None:
+async def open_entries(
+    snapshot: PaperSnapshot, now: int, *, allow_entries: bool, mode: str
+) -> None:
+    from polymarket_bot import paper as P
+
     start = market.hour_start(now)
     deadline = _knobs.cached("hourly_entry_deadline_seconds")
+    executor = P._live_executor
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
-        row = await ledger.get_decision(snapshot.window_slug, sid)
+        # Only this mode's row (Claude, 2026-09-15, branch-review finding
+        # decision-row-shared-across-modes).
+        row = await ledger.get_decision(start, sid, mode=mode)
+        if row is not None and row["action"] in ("PENDING", SUBMITTING):
+            # Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: the
+            # entry went through but the tick stopped before recording ENTERED (the ledger
+            # write failed, or the bot restarted and boot reconciliation adopted the fill).
+            # Link the hour to that position, before the deadline check, instead of
+            # recording MISSED or an unfinished attempt. Live also needs the strategy's
+            # slot to track the entry, so an order whose outcome is unknown still ends
+            # the hour as an unfinished attempt below.
+            position_id = await _same_hour_open_position_id(sid, start, mode)
+            if position_id is not None and (
+                executor is None or executor.slot_executor(sid).tracks_position
+            ):
+                await ledger.set_action(start, sid, "ENTERED", position_id, mode=mode,
+                                        expected_action=row["action"])
+                log.warning("hourly_engine.entry_linked_after_interrupted_tick",
+                            strategy_id=sid, position_id=position_id,
+                            previous_action=row["action"], window_slug=snapshot.window_slug)
+                continue
+        if row is not None and row["action"] == SUBMITTING:
+            # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+            # an earlier tick started an entry and never recorded its result (it raised,
+            # or the process stopped). Close the hour out; never enter again.
+            # Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post:
+            # a live post can land right before its journal write fails. Boot reconciliation
+            # then closes that row as RECONCILED_NO_LIVE_TRACE and nothing tracks the
+            # tokens, so tell the operator before closing the hour (notify first: if the
+            # record write fails, the next tick still finds SUBMITTING and repeats both).
+            await notify(
+                "entry_attempt_unfinished",
+                f"Entry attempt for {sid} ({snapshot.window_slug}) did not finish: the tick "
+                "failed or the bot stopped mid-order. No retry this hour. If the bot was "
+                "LIVE, an order may be on Polymarket with no ledger row; check the "
+                "account's open orders and trades.",
+                {"window_slug": snapshot.window_slug, "strategy_id": sid},
+            )
+            await ledger.set_action(start, sid, UNFINISHED_ATTEMPT, mode=mode,
+                                    expected_action=SUBMITTING)
+            continue
         if row is None or row["action"] != "PENDING":
             continue
         if now - start > deadline:
-            await ledger.set_action(snapshot.window_slug, sid, "MISSED")
+            await ledger.set_action(start, sid, "MISSED", mode=mode)
             continue
         if allow_entries:
             await _enter(snapshot, sid, str(row["decision_side"]), start)
@@ -307,6 +419,23 @@ async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool
 async def settle_due(client: httpx.AsyncClient, snapshot: PaperSnapshot, now: int) -> None:
     """Settle hourly positions and decision rows whose hour candle has closed on Binance."""
     from polymarket_bot import paper as P
+
+    # Claude, 2026-09-15, branch-review finding pending-row-never-finalized: every tick,
+    # before anything that can skip or fail, close out decisions left open in hours that
+    # already ended. The current hour is handled by open_entries.
+    finalized = await ledger.finalize_ended_hours(market.hour_start(now), UNFINISHED_ATTEMPT)
+    if any(finalized.values()):
+        log.info("hourly_engine.ended_hours_finalized", **finalized)
+    if finalized["unfinished"]:
+        # Same operator warning as a current-hour unfinished attempt (branch-review finding
+        # hourly-reentry-after-untraced-post): a live order may exist with no ledger row.
+        await notify(
+            "entry_attempt_unfinished",
+            f"{finalized['unfinished']} entry attempt(s) in an earlier hour did not finish: the "
+            "bot stopped or its tick failed mid-order. If the bot was LIVE, an order may be on "
+            "Polymarket with no ledger row; check the account's open orders and trades.",
+            finalized,
+        )
 
     now_ms = now * 1000
     candles: dict[int, market.HourCandle | None] = {}
@@ -370,12 +499,16 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     # One clock read per tick: the snapshot's market and every decision, entry and
     # settlement step must agree on the hour, even when a tick straddles H:00.
     now = P._now()
+    start = market.hour_start(now)
+    # The decision record is per mode (Claude, 2026-09-15, branch-review finding
+    # decision-row-shared-across-modes). Strategies never see it; it only picks the row.
+    mode = "live" if P._live_executor is not None else "paper"
     snapshot = await build_snapshot(client, now)
     await settle_due(client, snapshot, now)
-    rows = await decide_hour(client, snapshot, now)
-    await open_entries(snapshot, now, allow_entries=allow_entries)
+    rows = await decide_hour(client, snapshot, now, mode=mode)
+    await open_entries(snapshot, now, allow_entries=allow_entries, mode=mode)
     for sid in list(rows):
-        rows[sid] = await ledger.get_decision(snapshot.window_slug, sid) or rows[sid]
+        rows[sid] = await ledger.get_decision(start, sid, mode=mode) or rows[sid]
     snapshot.reason = _reason_line(rows)
     entered = [r for r in rows.values() if r.get("action") == "ENTERED"]
     if entered:

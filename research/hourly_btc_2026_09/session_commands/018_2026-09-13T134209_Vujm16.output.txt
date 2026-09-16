@@ -1,0 +1,5 @@
+RESULT {"device": "cpu", "n": 1, "chunk": 100, "lookback": 512, "load_s": 2.6, "first_call_s": 0.36, "steady_call_s": 0.36, "ru_maxrss_mb": 808.0, "mps_driver_mb": null, "loaded_in_training_mode": [true, true], "forecast_hour_utc": "2026-09-13 13:00:00", "context_ends_utc": "2026-09-13 12:00:00", "hour_open": 76763.33, "unique_paths": 1, "p_up": 1.0, "close_p5_p50_p95": [76922.8, 76922.8, 76922.8]}
+        5.68 real         2.72 user         0.79 sys
+           846790656  maximum resident set size
+           693454144  peak memory footprint
+        5.68 real         2.72 user         0.79 sys

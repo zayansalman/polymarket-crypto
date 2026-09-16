@@ -1,0 +1,2 @@
+rows 25627 2023-10-12 00:00:00 -> 2026-09-13 18:00:00 | gaps 0 | matches earlier file on close: True | zero-volume hours 0
+taker buy share: mean 0.488 p5/p95 [0.364, 0.608]

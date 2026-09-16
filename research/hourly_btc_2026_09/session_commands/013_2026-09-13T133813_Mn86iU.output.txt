@@ -1,0 +1,45 @@
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/kronos.py:394:        x = x.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x.size(1), x.size(2)).to(device)
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/kronos.py:395:        x_stamp = x_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x_stamp.size(1), x_stamp.size(2)).to(device)
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/kronos.py:396:        y_stamp = y_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, y_stamp.size(1), y_stamp.size(2)).to(device)
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:3:from einops import rearrange, reduce
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:92:        #     z = rearrange(z, 'b c h w -> b h w c')
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:122:        #     zq = rearrange(zq, 'b h w c -> b c h w')
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:135:        divided_z = rearrange(z, '... (g c) -> ... g c', c=self.group_size)
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:176:        zhat_in_group = rearrange(zhat, 'b ... (g c) -> b ... g c', c=self.group_size)
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:193:        codes_non_centered = rearrange(codes_non_centered, 'b ... g c -> b ... (g c)')
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py:211:            z_q = rearrange(z_q, 'b (h w) c -> b c h w', h=h)
+13:class KronosTokenizer(nn.Module, PyTorchModelHubMixin):
+129:            mask = 2 ** torch.arange(self.codebook_dim//2, device=x1.device, dtype=torch.long) # Create a mask for bit extraction
+134:            mask = 2 ** torch.arange(self.codebook_dim, device=x.device, dtype=torch.long) # Create a mask for bit extraction
+180:class Kronos(nn.Module, PyTorchModelHubMixin):
+389:def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context, pred_len, clip=5, T=1.0, top_k=0, top_p=0.99, sample_count=5, verbose=False):
+393:        device = x.device
+394:        x = x.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x.size(1), x.size(2)).to(device)
+395:        x_stamp = x_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x_stamp.size(1), x_stamp.size(2)).to(device)
+396:        y_stamp = y_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, y_stamp.size(1), y_stamp.size(2)).to(device)
+465:        z = z.reshape(-1, sample_count, z.size(1), z.size(2))
+482:class KronosPredictor:
+484:    def __init__(self, model, tokenizer, device=None, max_context=512, clip=5):
+494:        # Auto-detect device if not specified
+495:        if device is None:
+496:            if torch.cuda.is_available():
+497:                device = "cuda:0"
+499:                device = "mps"
+501:                device = "cpu"
+503:        self.device = device
+505:        self.tokenizer = self.tokenizer.to(self.device)
+506:        self.model = self.model.to(self.device)
+508:    def generate(self, x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose):
+510:        x_tensor = torch.from_numpy(np.array(x).astype(np.float32)).to(self.device)
+511:        x_stamp_tensor = torch.from_numpy(np.array(x_stamp).astype(np.float32)).to(self.device)
+512:        y_stamp_tensor = torch.from_numpy(np.array(y_stamp).astype(np.float32)).to(self.device)
+515:                                          self.clip, T, top_k, top_p, sample_count, verbose)
+519:    def predict(self, df, x_timestamp, y_timestamp, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True):
+553:        preds = self.generate(x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose)
+562:    def predict_batch(self, df_list, x_timestamp_list, y_timestamp_list, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True):
+574:            sample_count (int): Number of parallel samples per series, automatically averaged internally.
+652:        preds = self.generate(x_batch, x_stamp_batch, y_stamp_batch, pred_len, T, top_k, top_p, sample_count, verbose)
+      17 /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/__init__.py
+     662 /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/kronos.py
+     570 /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model/module.py
+    1249 total

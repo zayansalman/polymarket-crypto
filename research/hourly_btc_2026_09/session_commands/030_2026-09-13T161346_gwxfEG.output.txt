@@ -1,0 +1,8 @@
+n = 500
+rank correlation with next hour's actual size of move:
+  kronos    +0.335
+  trail24   +0.317
+  trail168  +0.254
+  last1     +0.210
+explained (ranked): trailing-24h alone 0.101 | + kronos spread 0.131 | gain +0.031
+gain 95% range: [0.009 0.068]

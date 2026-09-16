@@ -260,6 +260,21 @@ def _journal_filled_shares(details_json: object) -> float:
     return _filled_shares(response) if isinstance(response, dict) else 0.0
 
 
+def _journal_sold_at_placement(details_json: object) -> float:
+    """Shares a journalled exit SELL matched at placement (0 if unknown).
+
+    Claude, 2026-09-15, branch-review finding reconcile-resets-sold-size-double-books:
+    the SELL-side twin of ``_journal_filled_shares`` (a SELL's sold tokens are its
+    ``makingAmount``), used when the venue no longer returns the exit order.
+    """
+    try:
+        details = json.loads(details_json) if details_json else {}  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    response = details.get("response") if isinstance(details, dict) else None
+    return _placement_crossed_shares(response, SELL) if isinstance(response, dict) else 0.0
+
+
 def _avg_fill_price(response: dict[str, Any], side: str, limit_price: float) -> float:
     """Average executed price from a matched order, else the limit (#103).
 
@@ -522,7 +537,7 @@ class LiveExecutor:
         """Adopt or close one open ledger row on the slot that owns it."""
         async with connect() as db:
             async with db.execute(
-                "SELECT token_id, clob_order_id, price, size, details_json "
+                "SELECT id, token_id, clob_order_id, price, size, details_json "
                 "FROM live_orders "
                 "WHERE intent = 'ENTRY' AND status = 'SUBMITTED' AND window_slug = ? "
                 "AND strategy_id IS ? ORDER BY id DESC LIMIT 1",
@@ -616,6 +631,27 @@ class LiveExecutor:
             )
             return
 
+        # Claude, 2026-09-15, branch-review finding reconcile-resets-sold-size-double-books:
+        # a previous session may already have sold part of this position (a live
+        # Stop's timed-out exit, a partial flatten). Those fills are already booked
+        # to the gate (reloaded above) and to the row's realized_pnl_usd, so restore
+        # the sold size: a later exit or settlement then uses only the shares still
+        # held and never books the sold ones a second time. One gap is left to
+        # tools/reconcile_live_ledger.py: an exit whose cancel failed just before
+        # shutdown was never booked by that session, so its shares count as sold
+        # here but its PnL is not booked anywhere.
+        sold = min(matched, await self._journal_exit_sold(row, int(entry["id"])))
+        if sold >= matched:
+            # Every filled share was already sold: nothing real is held. Close the
+            # row flat, keeping the PnL it already carries (never re-booked here).
+            await self._close_ledger_row(row, "RECONCILED_FLAT")
+            log.warning(
+                "live_executor.reconcile_closed_flat",
+                position_id=row["position_id"], window_slug=row["window_slug"],
+                matched=matched, sold=sold,
+            )
+            return
+
         # Adopt: the resting remainder is already cancelled; track the filled
         # size so the normal exit path flattens it.
         self._entry_order_id = None
@@ -623,7 +659,7 @@ class LiveExecutor:
         self._entry_price = float(entry["price"] or row["entry_price"])
         self._entry_size = float(entry["size"] or row["shares"])
         self._entry_matched_size = matched
-        self._entry_sold_size = 0.0
+        self._entry_sold_size = sold
         # Bot entries are marketable limits, so assume the adopted fill
         # crossed (taker) — the reconcile tool is the exact true-up.
         self._entry_taker_fee_usd = round(
@@ -633,15 +669,70 @@ class LiveExecutor:
         await notify(
             "live_reconciled",
             f"Re-adopted open live position from a previous session: "
-            f"{matched:.2f} shares of {row['side']} in {row['window_slug']}. "
+            f"{matched - sold:.2f} shares of {row['side']} in {row['window_slug']} "
+            f"({sold:.2f} of {matched:.2f} already sold). "
             "It will be flattened by the normal exit path.",
             {"position_id": row["position_id"]},
         )
         log.warning(
             "live_executor.reconcile_adopted_position",
-            position_id=row["position_id"], matched=matched,
+            position_id=row["position_id"], matched=matched, sold=sold,
             window_slug=row["window_slug"],
         )
+
+    async def _journal_exit_sold(self, row: dict[str, Any], entry_row_id: int) -> float:
+        """Shares this slot's exit SELLs already sold for the adopted entry.
+
+        Claude, 2026-09-15, branch-review finding reconcile-resets-sold-size-double-books.
+        Counts the EXIT orders journalled for this window and slot after the adopted
+        entry (an earlier position in the same window, or another slot, never counts).
+        Boot cancel_all already ran, so every such order is final. Per order, the
+        filled size comes from the venue (``get_order`` size_matched); when the venue
+        gives no answer, from the journal: the larger of the order's ``UNFILLED`` row
+        (it holds the filled size) and the SELL's placement match. Never the SELL's
+        requested size, which is what was asked for, not what filled. With no fill
+        evidence at all the order counts as unsold (logged).
+        """
+        async with connect() as db:
+            async with db.execute(
+                "SELECT status, clob_order_id, size, details_json FROM live_orders "
+                "WHERE intent = 'EXIT' AND status IN ('SUBMITTED', 'UNFILLED') "
+                "AND window_slug = ? AND strategy_id IS ? AND id > ? "
+                "AND clob_order_id IS NOT NULL ORDER BY id",
+                (row["window_slug"], row.get("strategy_id"), entry_row_id),
+            ) as cur:
+                exits = [dict(r) for r in await cur.fetchall()]
+        placed = {r["clob_order_id"]: r for r in exits if r["status"] == "SUBMITTED"}
+        unfilled = {
+            r["clob_order_id"]: float(r["size"] or 0.0)
+            for r in exits if r["status"] == "UNFILLED"
+        }
+        total = 0.0
+        for order_id, submitted in placed.items():
+            filled: float | None = None
+            try:
+                raw_order = await asyncio.to_thread(self._client.get_order, order_id)
+                if raw_order is not None:
+                    filled = float(raw_order.get("size_matched") or 0.0)
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "live_executor.reconcile_exit_lookup_failed",
+                    order_id=order_id, error=f"{type(e).__name__}: {e}",
+                )
+            if filled is None:
+                # Both journal numbers are fills the previous session saw, so the
+                # larger one is the best known sold size.
+                filled = max(
+                    unfilled.get(order_id, 0.0),
+                    _journal_sold_at_placement(submitted["details_json"]),
+                )
+                if filled <= 0:
+                    log.warning(
+                        "live_executor.reconcile_exit_fill_unknown",
+                        order_id=order_id, position_id=row["position_id"],
+                    )
+            total += max(0.0, filled)
+        return _round_size_down(round(total, 6))
 
     @staticmethod
     async def _close_ledger_row(row: dict[str, Any], reason: str) -> None:
@@ -1186,6 +1277,16 @@ class LiveExecutor:
         self._position_open = False
         self._exit_order_id = None
         self._exit_price = None
+
+    @property
+    def tracks_position(self) -> bool:
+        """True while this executor tracks an entry: a filled position or a resting order.
+
+        Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: the hourly
+        engine uses this to tell an entry that went through (the ledger write after it
+        failed) from an attempt whose outcome is unknown.
+        """
+        return self._position_open or self._entry_order_id is not None
 
     async def resync_flat(self) -> bool:
         """Heal stale in-memory open-state that a flat position ledger refutes.

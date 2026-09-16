@@ -1,11 +1,11 @@
-"""Hourly Mean Reversion: flow push, close location and the frozen rule."""
+"""Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low: flow push, close location and the frozen rule."""
 from __future__ import annotations
 
 import statistics
 
 import pytest
 
-from polymarket_bot.hourly import mean_reversion as mr
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as rule
 from polymarket_bot.hourly.market import Candle
 
 
@@ -22,8 +22,8 @@ def _series(last_tb_share: float, *, o: float = 100.0, c: float = 110.0,
 
 def test_flow_push_matches_sample_stdev_over_window_including_last() -> None:
     candles = _series(0.9)
-    fp = mr.flow_push(candles)
-    imbs = [2 * c.taker_buy_volume / c.volume - 1 for c in candles[-mr.WINDOW:]]
+    fp = rule.flow_push(candles)
+    imbs = [2 * c.taker_buy_volume / c.volume - 1 for c in candles[-rule.WINDOW:]]
     expected_z = (imbs[-1] - statistics.mean(imbs)) / statistics.stdev(imbs)
     assert fp.imbalance == pytest.approx(0.8)
     assert fp.z == pytest.approx(expected_z)
@@ -33,13 +33,13 @@ def test_flow_push_matches_sample_stdev_over_window_including_last() -> None:
 
 def test_flow_push_needs_a_full_window() -> None:
     with pytest.raises(ValueError):
-        mr.flow_push(_series(0.9, n=mr.WINDOW - 1))
+        rule.flow_push(_series(0.9, n=rule.WINDOW - 1))
 
 
 def test_rule_fires_down_after_pushed_up_hour_closing_at_high() -> None:
-    d = mr.decide(_series(0.9), _series(0.5))  # perps show no push
+    d = rule.decide(_series(0.9), _series(0.5))  # perps show no push
     assert d.side == "Down"
-    assert d.signal["spot_fz"] > mr.SPOT_FZ_MIN and d.signal["perp_fz"] <= mr.PERP_FZ_MAX
+    assert d.signal["spot_fz"] > rule.SPOT_FZ_MIN and d.signal["perp_fz"] <= rule.PERP_FZ_MAX
     assert d.signal["wider_rule_fired"] is True
     assert d.reason.startswith("enter Down")
 
@@ -47,14 +47,14 @@ def test_rule_fires_down_after_pushed_up_hour_closing_at_high() -> None:
 def test_rule_fires_up_after_pushed_down_hour_closing_at_low() -> None:
     spot = _series(0.1, o=110.0, c=100.0, hi=111.0, lo=100.0)  # sellers pushed it down
     perp = _series(0.5, o=110.0, c=100.0, hi=111.0, lo=100.0)
-    assert mr.decide(spot, perp).side == "Up"
+    assert rule.decide(spot, perp).side == "Up"
 
 
 def test_no_bet_when_perps_confirm_weak_push_mid_close_or_flat() -> None:
-    assert mr.decide(_series(0.9), _series(0.9)).side is None  # perps confirmed
-    weak = mr.decide(_series(0.56), _series(0.5))
+    assert rule.decide(_series(0.9), _series(0.9)).side is None  # perps confirmed
+    weak = rule.decide(_series(0.56), _series(0.5))
     assert weak.side is None and weak.signal["wider_rule_fired"] is False
-    mid = mr.decide(_series(0.9, c=104.5, hi=110.0, lo=99.0), _series(0.5))
+    mid = rule.decide(_series(0.9, c=104.5, hi=110.0, lo=99.0), _series(0.5))
     assert mid.side is None and "extreme" in mid.reason
-    flat = mr.decide(_series(0.9, o=100.0, c=100.0, hi=101.0, lo=99.0), _series(0.5))
+    flat = rule.decide(_series(0.9, o=100.0, c=100.0, hi=101.0, lo=99.0), _series(0.5))
     assert flat.side is None and "flat" in flat.reason

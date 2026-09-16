@@ -1,0 +1,28 @@
+1) WHAT KRONOS'S CALLS FOLLOW (rank correlation of its P(up) with each input)
+   ret1      own-open P(up) -0.168 | real-open P(up) -0.232
+   ret4      own-open P(up) -0.214 | real-open P(up) -0.270
+   ret24     own-open P(up) -0.260 | real-open P(up) -0.310
+   rsi_prev  own-open P(up) -0.307 | real-open P(up) -0.364
+   calls that CONTINUE last hour's direction: 42.5%
+   its predicted move vs actual move, rank corr: +0.029
+   average predicted move $-20 vs average actual $+16
+
+2) REVERSAL BET (bet against last hour) ON THESE 500 HOURS, SPLIT BY KRONOS
+   reversal bet, all hours           54.2% (49.8%-58.5%) n=500
+   Kronos AGREES with reversal       54.2% (48.3%-60.0%) n=275
+   Kronos DISAGREES with reversal    55.2% (48.3%-61.9%) n=203
+
+3) OVERREACTION GAUGE: last hour's move relative to Kronos's expected range
+   reversal bet when last move was small vs expected (bottom third)   53.3% (45.7%-60.7%) n=167
+   reversal bet when last move was middle third                       55.4% (47.8%-62.8%) n=166
+   reversal bet when last move was large vs expected (top third)      53.9% (46.3%-61.3%) n=167
+   same split using plain 24h-average move instead (top third): 52.7% (45.1%-60.1%) n=167
+
+4) DOES KRONOS'S EXPECTED MOVE SIZE CHANGE THE REVERSAL?
+   Kronos expects a calm hour (below-median range)  55.2% (49.0%-61.2%) n=250
+   Kronos expects a big hour (above-median range)   53.2% (47.0%-59.3%) n=250
+
+5) RSI EXTREMES + KRONOS
+   RSI<30 or >70, bet reversal        58.1% (43.3%-71.6%) n=43
+   ...Kronos agrees                  60.9% (40.8%-77.8%) n=23
+   ...Kronos disagrees               58.8% (36.0%-78.4%) n=17

@@ -1,0 +1,50 @@
+12:    def forward(ctx, zq, basis, K, eps):
+90:    def forward(self, z, collect_metrics=True):
+139:        prob = (-distance * self.inv_temperature).softmax(dim=-1)
+245:    def forward(self, z, half=False, collect_metrics=True):
+266:    def forward(self, x):
+280:    def forward(self, x):
+303:    def forward(self, q, k):
+330:    def forward(self, x, key_padding_mask=None):
+345:        attn_output = F.scaled_dot_product_attention(
+371:    def forward(self, query, key, value, key_padding_mask=None):
+389:        attn_output = F.scaled_dot_product_attention(
+430:    def forward(self, token_ids):
+452:    def forward(self, hidden_states, sibling_embed, key_padding_mask=None):
+473:    def forward(self, x, key_padding_mask=None):
+509:    def forward(self, x):
+532:    def forward(self, x):
+553:    def forward(self, x):
+class KronosPredictor:
+
+    def __init__(self, model, tokenizer, device=None, max_context=512, clip=5):
+        self.tokenizer = tokenizer
+        self.model = model
+        self.max_context = max_context
+        self.clip = clip
+        self.price_cols = ['open', 'high', 'low', 'close']
+        self.vol_col = 'volume'
+        self.amt_vol = 'amount'
+        self.time_cols = ['minute', 'hour', 'weekday', 'day', 'month']
+        
+        # Auto-detect device if not specified
+        if device is None:
+            if torch.cuda.is_available():
+                device = "cuda:0"
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+        
+        self.device = device
+
+        self.tokenizer = self.tokenizer.to(self.device)
+        self.model = self.model.to(self.device)
+489:        self.price_cols = ['open', 'high', 'low', 'close']
+490:        self.vol_col = 'volume'
+491:        self.amt_vol = 'amount'
+524:        if not all(col in df.columns for col in self.price_cols):
+142:    def encode(self, x, half=False):
+161:    def decode(self, x, half=False):
+278:    def decode_s1(self, s1_ids, s2_ids, stamp=None, padding_mask=None):
+310:    def decode_s2(self, context, s1_ids, padding_mask=None):

@@ -1,0 +1,4 @@
+Tier A (reference)           | disc 57.6% [53.3%,61.8%] n=514      | val 57.3% [50.7%,63.6%] n=220      | bar met: False
+(1) Tier A & ETH same dir    | disc 56.9% [52.3%,61.3%] n=459      | val 57.8% [50.9%,64.3%] n=206      | bar met: False
+(2) Tier A & not 08 UTC      | disc 57.3% [52.9%,61.6%] n=485      | val 57.3% [50.5%,63.8%] n=206      | bar met: False
+(3) Tier A & both            | disc 56.5% [51.8%,61.0%] n=434      | val 57.7% [50.7%,64.5%] n=194      | bar met: False

@@ -1,0 +1,89 @@
+Exit code 1
+total 74272
+drwxr-xr-x@  57 zayankhan  wheel     1824 Sep 14 04:29 .
+drwx------@ 218 zayankhan  wheel     6976 Sep 15 01:50 ..
+drwxr-xr-x@   7 zayankhan  wheel      224 Sep 13 19:36 .venv
+drwxr-xr-x@  14 zayankhan  wheel      448 Sep 13 19:35 Kronos-upstream
+-rw-r--r--@   1 zayankhan  wheel     1804 Sep 14 02:31 PREREG_factors.md
+-rw-r--r--@   1 zayankhan  wheel     1805 Sep 14 02:38 PREREG_minute.md
+-rw-r--r--@   1 zayankhan  wheel     1761 Sep 14 01:58 PREREG_orderflow.md
+-rw-r--r--@   1 zayankhan  wheel     2470 Sep 14 02:35 PREREG_perp_selective.md
+-rw-r--r--@   1 zayankhan  wheel     2691 Sep 14 00:38 PREREG_qlib_test.md
+-rw-r--r--@   1 zayankhan  wheel      717 Sep 14 04:26 PREREG_replication_alts.md
+-rw-r--r--@   1 zayankhan  wheel     2095 Sep 14 00:54 PREREG_seasonality.md
+-rw-r--r--@   1 zayankhan  wheel      410 Sep 14 03:22 PREREG_tierA_factors.md
+-rw-r--r--@   1 zayankhan  wheel     1602 Sep 14 04:24 PREREG_walkforward_oi.md
+-rw-r--r--@   1 zayankhan  wheel     2994 Sep 13 20:22 analyze.py
+-rw-r--r--@   1 zayankhan  wheel     2157 Sep 13 22:06 backtest.log
+-rw-r--r--@   1 zayankhan  wheel     6037 Sep 13 20:21 backtest.py
+-rw-r--r--@   1 zayankhan  wheel   293345 Sep 13 22:06 backtest_results.jsonl
+-rw-r--r--@   1 zayankhan  wheel     3091 Sep 13 19:42 bench.py
+-rw-r--r--@   1 zayankhan  wheel  7664936 Sep 14 02:43 btc_15m_spot.csv
+-rw-r--r--@   1 zayankhan  wheel  2983415 Sep 14 01:58 btc_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel  2115160 Sep 14 00:37 btc_1h_full.csv
+-rw-r--r--@   1 zayankhan  wheel   178342 Sep 13 19:40 btc_1h_latest.json
+-rw-r--r--@   1 zayankhan  wheel   817775 Sep 13 20:21 btc_1h_oos.csv
+-rw-r--r--@   1 zayankhan  wheel   107714 Sep 14 02:34 btc_funding.csv
+-rw-r--r--@   1 zayankhan  wheel  2753111 Sep 14 02:34 btc_perp_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel  1127727 Sep 14 04:23 bybit_oi_1h.csv
+-rw-r--r--@   1 zayankhan  wheel  1138674 Sep 14 04:27 bybit_oi_eth_1h.csv
+-rw-r--r--@   1 zayankhan  wheel  1137772 Sep 14 04:28 bybit_oi_sol_1h.csv
+-rw-r--r--@   1 zayankhan  wheel  1179038 Sep 14 04:29 bybit_oi_xrp_1h.csv
+-rw-r--r--@   1 zayankhan  wheel  2815904 Sep 14 02:31 eth_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel  2820138 Sep 14 04:27 eth_perp_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel     4153 Sep 14 02:32 factors.py
+-rw-r--r--@   1 zayankhan  wheel     5584 Sep 14 02:32 factors_out.txt
+-rw-r--r--@   1 zayankhan  wheel     2593 Sep 14 04:26 fetch_alts.py
+-rw-r--r--@   1 zayankhan  wheel   229628 Sep 13 21:26 interim.jsonl
+-rw-r--r--@   1 zayankhan  wheel    17144 Sep 14 03:23 macro_calendar.csv
+-rw-r--r--@   1 zayankhan  wheel    19335 Sep 14 03:22 macro_calendar_unverified.csv
+-rw-r--r--@   1 zayankhan  wheel     3969 Sep 14 02:43 minute_rules.py
+-rw-r--r--@   1 zayankhan  wheel     1484 Sep 14 02:43 minute_rules_out.txt
+-rw-r--r--@   1 zayankhan  wheel     3500 Sep 14 01:59 orderflow.py
+-rw-r--r--@   1 zayankhan  wheel     2278 Sep 14 01:59 orderflow_out.txt
+-rw-r--r--@   1 zayankhan  wheel     6265 Sep 14 02:36 perp_selective.py
+-rw-r--r--@   1 zayankhan  wheel     2427 Sep 14 02:36 perp_selective_out.txt
+drwxr-xr-x@   5 zayankhan  wheel      160 Sep 13 19:40 pylibs
+-rw-r--r--@   1 zayankhan  wheel        0 Sep 13 19:44 r.json
+-rw-r--r--@   1 zayankhan  wheel     3772 Sep 14 04:29 replicate_alts.py
+drwxr-xr-x@  17 zayankhan  wheel      544 Sep 13 19:35 repo
+-rw-r--r--@   1 zayankhan  wheel     7050 Sep 14 00:55 seasonality.py
+-rw-r--r--@   1 zayankhan  wheel     5373 Sep 14 00:55 seasonality_out.txt
+-rw-r--r--@   1 zayankhan  wheel  2596239 Sep 14 04:26 sol_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel  2581786 Sep 14 04:27 sol_perp_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel        0 Sep 13 19:44 t.txt
+-rw-r--r--@   1 zayankhan  wheel      777 Sep 13 19:42 time_smoke.txt
+-rw-r--r--@   1 zayankhan  wheel     4012 Sep 14 04:24 walkforward_oi.py
+drwxr-xr-x@   4 zayankhan  wheel      128 Sep 13 19:40 weights
+-rw-r--r--@   1 zayankhan  wheel  2585936 Sep 14 04:27 xrp_1h_flow.csv
+-rw-r--r--@   1 zayankhan  wheel  2685374 Sep 14 04:28 xrp_perp_1h_flow.csv
+# Pre-registered: aggressive order flow and next-hour BTC reversal
+
+Written 2026-09-14 before running.
+
+## Data
+Binance spot BTCUSDT 1h klines with taker-buy base volume, 2023-10-12 to 2026-09-13 UTC (25,627 hours, no gaps).
+- Discovery: before 2025-10-18 14:00 UTC.
+- Validation: from 2025-10-18 14:00 UTC.
+
+## Definitions (all known at the open of hour H, built from hour H-1 and earlier)
+- Flow imbalance: imb = 2 * taker_buy_base / volume - 1, from -1 (all aggressive sellers) to +1 (all aggressive buyers).
+- Flow z: (imb - trailing 168h mean) / trailing 168h std. The window includes H-1.
+- Flow in the move's direction: fz = z * sign(close - open of H-1). Positive means the move was pushed by aggressive orders on its own side.
+- Move size: |close - open| of H-1 divided by the trailing 24h mean |move|.
+- Reversal bet: bet against H-1's direction. It wins if hour H closes the other way (a flat close counts as down).
+- Cutoffs are quintiles computed on discovery only.
+
+## Tests (fixed)
+1. Dose-response: reversal win rate by quintile of fz, in both periods.
+2. H1, flow-driven move: fz in the top quintile. Compare reversal win rate with all other hours.
+3. H2, flow-driven big move: fz top quintile AND move size top quintile.
+4. H3, flow alone: |z| top quintile; bet against the flow's sign.
+5. H4, absorbed move: flow opposite the move (fz bottom quintile); reversal win rate.
+
+95% Wilson intervals. Benjamini-Hochberg FDR at q = 0.10 across H1-H4 in discovery.
+
+## Bar
+Counts as a lead only if it passes FDR in discovery, holds the same direction in validation with a validation interval above the all-hours reversal rate, and shows a roughly monotonic dose-response.
+Reference lines: 52.25% taker break-even at 50c (fee + 1c spread), 50% maker.
+(eval):1: ===== not found

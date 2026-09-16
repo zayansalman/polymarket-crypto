@@ -114,10 +114,13 @@ KNOBS: dict[str, Knob] = {
         "Volatility lookback", 1, 365, unit="d", group="Daily scanner",
     ),
     # --- Hourly BTC strategies (polymarket_bot/hourly/engine.py) -----------
-    "hourly_mean_reversion_enabled": Knob(
-        "runtime.hourly.mean_reversion_enabled", True, "bool",
-        "Hourly Mean Reversion enabled", group="Hourly BTC",
+    # Strategy named by Zayan (operator), 2026-09-15; default on (Claude, 2026-09-14).
+    "hourly_btcusdt_1h_spot_taker_push_reversal_enabled": Knob(
+        "runtime.hourly.btcusdt_1h_spot_taker_push_reversal_enabled", True, "bool",
+        "BTCUSDT 1h spot taker push, perp unconfirmed, close at extreme: bet reversal (enabled)",
+        group="Hourly BTC",
     ),
+    # Entry deadline default 120 s (Claude, 2026-09-14).
     "hourly_entry_deadline_seconds": Knob(
         "runtime.hourly.entry_deadline_seconds", 120, "int",
         "Entry deadline after the hour opens", 10, 1800, unit="s", group="Hourly BTC",

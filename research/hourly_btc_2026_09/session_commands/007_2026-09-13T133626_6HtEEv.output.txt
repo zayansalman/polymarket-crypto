@@ -1,0 +1,4 @@
+Using CPython 3.11.15
+Creating virtual environment at: .venv
+Activate with: source .venv/bin/activate
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

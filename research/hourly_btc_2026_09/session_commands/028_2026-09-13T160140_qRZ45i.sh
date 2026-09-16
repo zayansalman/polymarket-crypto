@@ -1,0 +1,1 @@
+B=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test; wc -l < $B/backtest_results.jsonl; tail -1 $B/backtest.log; ps -axo command | grep "[b]acktest.py --hours" | grep -vc zsh

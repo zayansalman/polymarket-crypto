@@ -516,6 +516,20 @@ async def test_resync_flat_heals_phantom_open_state(
 
 
 @pytest.mark.asyncio
+async def test_tracks_position_follows_the_entry_lifecycle(journal_db, tmp_path: Path) -> None:
+    """Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed."""
+    client = _mock_client()
+    executor = _executor(client, tmp_path)
+    assert executor.tracks_position is False
+
+    assert (await executor.submit_entry(UP_TOKEN, 0.57, 3.0)).ok  # rests unfilled
+    assert executor.tracks_position is True
+
+    await executor.resync_flat()
+    assert executor.tracks_position is False
+
+
+@pytest.mark.asyncio
 async def test_resync_flat_noop_when_already_flat(
     journal_db, tmp_path: Path
 ) -> None:
@@ -1349,8 +1363,8 @@ async def test_matched_entry_size_asymmetry_on_lookup_failure(
 # Strategy slots: one open position per strategy (operator decision 2026-09-14)
 # ---------------------------------------------------------------------------
 
-MR = "hourly_mean_reversion"
-KR = "kronos_btc_finetune"
+SPOT_PUSH_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+KRONOS_ID = "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"
 HSLUG = "bitcoin-up-or-down-september-13-2026-3pm-et"
 
 
@@ -1390,26 +1404,26 @@ async def test_slots_share_client_and_gate_but_hold_their_own_position(
 ) -> None:
     client = _mock_client()
     account = _executor(client, tmp_path)
-    mr, kr = account.slot_executor(MR), account.slot_executor(KR)
-    assert account.slot_executor(MR) is mr
-    assert mr.gate is account.gate and mr._client is client
+    spot_push_slot, kronos_slot = account.slot_executor(SPOT_PUSH_ID), account.slot_executor(KRONOS_ID)
+    assert account.slot_executor(SPOT_PUSH_ID) is spot_push_slot
+    assert spot_push_slot.gate is account.gate and spot_push_slot._client is client
 
-    assert (await mr.submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)).ok
+    assert (await spot_push_slot.submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)).ok
 
-    assert "max 1" in (mr.entry_block_reason(3.0) or "")
-    assert kr.entry_block_reason(3.0) is None
+    assert "max 1" in (spot_push_slot.entry_block_reason(3.0) or "")
+    assert kronos_slot.entry_block_reason(3.0) is None
     assert account.entry_block_reason(3.0) is None
     entry = [r for r in await _journal_rows(journal_db) if r["intent"] == "ENTRY"][-1]
-    assert entry["strategy_id"] == MR
+    assert entry["strategy_id"] == SPOT_PUSH_ID
 
 
 def test_slot_executor_needs_a_client_and_the_account_executor(tmp_path: Path) -> None:
     unbuilt = LiveExecutor(private_key="0x" + "1" * 64, kill_switch_path=tmp_path / "KILL")
     with pytest.raises(RuntimeError):
-        unbuilt.slot_executor(MR)
-    slot = _executor(_mock_client(), tmp_path).slot_executor(MR)
+        unbuilt.slot_executor(SPOT_PUSH_ID)
+    slot = _executor(_mock_client(), tmp_path).slot_executor(SPOT_PUSH_ID)
     with pytest.raises(RuntimeError):
-        slot.slot_executor(KR)
+        slot.slot_executor(KRONOS_ID)
 
 
 @pytest.mark.asyncio
@@ -1419,16 +1433,16 @@ async def test_kill_switch_and_stop_cancel_resting_orders_in_every_slot(
     client = _mock_client()
     _distinct_order_ids(client)
     account = _executor(client, tmp_path)
-    await account.slot_executor(MR).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
-    await account.slot_executor(KR).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
+    await account.slot_executor(SPOT_PUSH_ID).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
+    await account.slot_executor(KRONOS_ID).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
     (tmp_path / "KILL").touch()
 
     assert await account.enforce_kill_switch() is True
 
     cancelled = {c.args[0].orderID for c in client.cancel_order.call_args_list}
     assert cancelled == {"0xORDER1", "0xORDER2"}
-    assert account.slot_executor(MR)._entry_order_id is None
-    assert account.slot_executor(KR)._entry_order_id is None
+    assert account.slot_executor(SPOT_PUSH_ID)._entry_order_id is None
+    assert account.slot_executor(KRONOS_ID)._entry_order_id is None
 
 
 @pytest.mark.asyncio
@@ -1439,7 +1453,7 @@ async def test_cancel_open_all_covers_the_account_and_every_slot(
     _distinct_order_ids(client)
     account = _executor(client, tmp_path)
     await account.submit_entry(UP_TOKEN, 0.57, 3.0)
-    await account.slot_executor(MR).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
+    await account.slot_executor(SPOT_PUSH_ID).submit_entry(UP_TOKEN, 0.57, 3.0, window_slug=HSLUG)
 
     assert sorted(await account.cancel_open_all(reason="LOOP_STOP")) == ["0xORDER1", "0xORDER2"]
 
@@ -1448,35 +1462,35 @@ async def test_cancel_open_all_covers_the_account_and_every_slot(
 async def test_boot_adopts_one_row_per_strategy_using_that_strategys_order(
     journal_db, tmp_path: Path
 ) -> None:
-    mr_id = await _seed_hourly_row(journal_db, MR)
-    kr_id = await _seed_hourly_row(journal_db, KR)
+    spot_push_row_id = await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    kronos_row_id = await _seed_hourly_row(journal_db, KRONOS_ID)
     # Same hour, same token: only strategy_id tells the two entries apart.
     await journal_db.journal_live_order(
         intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
-        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xMR", strategy_id=MR,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xSPOTPUSH", strategy_id=SPOT_PUSH_ID,
     )
     await journal_db.journal_live_order(
         intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
-        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xKR", strategy_id=KR,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xKRONOS", strategy_id=KRONOS_ID,
     )
     client = _mock_client()
     client.get_order.side_effect = lambda oid: {
-        "size_matched": "5.26" if oid == "0xMR" else "0", "price": "0.57",
+        "size_matched": "5.26" if oid == "0xSPOTPUSH" else "0", "price": "0.57",
     }
     account = _executor(client, tmp_path)
 
     await account.start()
 
-    assert "max 1" in (account.slot_executor(MR).entry_block_reason(3.0) or "")
-    assert (await _row(journal_db, mr_id))["state"] == "open"
-    assert (await _row(journal_db, kr_id))["exit_reason"] == "RECONCILED_UNFILLED"
-    assert account.slot_executor(KR).entry_block_reason(3.0) is None
+    assert "max 1" in (account.slot_executor(SPOT_PUSH_ID).entry_block_reason(3.0) or "")
+    assert (await _row(journal_db, spot_push_row_id))["state"] == "open"
+    assert (await _row(journal_db, kronos_row_id))["exit_reason"] == "RECONCILED_UNFILLED"
+    assert account.slot_executor(KRONOS_ID).entry_block_reason(3.0) is None
 
 
 @pytest.mark.asyncio
 async def test_boot_refuses_two_open_rows_for_one_strategy(journal_db, tmp_path: Path) -> None:
-    await _seed_hourly_row(journal_db, MR)
-    await _seed_hourly_row(journal_db, MR)
+    await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
     with pytest.raises(LiveBootRefused, match="max 1 per strategy"):
         await _executor(_mock_client(), tmp_path).start()
 
@@ -1485,14 +1499,14 @@ async def test_boot_refuses_two_open_rows_for_one_strategy(journal_db, tmp_path:
 async def test_boot_leaves_paper_rows_of_strategy_slots_for_paper_settlement(
     journal_db, tmp_path: Path
 ) -> None:
-    paper_id = await _seed_hourly_row(journal_db, MR, mode="paper")
+    paper_id = await _seed_hourly_row(journal_db, SPOT_PUSH_ID, mode="paper")
     account = _executor(_mock_client(), tmp_path)
 
     await account.start()
 
     row = await _row(journal_db, paper_id)
     assert row["state"] == "open" and row["exit_reason"] is None
-    assert account.slot_executor(MR).entry_block_reason(3.0) is None
+    assert account.slot_executor(SPOT_PUSH_ID).entry_block_reason(3.0) is None
 
 
 @pytest.mark.asyncio
@@ -1502,12 +1516,12 @@ async def test_boot_adopts_resolved_hourly_row_from_journal_so_it_settles(
     """An hourly row settles from the Binance candle, which stays readable after
     resolution, so a pruned order with a journal-recorded fill is adopted, not zeroed."""
     past = int(time.time()) // 3600 * 3600 - 3 * 3600
-    position_id = await _seed_hourly_row(journal_db, MR, start=past)
+    position_id = await _seed_hourly_row(journal_db, SPOT_PUSH_ID, start=past)
     await journal_db.journal_live_order(
         intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
         token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xPRUNED",
         details={"response": {"status": "matched", "takingAmount": "5.26"}},
-        strategy_id=MR,
+        strategy_id=SPOT_PUSH_ID,
     )
     client = _mock_client()
     client.get_order.return_value = None
@@ -1516,7 +1530,7 @@ async def test_boot_adopts_resolved_hourly_row_from_journal_so_it_settles(
     await account.start()
 
     assert (await _row(journal_db, position_id))["state"] == "open"
-    settled = await account.slot_executor(MR).record_settlement(True, HSLUG)
+    settled = await account.slot_executor(SPOT_PUSH_ID).record_settlement(True, HSLUG)
     assert settled.ok and settled.size == pytest.approx(5.26)
 
 
@@ -1527,3 +1541,186 @@ def test_hourly_rows_resolve_an_hour_after_their_own_start() -> None:
     legacy = {"window_slug": "btc-updown-5m-1000000"}
     assert _row_window_resolved(legacy, now=1_000_000 + 359) is False
     assert _row_window_resolved(legacy, now=1_000_000 + 360) is True
+
+
+# ---------------------------------------------------------------------------
+# Claude, 2026-09-15, branch-review finding reconcile-resets-sold-size-double-books:
+# adoption restores the shares a previous session already sold (its PnL is already
+# in the reloaded gate and the row), so a later exit or settlement uses only the
+# shares still held and never books the sold ones twice.
+# ---------------------------------------------------------------------------
+
+SPOT_PUSH_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+KRONOS_ID = "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"
+
+
+def _orders_client(orders: dict[str, object]) -> MagicMock:
+    """A mock client whose get_order answers per order id (an Exception raises)."""
+    client = _mock_client()
+
+    def get_order(oid: str) -> object:
+        answer = orders[oid]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    client.get_order.side_effect = get_order
+    return client
+
+
+@pytest.mark.asyncio
+async def test_boot_restores_sold_shares_on_the_legacy_slot_so_the_exit_sells_the_rest(
+    journal_db, tmp_path: Path
+) -> None:
+    slug = _unresolved_slug()
+    await _seed_open_position(journal_db, window_slug=slug)
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=slug,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xOLD",
+    )
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=slug,
+        token_id=UP_TOKEN, price=0.55, size=5.26, clob_order_id="0xSELL1",
+        details={"response": {"status": "live"}},
+    )
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="UNFILLED", window_slug=slug,
+        token_id=UP_TOKEN, price=0.55, size=2.0, clob_order_id="0xSELL1",
+    )
+    orders: dict[str, object] = {
+        "0xOLD": {"size_matched": "5.26", "price": "0.57"},
+        "0xSELL1": {"size_matched": "2", "price": "0.55"},
+        "0xSELL2": {"size_matched": "3.26", "price": "0.55"},
+    }
+    client = _orders_client(orders)
+    executor = _executor(client, tmp_path)
+
+    await executor.start()
+    pnl_at_boot = executor.gate.live_pnl
+
+    client.create_and_post_order.return_value = {"success": True, "orderID": "0xSELL2"}
+    result = await executor.submit_exit(side_price=0.55, window_slug=slug)
+    assert result.ok
+    assert client.create_and_post_order.call_args.args[0].size == pytest.approx(3.26)
+    assert executor.gate.live_pnl == pytest.approx(pnl_at_boot + 3.26 * (0.55 - 0.57))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("evidence", "sold"),
+    [("venue", 2.0), ("unfilled_row", 2.0), ("placement_match", 2.0), ("none", 0.0)],
+)
+async def test_boot_restores_sold_shares_on_a_strategy_slot_from_venue_then_journal(
+    journal_db, tmp_path: Path, evidence: str, sold: float
+) -> None:
+    await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xE",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    placement = (
+        {"status": "matched", "makingAmount": "2", "takingAmount": "1.1"}
+        if evidence == "placement_match" else {"status": "live"}
+    )
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.55, size=5.26, clob_order_id="0xS",
+        details={"response": placement}, strategy_id=SPOT_PUSH_ID,
+    )
+    if evidence == "unfilled_row":
+        await journal_db.journal_live_order(
+            intent="EXIT", side="SELL", status="UNFILLED", window_slug=HSLUG,
+            token_id=UP_TOKEN, price=0.55, size=2.0, clob_order_id="0xS",
+            strategy_id=SPOT_PUSH_ID,
+        )
+    exit_answer: object = (
+        {"size_matched": "2", "price": "0.55"} if evidence == "venue"
+        else RuntimeError("order lookup down") if evidence == "placement_match"
+        else None
+    )
+    client = _orders_client({"0xE": {"size_matched": "5.26", "price": "0.57"},
+                             "0xS": exit_answer})
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    slot = account.slot_executor(SPOT_PUSH_ID)
+    # Never the SELL's requested size: only venue or journal evidence of a fill counts.
+    assert slot._entry_sold_size == pytest.approx(sold)
+    settled = await slot.record_settlement(True, HSLUG)
+    assert settled.size == pytest.approx(5.26 - sold)
+
+
+@pytest.mark.asyncio
+async def test_boot_counts_only_this_positions_exits_in_this_slot(
+    journal_db, tmp_path: Path
+) -> None:
+    await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    # An exit of an earlier position in the same hour, journalled before the entry.
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.55, size=5.0, clob_order_id="0xEARLIER",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xE",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    # Another strategy's exit in the same hour.
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.55, size=5.0, clob_order_id="0xOTHER",
+        strategy_id=KRONOS_ID,
+    )
+    client = _orders_client({
+        "0xE": {"size_matched": "5.26", "price": "0.57"},
+        "0xEARLIER": {"size_matched": "5", "price": "0.55"},
+        "0xOTHER": {"size_matched": "5", "price": "0.55"},
+    })
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    slot = account.slot_executor(SPOT_PUSH_ID)
+    assert slot._entry_sold_size == 0.0
+    assert (await slot.record_settlement(True, HSLUG)).size == pytest.approx(5.26)
+
+
+@pytest.mark.asyncio
+async def test_boot_closes_a_row_whose_exits_already_sold_every_share(
+    journal_db, tmp_path: Path
+) -> None:
+    position_id = await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    async with journal_db.connect() as conn:
+        await conn.execute(
+            "UPDATE paper_positions SET realized_pnl_usd = -0.1 WHERE position_id = ?",
+            (position_id,),
+        )
+        await conn.commit()
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xE",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    for oid in ("0xS1", "0xS2"):
+        await journal_db.journal_live_order(
+            intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+            token_id=UP_TOKEN, price=0.55, size=5.26, clob_order_id=oid,
+            strategy_id=SPOT_PUSH_ID,
+        )
+    client = _orders_client({
+        "0xE": {"size_matched": "5.26", "price": "0.57"},
+        "0xS1": {"size_matched": "2", "price": "0.55"},
+        "0xS2": {"size_matched": "3.26", "price": "0.55"},
+    })
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    row = await _row(journal_db, position_id)
+    assert (row["state"], row["exit_reason"]) == ("closed", "RECONCILED_FLAT")
+    assert row["realized_pnl_usd"] == pytest.approx(-0.1)  # kept, never re-booked
+    assert account.gate.live_pnl == 0.0
+    assert account.slot_executor(SPOT_PUSH_ID).entry_block_reason(3.0) is None

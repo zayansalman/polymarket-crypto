@@ -1,0 +1,1 @@
+cd /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test && ls Kronos-upstream && find Kronos-upstream -iname "*.py" | grep -i model | head -20
