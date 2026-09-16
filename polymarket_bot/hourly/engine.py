@@ -188,20 +188,21 @@ async def _open_row_for(strategy_id: str, mode: str) -> bool:
             return bool((await cur.fetchone())["n"])
 
 
-async def _same_hour_position_id(strategy_id: str, start: int, mode: str) -> int | None:
-    """This strategy's position for this hour and mode, if the entry went through.
+async def _same_hour_open_position_id(strategy_id: str, start: int, mode: str) -> int | None:
+    """This strategy's still-open position for this hour and mode, if the entry went through.
 
-    Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed. Rows closed by
-    boot reconciliation (RECONCILED_*) had nothing real behind them, so they don't count.
+    Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed. Only open rows
+    count, in both modes (review by Claude session polymarket-crypto-95, 2026-09-16): a row
+    already closed (sold at Stop, or closed by boot reconciliation) can't show whether a live
+    order filled, so paper and live both leave that hour as an unfinished attempt.
     """
     from polymarket_bot import paper as P
 
     async with P.connect() as db:
         async with db.execute(
             "SELECT position_id FROM paper_positions "
-            "WHERE strategy_id = ? AND market_timeframe = ? AND window_start_ts = ? "
-            "AND mode = ? "
-            "AND (state = 'open' OR COALESCE(exit_reason, '') NOT LIKE 'RECONCILED_%') "
+            "WHERE state = 'open' AND strategy_id = ? AND market_timeframe = ? "
+            "AND window_start_ts = ? AND mode = ? "
             "ORDER BY position_id DESC LIMIT 1",
             (strategy_id, TIMEFRAME, start, mode),
         ) as cur:
@@ -362,7 +363,7 @@ async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool
             # recording MISSED or an unfinished attempt. Live also needs the strategy's
             # slot to track the entry, so an order whose outcome is unknown still ends
             # the hour as an unfinished attempt below.
-            position_id = await _same_hour_position_id(sid, start, mode)
+            position_id = await _same_hour_open_position_id(sid, start, mode)
             if position_id is not None and (
                 executor is None or executor.slot_executor(sid).tracks_position
             ):

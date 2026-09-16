@@ -334,6 +334,34 @@ async def test_live_entry_whose_entered_write_failed_is_linked_not_missed(
     assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
 
 
+async def _close_hourly_rows_as_stopped() -> None:
+    async with _db.connect() as conn:
+        await conn.execute("UPDATE paper_positions SET state = 'closed', exit_reason = "
+                           "'STOP_REQUEST' WHERE state = 'open'")
+        await conn.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["paper", "live"])
+async def test_entry_sold_at_stop_before_its_record_was_written_ends_the_same_way_in_both_modes(
+    test_db, monkeypatch, mode
+):
+    """Claude session polymarket-crypto-95 review, 2026-09-16: after Stop sells the position
+    and the bot restarts within the hour, paper and live record the same action."""
+    if mode == "live":
+        account = await _go_live(monkeypatch)
+    _fail_the_first_entered_write(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await _tick(monkeypatch, H + 30, _Venue())
+    await _close_hourly_rows_as_stopped()  # Stop sold the current-hour position
+    if mode == "live":
+        account.slots["hourly_mean_reversion"].tracks_position = False  # flat after the sale
+    await _tick(monkeypatch, H + 60, _Venue())
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert row["action"] == engine.UNFINISHED_ATTEMPT
+    assert len(await _positions()) == 1  # nothing entered again
+
+
 @pytest.mark.asyncio
 async def test_live_row_the_slot_does_not_track_stays_an_unfinished_attempt(
     test_db, monkeypatch

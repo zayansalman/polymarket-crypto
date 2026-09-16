@@ -1476,7 +1476,7 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
   - `STRATEGIES: tuple[tuple[str, str], ...] = (("hourly_mean_reversion", "hourly_mean_reversion_enabled"),)`
   - knobs `hourly_mean_reversion_enabled` (bool, default True) and `hourly_entry_deadline_seconds` (int, default 120, 10–1800)
   - `SUBMITTING`, `UNCERTAIN_PREFIX`, `UNFINISHED_ATTEMPT` decision-record actions for an entry attempt (Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
-  - `open_entries` links a `PENDING`/`SUBMITTING` hour to this strategy's same-hour position (not closed as `RECONCILED_*`) as `ENTERED`, before the deadline check; in live only while `LiveExecutor.tracks_position` is true for the strategy's slot (Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed)
+  - `open_entries` links a `PENDING`/`SUBMITTING` hour to this strategy's same-hour position that is still open (both modes; open-only rule from a review by Claude session polymarket-crypto-95, 2026-09-16) as `ENTERED`, before the deadline check; in live only while `LiveExecutor.tracks_position` is true for the strategy's slot (Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed)
   - `reset_caches() -> None`
   - `async build_snapshot(client, now: int | None = None) -> PaperSnapshot`
   - `async settle_due(client, snapshot, now: int) -> None`
