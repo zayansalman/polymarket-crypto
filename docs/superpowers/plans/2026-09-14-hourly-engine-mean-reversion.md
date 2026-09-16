@@ -39,6 +39,7 @@
 - **Market rules:**
   - Resolution: **Up iff the Binance BTCUSDT 1h candle close ≥ its open** (ties Up). The candle is the one whose open time equals the market's `eventStartTime`.
   - Hourly slug: `polymarket_exec/connectors/updown_quote.py:window_slug("btc", "1h", <tz-aware datetime>)`.
+  - Amended (Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision): the ET slug repeats on the November fall-back day (2026-11-01 05:00Z and 06:00Z are both `1am-et`). Hourly records are keyed by `window_start_ts` (UTC), and discovery falls back to the Gamma series `btc-up-or-down-hourly` (id 10114) by `eventStartTime` when the slug lookup misses.
 - **Binance endpoints:**
   - Spot: `config.BINANCE_API_BASE` + `/api/v3/klines`.
   - Perp: `https://fapi.binance.com/fapi/v1/klines`.
@@ -96,7 +97,7 @@
   - `@dataclass(frozen=True) HourMarket(slug: str, question: str, window_start_ts: int, up_token_id: str, down_token_id: str)`
   - `@dataclass(frozen=True) Candle(open_time_ms: int, open: float, high: float, low: float, close: float, volume: float, quote_volume: float, taker_buy_volume: float)`
   - `@dataclass(frozen=True) HourCandle(open: float, close: float, closed: bool)`
-  - `async discover(client, start_ts: int) -> HourMarket | None`
+  - `async discover(client, start_ts: int) -> HourMarket | None` (amended, Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision: if the slug lookup misses or its `eventStartTime` is another hour, query `/events?series_id=10114` by end date and take the market whose `eventStartTime` is `start_ts`; `HourMarket.slug` is the venue's own slug)
   - `async fetch_closed_candles(client, *, market: str, symbol: str, now_ms: int, limit: int) -> list[Candle]` (`market` is `"spot"` or `"perp"`)
   - `async fetch_hour_candle(client, start_ts: int, now_ms: int) -> HourCandle | None`
   - `async fetch_spot(client) -> float | None`
@@ -686,8 +687,10 @@ git commit -m "feat(hourly): Hourly Mean Reversion signal (frozen rule, stdlib m
 - Produces:
   - `paper_positions` columns `strategy_id TEXT`, `market_timeframe TEXT`, `window_start_ts INTEGER`
   - `async record_decision(*, strategy_id: str, window_slug: str, window_start_ts: int, side: str | None, reason: str, signal: dict, factors: dict, up_bid: float | None, up_ask: float | None, down_bid: float | None, down_ask: float | None, hour_open: float | None, mode: str, late: bool) -> bool` (sets `action` to `PENDING` when `side` is set and not late, `MISSED` when set and late, `NO_SIGNAL` when `side` is None; returns True iff a row was inserted)
-  - `async get_decision(window_slug: str, strategy_id: str) -> dict | None`
-  - `async set_action(window_slug: str, strategy_id: str, action: str, position_id: int | None = None, *, expected_action: str | None = None) -> None` (with `expected_action`, updates only while the row still holds that action; Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
+  - `async get_decision(window_start_ts: int, strategy_id: str, *, mode: str) -> dict | None`
+  - `async set_action(window_start_ts: int, strategy_id: str, action: str, position_id: int | None = None, *, mode: str, expected_action: str | None = None) -> None` (with `expected_action`, updates only while the row still holds that action; Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
+  - Amended (Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision): rows are unique on `(window_start_ts, strategy_id)`, not the slug; the code blocks below predate this.
+  - Amended (Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes): rows are unique on `(window_start_ts, strategy_id, mode)`. The engine works out the mode once per tick and passes it to `decide_hour`, `open_entries` and every row lookup, so a paper run and a live run in the same hour each act on their own row. The code blocks below predate this.
   - `async unsettled_windows(now: int) -> list[int]` (distinct `window_start_ts` with `settled_at IS NULL` and `window_start_ts + 3600 <= now`)
   - `async settle_window(window_start_ts: int, hour_open: float, hour_close: float) -> None`
 
@@ -798,15 +801,17 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
   hour_open REAL,
   action TEXT NOT NULL,
   position_id INTEGER,
-  mode TEXT,
+  mode TEXT NOT NULL,
   hour_close REAL,
   outcome_side TEXT,
   settled_at TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_window_strategy
-  ON hourly_strategy_context(window_slug, strategy_id);
-CREATE INDEX IF NOT EXISTS idx_hourly_context_start
-  ON hourly_strategy_context(window_start_ts);
+-- Amended: Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision.
+-- Amended: Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes.
+DROP INDEX IF EXISTS idx_hourly_context_window_strategy;
+DROP INDEX IF EXISTS idx_hourly_context_start_strategy;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy_mode
+  ON hourly_strategy_context(window_start_ts, strategy_id, mode);
 ```
 
 In `POSITION_COLUMN_MIGRATIONS`, after `"mode": "TEXT",` add:
@@ -2532,10 +2537,13 @@ In `force_close_open_positions`, replace everything from `if not positions:` to 
                 ):
                     closed += 1
         if hourly:
-            snapshot = await hourly_engine.build_snapshot(client)
+            # Amended: Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision.
+            now = _now()
+            current_start = hourly_market.hour_start(now)
+            snapshot = await hourly_engine.build_snapshot(client, now)
             for pos in hourly:
                 bid = _current_price_for_side(snapshot, pos["side"])
-                if pos["window_slug"] != snapshot.window_slug or bid is None:
+                if pos["window_start_ts"] != current_start or bid is None:
                     # A past hour can't be sold; it settles from Binance on the next start.
                     log.warning("force_close.hourly_left_for_settlement",
                                 position_id=pos["position_id"], window_slug=pos["window_slug"])

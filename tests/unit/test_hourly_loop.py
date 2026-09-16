@@ -73,6 +73,7 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
     account = MagicMock()
     account.slot_executor = MagicMock(return_value=slot)
     monkeypatch.setattr(paper, "_live_executor", account)
+    monkeypatch.setattr(paper, "_now", lambda: H + 30)  # Stop matches the hour by start time
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
@@ -186,6 +187,7 @@ async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeyp
     await _insert_open_hourly_row(H - 3600, "paper")
     monkeypatch.setattr(paper, "_live_executor", None)
     monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(side_effect=AssertionError))
+    monkeypatch.setattr(paper, "_now", lambda: H + 30)
     current_hour = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                                    up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=current_hour))
@@ -193,6 +195,7 @@ async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeyp
     assert await paper.force_close_open_positions("STOP_REQUEST") == 0
     assert await paper.count_open_positions() == 1
 
+    monkeypatch.setattr(paper, "_now", lambda: H - 3600 + 30)
     own_hour_no_bid = SimpleNamespace(window_slug=hm.slug_for(H - 3600), created_at="y",
                                       spot_price=1.0, up_best_bid=0.49, down_best_bid=None)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=own_hour_no_bid))
@@ -209,6 +212,7 @@ async def test_live_stop_never_sells_a_past_hour_row(test_db, monkeypatch) -> No
     account = MagicMock()
     account.slot_executor = MagicMock(return_value=slot)
     monkeypatch.setattr(paper, "_live_executor", account)
+    monkeypatch.setattr(paper, "_now", lambda: H + 30)
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
@@ -284,6 +288,7 @@ async def test_live_stop_partial_sell_then_restart_settles_only_the_shares_still
 
     # Operator Stop mid-hour: the exit SELL fills 2 of 5 before its timeout-cancel.
     monkeypatch.setattr(paper, "_live_executor", account)
+    monkeypatch.setattr(paper, "_now", lambda: H + 60)  # Stop matches the hour by its start
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.52, down_best_bid=0.48)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
@@ -313,3 +318,22 @@ async def test_live_stop_partial_sell_then_restart_settles_only_the_shares_still
     assert row["state"] == "closed"
     assert restarted.gate.live_pnl == pytest.approx(true_pnl, abs=1e-3)
     assert row["realized_pnl_usd"] == pytest.approx(true_pnl, abs=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_stop_matches_the_current_hour_by_start_time_not_slug(test_db, monkeypatch) -> None:
+    # Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision: on 2026-11-01 the
+    # 05:00Z and 06:00Z hours share one ET slug; a 05:00Z row is past once 06:00Z has begun.
+    first, second = 1_793_509_200, 1_793_512_800
+    await _insert_open_hourly_row(first, "paper")
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_now", lambda: second + 30)
+    same_slug_next_hour = SimpleNamespace(window_slug=hm.slug_for(second), created_at="y",
+                                          spot_price=1.0, up_best_bid=0.49, down_best_bid=0.50)
+    build = AsyncMock(return_value=same_slug_next_hour)
+    monkeypatch.setattr(engine, "build_snapshot", build)
+
+    assert await paper.force_close_open_positions("STOP_REQUEST") == 0
+
+    assert await paper.count_open_positions() == 1
+    assert build.await_args.args[1:] == (second + 30,)

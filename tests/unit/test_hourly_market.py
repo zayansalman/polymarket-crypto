@@ -72,6 +72,66 @@ async def test_discover_rejects_wrong_event_start_and_missing_market() -> None:
         assert (await hm.discover(client, H)).up_token_id == "111"  # field absent: slug is enough
 
 
+
+# Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision.
+FIRST_1AM_ET = 1_793_509_200  # 2026-11-01 05:00Z = 1am EDT
+SECOND_1AM_ET = 1_793_512_800  # 2026-11-01 06:00Z = 1am EST
+ONE_AM_SLUG = "bitcoin-up-or-down-november-1-2026-1am-et"
+
+
+def test_both_1am_et_hours_on_fall_back_day_get_the_same_slug() -> None:
+    assert hm.slug_for(FIRST_1AM_ET) == hm.slug_for(SECOND_1AM_ET) == ONE_AM_SLUG
+
+
+def _market(slug: str, start: int, *, hours: int = 1) -> dict:
+    iso = hm.datetime.fromtimestamp(start, hm.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = hm.datetime.fromtimestamp(start + hours * 3600, hm.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"slug": slug, "question": slug, "eventStartTime": iso, "endDate": end,
+            "outcomes": json.dumps(["Down", "Up"]),
+            "clobTokenIds": json.dumps([f"down-{start}", f"up-{start}"])}
+
+
+@pytest.mark.asyncio
+async def test_discover_finds_the_second_1am_et_hour_by_event_start_time() -> None:
+    second_slug = "stand-in-slug-for-the-06-00z-hour-on-2026-11-01"
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.endswith("/markets"):  # the ET slug holds the 05:00Z hour
+            return httpx.Response(200, json=[_market(ONE_AM_SLUG, FIRST_1AM_ET)])
+        return httpx.Response(200, json=[
+            {"slug": ONE_AM_SLUG, "markets": [_market(ONE_AM_SLUG, FIRST_1AM_ET)]},
+            # Same start, zero-length: the shape Gamma gave march-8-2026-1am-et.
+            {"slug": "zero-length", "markets": [_market("zero-length", SECOND_1AM_ET, hours=0)]},
+            {"slug": second_slug, "markets": [_market(second_slug, SECOND_1AM_ET)]},
+        ])
+
+    async with _client(handle) as client:
+        m = await hm.discover(client, SECOND_1AM_ET)
+
+    assert m == hm.HourMarket(second_slug, second_slug, SECOND_1AM_ET,
+                              f"up-{SECOND_1AM_ET}", f"down-{SECOND_1AM_ET}")
+    events = seen[1]
+    assert str(events.url).startswith(f"{_config.POLYMARKET_GAMMA_API}/events")
+    assert events.url.params["series_id"] == hm.BTC_HOURLY_SERIES_ID
+    assert events.url.params["end_date_min"] == "2026-11-01T06:00:00Z"
+    assert events.url.params["end_date_max"] == "2026-11-01T08:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_discover_returns_none_when_the_series_has_no_market_for_the_hour() -> None:
+    # 2025-11-02: Gamma listed 12am-et (04:00Z) and 2am-et (07:00Z), nothing for either 1am hour.
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/markets"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[
+            {"slug": "2am", "markets": [_market("2am", SECOND_1AM_ET + 3600)]}])
+
+    async with _client(handle) as client:
+        assert await hm.discover(client, SECOND_1AM_ET) is None
+
+
 @pytest.mark.asyncio
 async def test_fetch_closed_candles_drops_forming_and_routes_perp() -> None:
     seen: list[str] = []

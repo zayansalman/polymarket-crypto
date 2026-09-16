@@ -65,6 +65,7 @@ from polymarket_exec.execution.gate import (
     build_gate_from_config,
 )
 from polymarket_bot.hourly import engine as hourly_engine
+from polymarket_bot.hourly import market as hourly_market
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
 from polymarket_bot.shadow.fees import taker_fee_per_share
@@ -597,13 +598,19 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
                 ):
                     closed += 1
         if hourly:
-            snapshot = await hourly_engine.build_snapshot(client)
+            # Match the current hour by its UTC start, not its slug: on the November fall-back
+            # day two hours share one ET slug (Claude, 2026-09-15, branch-review finding
+            # dst-fallback-slug-collision).
+            now = _now()
+            current_start = hourly_market.hour_start(now)
+            snapshot = await hourly_engine.build_snapshot(client, now)
             for pos in hourly:
                 bid = _current_price_for_side(snapshot, pos["side"])
-                if pos["window_slug"] != snapshot.window_slug or bid is None:
+                if pos["window_start_ts"] != current_start or bid is None:
                     # A past hour can't be sold; it settles from Binance on the next start.
                     log.warning("force_close.hourly_left_for_settlement",
-                                position_id=pos["position_id"], window_slug=pos["window_slug"])
+                                position_id=pos["position_id"], window_slug=pos["window_slug"],
+                                window_start_ts=pos["window_start_ts"])
                     continue
                 if await _close_position(pos, snapshot, bid, exit_reason):
                     closed += 1
