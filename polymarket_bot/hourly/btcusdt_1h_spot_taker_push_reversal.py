@@ -121,12 +121,22 @@ def decide(spot: list[Candle], perp: list[Candle]) -> Decision:
     }
     if s.direction == 0:
         return Decision(None, "no signal: last hour was flat", signal)
-    if s.fz is None or s.fz <= SPOT_FZ_MIN:
-        return Decision(None, f"no signal: spot push {s.fz} not above {SPOT_FZ_MIN}", signal)
-    if p.fz is None or p.fz > PERP_FZ_MAX:
-        return Decision(None, f"no signal: perps confirmed the push ({p.fz})", signal)
+    if s.fz is None:
+        return Decision(None, "no signal: spot flow push undefined (zero volume or flat window)",
+                        signal)
+    if s.fz <= SPOT_FZ_MIN:
+        return Decision(None, f"no signal: spot push {s.fz:.2f} not above {SPOT_FZ_MIN:.2f}",
+                        signal)
+    if p.fz is None:
+        return Decision(None, "no signal: perp flow push undefined (zero volume or flat window)",
+                        signal)
+    if p.fz > PERP_FZ_MAX:
+        return Decision(None, f"no signal: perps confirmed the push ({p.fz:.2f} above "
+                              f"{PERP_FZ_MAX:.2f})", signal)
     if s.clv is None or s.clv * s.direction <= CLV_MIN:
-        return Decision(None, f"no signal: did not close at the extreme (CLV {s.clv})", signal)
+        location = "undefined (zero range)" if s.clv is None else f"{s.clv:+.2f}"
+        return Decision(None, f"no signal: did not close at the extreme (close location "
+                              f"{location}, needs beyond ±{CLV_MIN:.2f})", signal)
     side = "Down" if s.direction > 0 else "Up"
     return Decision(
         side,

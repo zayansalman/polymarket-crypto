@@ -1910,6 +1910,17 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
         )
     else:
         header = "BTC paper loop running. No real orders are placed.\n\n"
+    if _timeframe == hourly_engine.TIMEFRAME:
+        # The 5m line's fair value, edge and confidence don't exist for the hourly
+        # strategies; show what they actually use (Claude, 2026-09-16, paper smoke run).
+        return header + (
+            f"Hour: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
+            f"Binance spot: ${snapshot.spot_price:,.2f} vs hour open "
+            f"${snapshot.reference_price:,.2f}\n"
+            f"Up ask: {_fmt3(snapshot.up_best_ask)}; Down ask: {_fmt3(snapshot.down_best_ask)}\n"
+            f"Decisions: {snapshot.reason}\n"
+            f"{_feed_label(snapshot.feed_source)}"
+        )
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
@@ -1932,6 +1943,11 @@ _FEED_SOURCE_LABELS = {
     "binance_shape_fallback": "Binance (vol shape)",
     "binance_public": "Binance public",
     "binance": "Binance",
+    # Hourly BTC loop (Claude, 2026-09-16, found in the paper smoke run): spot from Binance
+    # REST, the hour's open from the Binance 1h kline, no volatility input.
+    "binance_rest": "Binance REST",
+    "binance_kline": "Binance 1h kline",
+    "none": "not used",
     "clob": "CLOB",
     "unavailable": "unavailable",
 }
@@ -1971,7 +1987,11 @@ def _feed_label(feed_source: str) -> str:
 
     spot_src = parts.get("spot", "") or ""
     ref_src = parts.get("ref", "") or ""
-    if spot_src.startswith("chainlink") and ref_src.startswith("chainlink"):
+    if ref_src == "binance_kline":
+        # Hourly BTC markets settle on the Binance BTCUSDT 1h candle, so Binance is the
+        # settlement source there, not a risk (Claude, 2026-09-16, paper smoke run).
+        line += " (settles on the Binance 1h candle)"
+    elif spot_src.startswith("chainlink") and ref_src.startswith("chainlink"):
         line += " (settlement-aligned)"
     elif not spot_src.startswith("chainlink"):
         line += " (⚠ spot off Chainlink — settlement risk)"

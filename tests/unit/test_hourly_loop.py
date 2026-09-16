@@ -611,3 +611,21 @@ async def test_paper_1h_tick_leaves_an_open_rolled_live_5m_row_open(test_db, mon
     make_connector.assert_not_called()
     gate.record_realized_pnl.assert_not_awaited()
     assert await paper.count_open_positions(mode="live") == 1
+
+
+def test_hourly_detail_line_shows_what_the_hourly_strategies_use(monkeypatch) -> None:
+    """Claude, 2026-09-16, paper smoke run: no 5m fair value/edge and no false settlement
+    warning while the loop runs BTC 1h."""
+    monkeypatch.setattr(paper, "_timeframe", engine.TIMEFRAME)
+    monkeypatch.setattr(paper, "_live_executor", None)
+    snap = SimpleNamespace(
+        window_slug=SLUG, remaining_seconds=1800, spot_price=75712.04, reference_price=75768.0,
+        up_best_ask=0.43, down_best_ask=0.58, signal_side=None,
+        reason="btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal: NO_SIGNAL",
+        feed_source="spot=binance_rest;ref=binance_kline;vol=none;quotes=clob",
+    )
+    detail = paper._detail_from_snapshot(snap)
+    assert "fair Up" not in detail and "settlement risk" not in detail
+    assert f"Hour: {SLUG} (1800s left)" in detail
+    assert "Up ask: 0.430; Down ask: 0.580" in detail
+    assert "Decisions: btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal" in detail

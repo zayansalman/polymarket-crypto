@@ -76,3 +76,10 @@ class TestFeedLabel:
         out = _feed_label("spot=chainlink_ws;ref=chainlink_rest;vol=chainlink_ws")
         assert "spot Chainlink WS" in out
         assert "quotes" not in out
+
+
+def test_hourly_feed_line_names_the_binance_candle_as_the_settlement_source() -> None:
+    """Claude, 2026-09-16, paper smoke run: hourly markets settle on the Binance 1h candle."""
+    out = _feed_label("spot=binance_rest;ref=binance_kline;vol=none;quotes=clob")
+    assert out == ("Feed: spot Binance REST · ref Binance 1h kline · vol not used · quotes CLOB "
+                   "(settles on the Binance 1h candle)")
