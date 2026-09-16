@@ -1,0 +1,1 @@
+K=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream; grep -rn "einops\|rearrange\|repeat(" $K/model/*.py | head; grep -n "^class \|def predict\|def auto_regressive_inference\|def generate\|sample_count\|def from_pretrained\|cuda\|device" $K/model/kronos.py | head -60; wc -l $K/model/*.py

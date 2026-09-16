@@ -28,3 +28,6 @@ archive/
 *.egg-info/
 
 .env.bak
+
+# Hourly BTC research reruns download public market data here (research/hourly_btc_2026_09/README.md).
+research/hourly_btc_2026_09/data/

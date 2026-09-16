@@ -1,0 +1,81 @@
+discovery 2023-10-19 15:00:00 -> 2025-10-18 13:00:00 n=17519 | up 51.0% | reversal 52.6%
+validation 2025-10-18 14:00:00 -> 2026-09-13 13:00:00 n=7920 | up 49.9% | reversal 52.3%
+
+=== 1+2) SLICES: FDR in discovery, then validation; stability across all cells
+
+[hour_utc / up] cells=24 | FDR survivors in discovery: 2 | discovery-vs-validation rank corr +0.13 (p=0.55)
+   cell 0: discovery 45.3% [41.8%,49.0%] n=730 p=0.0027 | validation 52.7% [47.3%,58.1%] n=330 | FLIPPED
+   cell 17: discovery 57.7% [54.1%,61.2%] n=730 p=0.0003 | validation 49.4% [44.0%,54.8%] n=330 | FLIPPED
+
+[hour_utc / rev_win] cells=24 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr -0.02 (p=0.91)
+[hour_utc / move size, positive control] rank corr +0.89
+
+[hour_et / up] cells=24 | FDR survivors in discovery: 2 | discovery-vs-validation rank corr -0.10 (p=0.63)
+   cell 13: discovery 56.6% [53.0%,60.1%] n=730 p=0.0024 | validation 51.2% [45.8%,56.6%] n=330 | same direction, not significant
+   cell 19: discovery 45.8% [42.2%,49.4%] n=730 p=0.0055 | validation 53.0% [47.6%,58.3%] n=330 | FLIPPED
+
+[hour_et / rev_win] cells=24 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr -0.23 (p=0.29)
+[hour_et / move size, positive control] rank corr +0.82
+
+[weekday / up] cells=7 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +0.81 (p=0.03)
+
+[weekday / rev_win] cells=7 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +0.43 (p=0.34)
+[weekday / move size, positive control] rank corr +0.75
+
+[weekend / up] cells=2 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr -1.00 (p=nan)
+
+[weekend / rev_win] cells=2 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +1.00 (p=nan)
+[weekend / move size, positive control] rank corr +1.00
+
+[funding / up] cells=2 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +1.00 (p=nan)
+
+[funding / rev_win] cells=2 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +1.00 (p=nan)
+[funding / move size, positive control] rank corr +1.00
+
+[how / up] cells=168 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +0.02 (p=0.82)
+
+[how / rev_win] cells=168 | FDR survivors in discovery: 0 | discovery-vs-validation rank corr +0.00 (p=0.96)
+[how / move size, positive control] rank corr +0.84
+
+=== 3) CLUSTERING (profiles from discovery only)
+
+[24 UTC hours] k-means best k=5 (silhouette 0.33); pairwise agreement with Ward clustering 93%
+   cluster 0: [0, 1, 7, 19, 23]
+      up      disc 48.1% [46.4%,49.7%] n=3650 | val 51.2% [48.7%,53.6%] n=1650
+      reversal disc 51.7% [50.0%,53.3%] n=3650 | val 53.2% [50.7%,55.5%] n=1650
+      avg move disc 0.327% | val 0.285%
+   cluster 1: [2, 3, 4, 5, 6, 9, 10, 11, 22]
+      up      disc 51.7% [50.5%,52.9%] n=6570 | val 49.7% [47.9%,51.5%] n=2970
+      reversal disc 51.8% [50.6%,53.0%] n=6570 | val 50.9% [49.1%,52.7%] n=2970
+      avg move disc 0.277% | val 0.267%
+   cluster 2: [12, 16, 20]
+      up      disc 50.1% [48.0%,52.2%] n=2190 | val 47.7% [44.6%,50.8%] n=990
+      reversal disc 55.2% [53.1%,57.2%] n=2190 | val 52.1% [49.0%,55.2%] n=990
+      avg move disc 0.347% | val 0.312%
+   cluster 3: [8, 17, 18, 21]
+      up      disc 55.0% [53.2%,56.8%] n=2920 | val 50.5% [47.8%,53.2%] n=1320
+      reversal disc 53.9% [52.1%,55.7%] n=2920 | val 53.8% [51.1%,56.5%] n=1320
+      avg move disc 0.351% | val 0.315%
+   cluster 4: [13, 14, 15]
+      up      disc 48.9% [46.8%,51.0%] n=2189 | val 49.9% [46.8%,53.0%] n=990
+      reversal disc 52.4% [50.3%,54.5%] n=2189 | val 53.3% [50.2%,56.4%] n=990
+      avg move disc 0.490% | val 0.461%
+
+[168 hour x weekday cells] k-means best k=2 (silhouette 0.29); pairwise agreement with Ward clustering 68%
+   cluster 0: 125 cells
+      up      disc 51.3% [50.4%,52.1%] n=13036 | val 50.3% [49.0%,51.5%] n=5899
+      reversal disc 52.8% [52.0%,53.7%] n=13036 | val 52.1% [50.8%,53.3%] n=5899
+      avg move disc 0.280% | val 0.262%
+   cluster 1: 43 cells
+      up      disc 50.0% [48.6%,51.5%] n=4483 | val 48.9% [46.8%,51.1%] n=2021
+      reversal disc 52.0% [50.5%,53.5%] n=4483 | val 53.0% [50.9%,55.2%] n=2021
+      avg move disc 0.496% | val 0.446%
+
+=== 4) HONEST SKIP-HOURS TEST (rules picked on discovery, applied to validation)
+[hour_utc] bet the discovery-favored side in top-quartile cells (6 cells): discovery 54.8% [53.4%,56.3%] n=4380 | validation 50.5% [48.3%,52.7%] n=1980
+[hour_utc] reversal bet only in top-quartile reversal cells (7 cells): discovery 54.5% [53.1%,55.9%] n=5110 | validation 52.9% [50.8%,54.9%] n=2310 | vs reversal every hour in validation 52.3% [51.2%,53.4%] n=7920
+[hour_et] bet the discovery-favored side in top-quartile cells (6 cells): discovery 54.3% [52.8%,55.7%] n=4380 | validation 49.5% [47.3%,51.7%] n=1980
+[hour_et] reversal bet only in top-quartile reversal cells (6 cells): discovery 54.5% [53.0%,55.9%] n=4378 | validation 51.6% [49.4%,53.8%] n=1979 | vs reversal every hour in validation 52.3% [51.2%,53.4%] n=7920
+[how] bet the discovery-favored side in top-quartile cells (48 cells): discovery 58.3% [57.0%,59.7%] n=5015 | validation 50.9% [48.8%,52.9%] n=2260
+[how] reversal bet only in top-quartile reversal cells (43 cells): discovery 59.0% [57.5%,60.4%] n=4483 | validation 52.2% [50.1%,54.4%] n=2031 | vs reversal every hour in validation 52.3% [51.2%,53.4%] n=7920
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

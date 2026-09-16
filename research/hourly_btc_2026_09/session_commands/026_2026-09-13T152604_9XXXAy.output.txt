@@ -1,0 +1,39 @@
+done:      392/500
+01:04:08 /Li
+hours tested: 392 | 2025-10-18 15:00:00 -> 2026-06-27 14:00:00 | paths/hour 50 | top_p 1.0
+actual up rate: 50.0%
+baseline 'repeat last hour': 176/392 = 44.9% (40.0%-49.8%)
+
+== P(up) = paths closing above the REAL open
+  hit rate 197/382 = 51.6%  (95% range 46.6%-56.5%; 10 hours at exactly 50% skipped)
+  Brier 0.2983 vs coin flip 0.2500 | log loss 0.8503 vs coin flip 0.6931
+  average P(up) 50.0% vs actual up rate 50.0%
+  calibration (model said -> actually up):
+    0%-20%:  63 hours, said 11%, up 43%
+    20%-40%:  77 hours, said 30%, up 51%
+    40%-50%:  49 hours, said 43%, up 51%
+    50%-60%:  41 hours, said 54%, up 49%
+    60%-80%: 103 hours, said 69%, up 50%
+    80%-100%:  59 hours, said 88%, up 56%
+  confident only (>= 60% either way): 165/314 = 52.5% (47.0%-58.0%)
+  confident only (>= 70% either way): 120/221 = 54.3% (47.7%-60.7%)
+
+== P(up) = paths closing above their OWN predicted open
+  hit rate 196/377 = 52.0%  (95% range 47.0%-57.0%; 15 hours at exactly 50% skipped)
+  Brier 0.2640 vs coin flip 0.2500 | log loss 0.7299 vs coin flip 0.6931
+  average P(up) 48.5% vs actual up rate 50.0%
+  calibration (model said -> actually up):
+    0%-20%:  25 hours, said 12%, up 40%
+    20%-40%:  77 hours, said 31%, up 45%
+    40%-50%: 102 hours, said 44%, up 53%
+    50%-60%:  81 hours, said 54%, up 49%
+    60%-80%:  92 hours, said 67%, up 50%
+    80%-100%:  15 hours, said 85%, up 73%
+  confident only (>= 60% either way): 122/228 = 53.5% (47.0%-59.9%)
+  confident only (>= 70% either way): 60/109 = 55.0% (45.7%-64.1%)
+
+== blurry prices
+  model's predicted open vs real open: median offset $+9, typical size $98
+  tokenizer round-trip, close price error: typical $96
+  tokenizer round-trip, hourly move error: typical $100 vs typical real hourly move $253
+  forecast time per hour: 9.7s

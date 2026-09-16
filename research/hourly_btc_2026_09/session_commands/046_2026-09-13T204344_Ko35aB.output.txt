@@ -1,0 +1,14 @@
+sanity: 1m-built hour open/close match hourly klines: 100.0000% of 25627 hours
+cutoffs (discovery): spot fz>1.20 perp fz>1.24 fz15>1.22 | rows 25320
+
+rule                                     | discovery 2023-25                  | validation 2025-26                 | share of val hours | 60% bar
+R0 existing SIG (reference)              | 56.1% [54.4%,57.7%] n=3480         | 53.5% [51.0%,56.0%] n=1539         |  19.4% | False
+R1 close at extreme                      | 55.5% [54.0%,57.1%] n=3952         | 53.2% [50.7%,55.7%] n=1529         |  19.3% | False
+R2 last-15m flow-pushed                  | 55.2% [53.5%,56.8%] n=3480         | 51.8% [49.2%,54.3%] n=1501         |  18.9% | False
+R3 SIG + last15 continued with flow      | 58.2% [56.2%,60.2%] n=2266         | 54.1% [50.9%,57.3%] n=937          |  11.8% | False
+R4 SIG + last15 already reversing        | 53.1% [50.2%,56.1%] n=1090         | 53.1% [48.9%,57.3%] n=529          |   6.7% | False
+R5 SPOT_ONLY + close at extreme          | 57.7% [53.4%,61.9%] n=515          | 57.3% [50.7%,63.6%] n=220          |   2.8% | False
+R6 R2 + SIG same direction               | 58.8% [56.0%,61.5%] n=1224         | 52.9% [48.5%,57.2%] n=505          |   6.4% | False
+R7 R1 + SPOT_ONLY                        | 57.7% [53.4%,61.9%] n=515          | 57.3% [50.7%,63.6%] n=220          |   2.8% | False
+   SPOT_ONLY (reference)                 | 55.2% [53.0%,57.3%] n=2125         | 54.4% [51.3%,57.4%] n=1041         |  13.1% | False
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

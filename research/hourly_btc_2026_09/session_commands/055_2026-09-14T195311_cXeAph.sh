@@ -1,0 +1,1 @@
+S=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test; ls -la $S | head -60; head -40 $S/PREREG_orderflow.md; echo ======; head -60 $S/PREREG_perp_selective.md

@@ -1,0 +1,33 @@
+1) DECAY OVER TIME - flow-pushed move -> bet reversal, by half-year
+   2023-H2: flow-pushed reversal 60.3% [55.0%,65.4%] n=335 | against strong flow 59.6% [54.1%,64.8%] n=324 | all-hours reversal 56.1%
+   2024-H1: flow-pushed reversal 56.9% [53.7%,60.1%] n=912 | against strong flow 55.9% [52.6%,59.1%] n=897 | all-hours reversal 53.1%
+   2024-H2: flow-pushed reversal 58.2% [55.0%,61.4%] n=895 | against strong flow 57.4% [54.2%,60.7%] n=893 | all-hours reversal 53.4%
+   2025-H1: flow-pushed reversal 54.8% [51.4%,58.1%] n=862 | against strong flow 54.5% [51.2%,57.8%] n=882 | all-hours reversal 51.4%
+   2025-H2: flow-pushed reversal 52.3% [48.9%,55.6%] n=838 | against strong flow 53.2% [49.9%,56.5%] n=857 | all-hours reversal 51.3%
+   2026-H1: flow-pushed reversal 52.0% [48.6%,55.4%] n=848 | against strong flow 52.2% [48.9%,55.5%] n=856 | all-hours reversal 52.1%
+   2026-H2: flow-pushed reversal 56.1% [50.9%,61.2%] n=351 | against strong flow 55.1% [50.0%,60.0%] n=376 | all-hours reversal 52.3%
+   linear trend in win rate: -2.42 pts per year (95% CI -4.06 to -0.78)
+   trend-implied win rate now: 51.8%
+   trend-implied win rate in 0.5 yr: 50.6%
+   trend-implied win rate in 1 yr: 49.4%
+
+2) DECAY OVER HOURS - flow-pushed move at hour H-k, does hour H go the other way?
+   k=1 2023-25: 56.1% [54.5%,57.8%] n=3501 |   k=1 2025-26: 53.6% [51.1%,56.1%] n=1540
+   k=2 2023-25: 52.8% [51.1%,54.4%] n=3501 |   k=2 2025-26: 53.6% [51.1%,56.1%] n=1540
+   k=3 2023-25: 51.1% [49.5%,52.8%] n=3500 |   k=3 2025-26: 48.1% [45.6%,50.6%] n=1541
+   k=4 2023-25: 50.9% [49.3%,52.6%] n=3500 |   k=4 2025-26: 48.8% [46.3%,51.3%] n=1541
+   k=5 2023-25: 51.1% [49.4%,52.7%] n=3500 |   k=5 2025-26: 52.0% [49.5%,54.5%] n=1540
+   k=6 2023-25: 49.3% [47.6%,50.9%] n=3500 |   k=6 2025-26: 47.4% [44.9%,49.9%] n=1539
+
+3) UP vs DOWN - which side carries it
+   2023-25: base P(up) 50.9%
+      after flow-pushed DOWN hour -> bet UP:   win 56.8% [54.5%,59.1%] n=1751 | other down hours P(up) 52.8%
+      after flow-pushed UP hour   -> bet DOWN: win 55.4% [53.1%,57.7%] n=1750 | other up hours P(down) 50.7%
+   2025-26 unseen: base P(up) 49.9%
+      after flow-pushed DOWN hour -> bet UP:   win 52.8% [49.3%,56.3%] n=773 | other down hours P(up) 52.1%
+      after flow-pushed UP hour   -> bet DOWN: win 54.4% [50.8%,57.9%] n=767 | other up hours P(down) 51.9%
+
+4) WITH KRONOS (500 unseen hours; small samples)
+   flow signal fired on 85 of 500 hours; flow bet overall 52.9% [42.4%,63.2%] n=85
+   ...Kronos agrees   49.0% [35.6%,62.5%] n=49
+   ...Kronos disagrees 57.6% [40.8%,72.8%] n=33

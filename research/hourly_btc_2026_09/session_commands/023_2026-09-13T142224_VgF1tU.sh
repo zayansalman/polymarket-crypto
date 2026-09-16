@@ -1,0 +1,1 @@
+B=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182; cat $B/tasks/bvo109t3i.output; wc -l $B/scratchpad/kronos-test/backtest_results.jsonl 2>/dev/null; ps -axo etime,rss,command | grep "[b]acktest.py" | cut -c1-80; sysctl -n vm.swapusage

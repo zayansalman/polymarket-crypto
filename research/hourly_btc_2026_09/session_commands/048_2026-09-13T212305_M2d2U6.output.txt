@@ -1,0 +1,17 @@
+151 {'JOBS': 38, 'CPI': 38, 'PCE': 38, 'FOMC_STATEMENT': 26, 'FOMC_PRESS': 11}
+macro calendar loaded: 151 rows
+==== DISCOVERY 2023-25 | SIG all 56.1% [54.5%,57.8%] n=3500  | ALT all 55.6% [53.9%,57.2%] n=3500  | P(up) 50.9% | move 0.335%
+  CPI or jobs report hour                        on  | SIG 75.0% [40.9%,92.9%] n=8     | ALT 66.7% [35.4%,87.9%] n=9     | P(up) 60.9% | move 0.704%
+  CPI or jobs report hour                        off | SIG 56.1% [54.4%,57.7%] n=3492  | ALT 55.6% [53.9%,57.2%] n=3491  | P(up) 50.9% | move 0.334%
+  FOMC statement hour                            on  | SIG       n=0           | ALT  0.0% [0.0%,79.3%] n=1     | P(up) 50.0% | move 0.999%
+  FOMC statement hour                            off | SIG 56.1% [54.5%,57.8%] n=3500  | ALT 55.6% [54.0%,57.3%] n=3499  | P(up) 50.9% | move 0.334%
+  any scheduled macro hour                       on  | SIG 72.7% [43.4%,90.3%] n=11    | ALT 58.3% [32.0%,80.7%] n=12    | P(up) 58.1% | move 0.668%
+  any scheduled macro hour                       off | SIG 56.1% [54.4%,57.7%] n=3489  | ALT 55.6% [53.9%,57.2%] n=3488  | P(up) 50.9% | move 0.333%
+==== VALIDATION 2025-26 | SIG all 53.5% [51.0%,56.0%] n=1539  | ALT all 53.8% [51.3%,56.2%] n=1584  | P(up) 49.9% | move 0.309%
+  CPI or jobs report hour                        on  | SIG  0.0% [0.0%,65.8%] n=2     | ALT  0.0% [0.0%,56.2%] n=3     | P(up) 59.1% | move 0.614%
+  CPI or jobs report hour                        off | SIG 53.6% [51.1%,56.1%] n=1537  | ALT 53.9% [51.4%,56.3%] n=1581  | P(up) 49.9% | move 0.308%
+  FOMC statement hour                            on  | SIG  0.0% [0.0%,79.3%] n=1     | ALT  0.0% [0.0%,79.3%] n=1     | P(up) 28.6% | move 0.635%
+  FOMC statement hour                            off | SIG 53.6% [51.1%,56.1%] n=1538  | ALT 53.8% [51.4%,56.3%] n=1583  | P(up) 50.0% | move 0.308%
+  any scheduled macro hour                       on  | SIG  0.0% [0.0%,56.2%] n=3     | ALT  0.0% [0.0%,49.0%] n=4     | P(up) 53.8% | move 0.542%
+  any scheduled macro hour                       off | SIG 53.6% [51.1%,56.1%] n=1536  | ALT 53.9% [51.5%,56.4%] n=1580  | P(up) 49.9% | move 0.307%
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

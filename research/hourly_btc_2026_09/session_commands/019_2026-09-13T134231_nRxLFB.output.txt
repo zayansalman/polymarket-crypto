@@ -1,0 +1,2 @@
+Command did not complete within its 600s timeout and was moved to the background (ID: br57w1w1f). Output is being written to: /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/tasks/br57w1w1f.output. You will be notified when it completes. To check interim output, use Read on that file path.
+Session cwd remains /Users/zayankhan/projects/polymarket-crypto; directory changes made by the backgrounded command do not apply to subsequent commands.

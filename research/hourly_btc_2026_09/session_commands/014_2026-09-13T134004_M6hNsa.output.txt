@@ -1,0 +1,38 @@
+Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 2 files:  50%|█████     | 1/2 [00:00<00:00,  1.06it/s]Fetching 2 files: 100%|██████████| 2/2 [00:03<00:00,  2.17s/it]Fetching 2 files: 100%|██████████| 2/2 [00:03<00:00,  1.98s/it]
+ok lc2004/kronos_tokenizer_base_BTCUSDT_1h_finetune /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/weights/tokenizer
+Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]Fetching 2 files:  50%|█████     | 1/2 [00:00<00:00,  1.34it/s]Fetching 2 files: 100%|██████████| 2/2 [00:29<00:00, 17.22s/it]Fetching 2 files: 100%|██████████| 2/2 [00:29<00:00, 14.75s/it]
+ok lc2004/kronos_base_model_BTCUSDT_1h_finetune /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/weights/model
+390M	/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/weights/model
+ 15M	/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/weights/tokenizer
+{
+  "attn_dropout_p": 0.0,
+  "d_model": 832,
+  "ff_dim": 2048,
+  "ffn_dropout_p": 0.2,
+  "learn_te": true,
+  "n_heads": 16,
+  "n_layers": 12,
+  "resid_dropout_p": 0.2,
+  "s1_bits": 10,
+  "s2_bits": 10,
+  "token_dropout_p": 0.0
+}
+{
+  "attn_dropout_p": 0.0,
+  "beta": 0.05,
+  "d_in": 6,
+  "d_model": 256,
+  "ff_dim": 512,
+  "ffn_dropout_p": 0.0,
+  "gamma": 1.1,
+  "gamma0": 1.0,
+  "group_size": 4,
+  "n_dec_layers": 4,
+  "n_enc_layers": 4,
+  "n_heads": 4,
+  "resid_dropout_p": 0.0,
+  "s1_bits": 10,
+  "s2_bits": 10,
+  "zeta": 0.05
+}

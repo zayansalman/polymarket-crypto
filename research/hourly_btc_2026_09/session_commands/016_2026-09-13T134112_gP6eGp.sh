@@ -1,0 +1,1 @@
+K=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/model; sed -n 389,480p $K/kronos.py; sed -n 519,662p $K/kronos.py | grep -v "^\s*#" | grep -v '^\s*$'; grep -n "def calc_time_stamps" -A 12 $K/kronos.py; grep -n "def sample_from_logits" -A 25 $K/kronos.py | head -30

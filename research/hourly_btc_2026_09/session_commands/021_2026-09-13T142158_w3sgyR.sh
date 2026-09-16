@@ -1,0 +1,1 @@
+B=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test; cd "$B" && python3 backtest.py --hours 500 --paths 50 --chunk 25 --top_p 1.0 2>&1 | grep -v -i "warning\|Loading weights" | tee backtest.log
