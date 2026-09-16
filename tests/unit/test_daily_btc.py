@@ -129,3 +129,31 @@ def test_fade_bets_against_the_three_day_move():
     assert fade.decide(None, 100.0).side is None
     assert fade.decide(100.0, 0.0).side is None
     assert (fade.LOOKBACK_S, fade.DECISION_LEAD_S) == (259_200, 300)
+
+
+def _utc(y: int, mo: int, d: int, h: int, mi: int = 0, s: int = 0) -> int:
+    return int(datetime(y, mo, d, h, mi, s, tzinfo=UTC).timestamp())
+
+
+def test_current_window_is_the_latest_noon_at_or_before_now() -> None:
+    # 2026-09-16 12:00 EDT = 16:00 UTC. Market dated Sep 17 covers Sep 16 noon -> Sep 17 noon.
+    at_noon = dm.current_window(_utc(2026, 9, 16, 16))
+    assert at_noon.market_date == date(2026, 9, 17)
+    assert at_noon.reference_ts == _utc(2026, 9, 16, 16)
+    before = dm.current_window(_utc(2026, 9, 16, 15, 59, 59))
+    assert before.market_date == date(2026, 9, 16)
+    winter = dm.current_window(_utc(2026, 1, 15, 17, 0, 5))  # 12:00 EST = 17:00 UTC
+    assert winter.reference_ts == _utc(2026, 1, 15, 17)
+
+
+def test_current_window_across_fall_back_is_25_hours() -> None:
+    w = dm.current_window(_utc(2026, 10, 31, 16, 0, 30))
+    assert w.reference_ts == _utc(2026, 10, 31, 16)   # noon EDT
+    assert w.settle_ts == _utc(2026, 11, 1, 17)       # noon EST
+    assert w.settle_ts - w.reference_ts == 25 * 3600
+
+
+def test_payout_pays_half_on_a_tie() -> None:
+    assert dm.payout("Up", "Up") == 1.0
+    assert dm.payout("Down", "Up") == 0.0
+    assert dm.payout("Down", "tie") == 0.5

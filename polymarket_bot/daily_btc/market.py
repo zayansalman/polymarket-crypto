@@ -59,12 +59,30 @@ def next_window(now_ts: int) -> DayWindow:
     return window_for(reference_day + timedelta(days=1))
 
 
+def current_window(now_ts: int) -> DayWindow:
+    """The market whose reference noon is the latest one at or before ``now_ts``.
+
+    Tsinghua-Kronos BTC 24h decides just after noon ET, once the 1h candle ending at noon
+    has closed (Claude, 2026-09-16), so it needs the window that has just started.
+    """
+    et = datetime.fromtimestamp(now_ts, ET)
+    reference_day = et.date() if et.time() >= time(12) else et.date() - timedelta(days=1)
+    return window_for(reference_day + timedelta(days=1))
+
+
 def outcome(reference_close: float, settle_close: float) -> str:
     if settle_close > reference_close:
         return "Up"
     if settle_close < reference_close:
         return "Down"
     return "tie"
+
+
+def payout(side: str, result: str) -> float:
+    """Per-share payout at resolution: an exact tie pays 0.50 to both sides (market rules)."""
+    if result == "tie":
+        return 0.5
+    return 1.0 if side == result else 0.0
 
 
 def _json_list(value: Any) -> list[Any]:
