@@ -1,3 +1,20 @@
+# Tsinghua-Kronos BTC 24h: the MIT Kronos code rerun on hours the Kronos team published.
+# Date: 2026-09-16 (Claude). Code: feature/tsinghua-kronos-btc-24h-daily-btc-market at 4554144.
+# Interpreter: a local venv sharing the system torch 2.10 and pandas, plus einops 0.8.1.
+# Inputs (branch research/kronos-mini-official-btcusdt-24h-demo-recreation):
+#   R=research/kronos_mini_official_btcusdt_demo/data
+#   $R/published_forecasts_scored.csv (published forecasts, Kronos-mini rows used)
+#   $R/btcusdt_1h_spot.csv (Binance spot BTCUSDT 1h candles)
+# Command (with the venv's python):
+#   python tools/check_tsinghua_kronos_btc_24h_against_published.py \
+#     --published $R/published_forecasts_scored.csv --candles $R/btcusdt_1h_spot.csv --hours 40
+# Result: matches within sampling noise. Correlation 0.908, mean absolute gap 0.079, and
+#   2 of 40 gaps beyond 2 sampling standard errors, about what chance alone gives.
+# Our side (Up above 0.5, Down below) agreed with the published side in 31 of 40 hours:
+#   30 on the same side, plus 1 hour where both were exactly 0.500.
+# None of the 40 hours was a noon-ET hour (the anchors are at 00, 01, 03, 06, 12 and 18 UTC).
+# Rows: anchor hour (UTC), our upside probability, the published one, worker run time.
+
 2025-09-16 03:00:00  ours=0.267  published=0.333  (6.7 s)
 2025-09-23 12:00:00  ours=0.067  published=0.200  (6.4 s)
 2025-09-30 18:00:00  ours=0.633  published=0.433  (6.4 s)
