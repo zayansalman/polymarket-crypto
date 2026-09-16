@@ -1550,9 +1550,6 @@ def test_hourly_rows_resolve_an_hour_after_their_own_start() -> None:
 # shares still held and never books the sold ones twice.
 # ---------------------------------------------------------------------------
 
-SPOT_PUSH_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
-KRONOS_ID = "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"
-
 
 def _orders_client(orders: dict[str, object]) -> MagicMock:
     """A mock client whose get_order answers per order id (an Exception raises)."""

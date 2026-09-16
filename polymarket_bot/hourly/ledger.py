@@ -99,23 +99,28 @@ async def finalize_ended_hours(current_hour_start: int, unfinished_action: str) 
     no tick ran before its hour ended (Stop, crash, sleep, failing ticks, strategy switched
     off) otherwise stays open forever. The current hour is left to the engine's own entry
     step. For each ended hour, per strategy and mode:
-    - ENTERED with the position, when this strategy has a 1h position for that hour in that
-      mode that boot reconciliation did not close as never placed (RECONCILED_NO_LIVE_TRACE)
-      or never filled (RECONCILED_UNFILLED);
+    - ENTERED with the position, when this strategy still has an open 1h position for that
+      hour in that mode (for live, with its order in the journal);
     - otherwise an attempt that was started (SUBMITTING) becomes ``unfinished_action``
       (branch-review finding hourly-ambiguous-post-error-retried: never assume it failed);
     - otherwise MISSED.
     Rows are matched by UTC hour start and mode (branch-review findings
     dst-fallback-slug-collision and decision-row-shared-across-modes).
     """
+    # Only a still-open position counts, as in the current-hour check (open_entries), and a
+    # live one only when its order is in the journal with an order id: a post whose journal
+    # write failed must end as an unfinished attempt with the operator warning, never as
+    # ENTERED (Claude, 2026-09-16, review of the merged branch).
     position_for_row = (
         "SELECT p.position_id FROM paper_positions p "
         "WHERE p.window_start_ts = hourly_strategy_context.window_start_ts "
         "AND p.strategy_id = hourly_strategy_context.strategy_id "
         "AND p.mode = hourly_strategy_context.mode "
-        "AND p.market_timeframe = '1h' "
-        "AND COALESCE(p.exit_reason, '') "
-        "NOT IN ('RECONCILED_NO_LIVE_TRACE', 'RECONCILED_UNFILLED')"
+        "AND p.market_timeframe = '1h' AND p.state = 'open' "
+        "AND (p.mode != 'live' OR EXISTS ("
+        "SELECT 1 FROM live_orders o WHERE o.intent = 'ENTRY' AND o.status = 'SUBMITTED' "
+        "AND o.clob_order_id IS NOT NULL AND o.window_slug = p.window_slug "
+        "AND o.strategy_id = p.strategy_id))"
     )
     async with _db.connect() as conn:
         entered = await conn.execute(

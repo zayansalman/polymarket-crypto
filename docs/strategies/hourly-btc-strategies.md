@@ -43,6 +43,13 @@ Break-even hit rate at a 50¢ price:
 - **Order style is the operator's choice.** A dashboard setting picks one of:
   - **Pay the ask:** a marketable buy at the best ask, which fills now.
   - **Resting order:** a post-only buy at the best bid, cancelled at the entry deadline if unfilled.
+  - Requirements for building this choice (from the alphaXiv sweep, Claude, 2026-09-15; approved by Zayan (operator), 2026-09-15):
+    - Record every signal both ways: the pay-the-ask counterfactual (ask at decision, fee, outcome) and the resting attempt (limit price, size queued ahead, fill second, fill price, fill type, Binance move and fair value at fill, token mid 30 s and 120 s after the fill, outcome filled or not).
+    - Paper fills for resting orders must be strict: fill for certain only when the best ask drops below our price or a trade prints below it; fill at exactly our price only after the volume traded there since posting exceeds the queue ahead plus our size; never fill on a touch; track the lowest ask and trades between polls.
+    - Refresh a book older than a few seconds before sending, and log its age.
+    - Store the fee (and any maker rebate) actually charged per fill, and check Polymarket's current fee and rebate rules for this market.
+    - Optional setting: a per-strategy limit-price cap so a swept ask is never paid above the strategy's measured break-even (about 55.6¢ for the spot taker-push reversal strategy at 57.3%).
+    - Why: resting fills are adversely selected. About a third of resting orders never fill, mostly the ones that would have won (arXiv 2407.16527), and 66–89% of simple resting fills were adverse across four futures contracts (arXiv 2409.12721). At 57.3%, a bid 1¢ better only beats paying the ask if at least about 65% of signals fill, even with no adverse selection (Claude's arithmetic, 2026-09-15).
 - **Entry deadline.** A setting, 120 s after H:00 by default. If a strategy has no entry by then, the hour is recorded as `MISSED` and nothing is chased later.
 - **At most one order attempt per hour per strategy** (Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried).
   - A tick with no executable ask, or with the strategy's slot still held, just waits for the next tick, up to the deadline.
@@ -63,6 +70,9 @@ Break-even hit rate at a 50¢ price:
   - context factors: Kronos agreement, ETH's last hour, US stock-open hour, 08:00 UTC options expiry, scheduled US macro releases, funding, open interest, liquidations, Kraken flow, weekend.
 
   Factors are observations for learning. None of them blocks a bet.
+
+- **Book record, every hour the hourly loop runs** (approved by Zayan (operator), 2026-09-15). At 0, 10, 30, 60 and 120 s after H:00 the bot stores both tokens' top three book levels, the book's own timestamp, the Up/Down mirror gaps (a feed check, never a signal), Binance spot, the hour's open, a spot-based fair value for Up and the previous hour's move in volatility units (`hourly_book_snapshots`). Fair value is the digital-option value `Φ(ln(spot/open)/(σ√τ) − σ√τ/2)`, with τ the hours left and σ the standard deviation of the last 168 hourly log returns (arXiv 2606.19517, eq. 3.3). It is written before any entry. Purpose: measure whether the opening price already leans against the previous hour; the spot taker-push reversal strategy stops paying at a 57.3% hit rate once the side it buys costs about 55.6¢ including the fee.
+- **Candle audit** (approved by Zayan (operator), 2026-09-15; point-in-time audit idea from arXiv 2608.25348). Each decision saves the exact hour-H-1 spot and perp candles and its 168-hour window statistics. Once Binance publishes that day's archive on data.binance.vision (checked from 6 h after the UTC day ends), the rule is re-evaluated with the archive values and the record gets `MATCH`, `MISMATCH` (a field differs, same decision), `FLIPPED` (the decision would change; the operator is notified), `UNAVAILABLE` (no archive after 7 days) or `NO_CANDLES`. On the real 2026-09-12 archive all 24 hours matched exactly.
 
   The record is kept per mode. If the operator switches between paper and live inside an hour, each run records its own decision, runs its own RiskGate check and writes its own action. A paper `BLOCKED` row does not stop the live run from trying, and a live entry is never filed under paper. (Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes)
 
@@ -104,6 +114,7 @@ All three are MIT-licensed. The model was fine-tuned on Binance spot BTCUSDT hou
    - temperature 1.0, top_k 0, top_p 1.0;
    - seeded by the hour, so a rerun reproduces the same paths.
 3. **Probability.** `P(up)` is the share of paths whose close is at or above the **real** open of hour H.
+   - **Sampling noise.** With N paths, `P(up)` carries a standard error of `√(P(1−P)/N)`: about 7 points at N = 50, more than the 0.05 edge threshold, so part of what crosses the threshold is sampling noise (Claude, 2026-09-15). Each decision records N and that standard error. N becomes a dashboard setting; the Kronos change measures run time for 50/100/200/500 paths on the operator's 8 GB M2 and sets the default to the largest N that reliably finishes inside the entry deadline (500 paths gives about 2.2 points but is expected to take roughly 2–3 minutes). The results panel reports hit rate by edge size.
 4. **Bet.**
    - Buy **Up** if `P(up) − Up price ≥ edge threshold`.
    - Buy **Down** if `(1 − P(up)) − Down price ≥ edge threshold`.
@@ -239,6 +250,8 @@ The dashboard shows, per strategy and separately for paper and live:
 
 - bets, win rate with its 95% range, average price paid, and P&L after fees;
 - would-have-bet hours with their outcomes, plus `MISSED`, `BLOCKED` and `UNFILLED` counts;
-- for the spot taker-push reversal strategy, the running win rate against the 60% line and the 52.25% break-even line.
+- for the spot taker-push reversal strategy, the running win rate against the 60% line and the 52.25% break-even line;
+- the 95% range on every hit rate, break-even lines from the prices actually paid, hit rate minus the average all-in price, and baselines on the same hours (always Up; always the side priced above 50¢);
+- a count of every filter and factor ever tried, shown beside any factor split, since about 240 bets a year and 10 recorded factors give roughly a 70% chance that one shows a 10-point split by luck (alphaXiv sweep, Claude, 2026-09-15; approved by Zayan (operator), 2026-09-15).
 
 Nothing switches a strategy off automatically. The operator reads the record and decides.

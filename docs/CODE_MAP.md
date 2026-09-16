@@ -18,7 +18,7 @@ They are **bidirectionally coupled**: the FastAPI dashboard imports `polymarket_
 | Change | File |
 |---|---|
 | Plug in a **new strategy** (the loop's entry decision) | `polymarket_bot/paper.py:_build_snapshot` — the `NO_STRATEGY_REASON` block |
-| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `btcusdt_1h_spot_taker_push_reversal.py` (Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`); strategy doc `docs/strategies/hourly-btc-strategies.md` |
+| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `btcusdt_1h_spot_taker_push_reversal.py` (Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`) + `book_record.py` (`hourly_book_snapshots`) + `candle_audit.py` (archive check); strategy doc `docs/strategies/hourly-btc-strategies.md`; research `research/hourly_btc_2026_09/` |
 | Shared pricing math (fair value, sigma) used by shadow/daily/backtests | `polymarket_bot/strategy.py` (NOT `polymarket_exec/strategy/` — that only feeds backtests) |
 | Risk limits / kill-switch / daily-loss halt | `polymarket_exec/execution/gate.py` |
 | Live order placement | `polymarket_exec/execution/live.py` |
@@ -75,19 +75,19 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1173.
-- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_bot/daily_btc/fade_three_day.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
+- **Tests:** 1255.
+- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_bot/daily_btc/engine.py`, `polymarket_bot/daily_btc/fade_three_day.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
 <!-- BEGIN GENERATED:inventory -->
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 31 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 32 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 14 | Structured JSON logging with structlog. Module + trade_id context. |
+| `db.py` | WIRED | 21 | SQLite storage for the local Polymarket crypto trading lab. |
+| `logging_setup.py` | WIRED | 18 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 15 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
 | `polymarket_bot/chronos_signal.py` | DEAD? | 0 | Layer 3 — Chronos time-series ensemble (stub). |
 | `polymarket_bot/controller.py` | WIRED | 2 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
@@ -97,19 +97,23 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/daily/scanner.py` | WIRED | 1 | The daily altcoin scanner's tick loop (issue #185). |
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
-| `polymarket_bot/daily_btc/__init__.py` | pkg | 1 | Daily (noon-ET) BTC Up/Down markets: window timing, discovery, Binance reads, strategies. |
+| `polymarket_bot/daily_btc/__init__.py` | pkg | 2 | Daily (noon-ET) BTC Up/Down markets: window timing, discovery, Binance reads, strategies. |
+| `polymarket_bot/daily_btc/engine.py` | DEAD? | 0 | Daily BTC engine: one decision per noon-ET window per strategy, entries, Binance settlement. |
 | `polymarket_bot/daily_btc/fade_three_day.py` | DEAD? | 0 | Fade the 3-day direction: bet the daily BTC market against BTC's last 3 days. |
-| `polymarket_bot/daily_btc/forecast_input.py` | WIRED | 1 | Tsinghua-Kronos BTC 24h input: the 383 closed Binance spot BTCUSDT 1h candles before noon ET. |
-| `polymarket_bot/daily_btc/market.py` | WIRED | 1 | Daily BTC Up/Down market: noon-ET window timing, Gamma discovery, Binance reads. |
-| `polymarket_bot/daily_btc/tsinghua_kronos_btc_24h.py` | WIRED | 1 | Tsinghua-Kronos BTC 24h: the Kronos team's 24-hour BTCUSDT forecast, bet when it beats the price. |
+| `polymarket_bot/daily_btc/forecast_input.py` | WIRED | 2 | Tsinghua-Kronos BTC 24h input: the 383 closed Binance spot BTCUSDT 1h candles before noon ET. |
+| `polymarket_bot/daily_btc/ledger.py` | WIRED | 1 | Daily BTC decision record: one row per (noon-ET window, strategy, mode), actions, settlement. |
+| `polymarket_bot/daily_btc/market.py` | WIRED | 3 | Daily BTC Up/Down market: noon-ET window timing, Gamma discovery, Binance reads. |
+| `polymarket_bot/daily_btc/tsinghua_kronos_btc_24h.py` | WIRED | 2 | Tsinghua-Kronos BTC 24h: the Kronos team's 24-hour BTCUSDT forecast, bet when it beats the price. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
-| `polymarket_bot/hourly/__init__.py` | pkg | 3 | Hourly BTC Up/Down strategies (sources: docs/strategies/hourly-btc-strategies.md). |
-| `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` | WIRED | 2 | Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low. |
+| `polymarket_bot/hourly/__init__.py` | pkg | 5 | Hourly BTC Up/Down strategies (sources: docs/strategies/hourly-btc-strategies.md). |
+| `polymarket_bot/hourly/book_record.py` | WIRED | 1 | Hourly BTC book record: the Polymarket book 0, 10, 30, 60 and 120 s after the hour opens. |
+| `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` | WIRED | 3 | Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low. |
+| `polymarket_bot/hourly/candle_audit.py` | WIRED | 1 | Candle audit: check the Binance candles each hourly decision used against Binance's archive. |
 | `polymarket_bot/hourly/engine.py` | WIRED | 1 | Hourly BTC engine: one decision per hour per strategy, per-strategy entries, Binance settlement. |
 | `polymarket_bot/hourly/ledger.py` | WIRED | 1 | Hourly decision record: one row per (UTC hour start, strategy, mode), actions, settlement. |
-| `polymarket_bot/hourly/market.py` | WIRED | 7 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
-| `polymarket_bot/kronos_forecast/__init__.py` | pkg | 2 | Kronos forecasts run in an isolated worker process (Tsinghua-Kronos BTC 24h). |
-| `polymarket_bot/kronos_forecast/client.py` | WIRED | 3 | Run one Kronos forecast in an isolated worker process and return the parsed result. |
+| `polymarket_bot/hourly/market.py` | WIRED | 10 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
+| `polymarket_bot/kronos_forecast/__init__.py` | pkg | 3 | Kronos forecasts run in an isolated worker process (Tsinghua-Kronos BTC 24h). |
+| `polymarket_bot/kronos_forecast/client.py` | WIRED | 4 | Run one Kronos forecast in an isolated worker process and return the parsed result. |
 | `polymarket_bot/kronos_forecast/worker.py` | cli | 0 | Kronos forecast worker: one Kronos forecast per process, JSON in on stdin, JSON out on stdout. |
 | `polymarket_bot/market_selection.py` | WIRED | 5 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
@@ -121,8 +125,8 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/pairarb/onchain.py` | WIRED | 2 | On-chain fill detection via Polygon ``OrderFilled`` logs (#182). |
 | `polymarket_bot/pairarb/quoter.py` | WIRED | 1 | Two-sided quote placement for the 5m Up/Down pair strategy (#182). |
 | `polymarket_bot/pairarb/types.py` | WIRED | 3 | Shared data contracts for the two-sided pair quoter (#182). |
-| `polymarket_bot/paper.py` | WIRED | 7 | BTC 5-minute trading engine (paper by default, live opt-in). |
-| `polymarket_bot/runtime_knobs.py` | WIRED | 8 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
+| `polymarket_bot/paper.py` | WIRED | 9 | BTC 5-minute trading engine (paper by default, live opt-in). |
+| `polymarket_bot/runtime_knobs.py` | WIRED | 9 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
 | `polymarket_bot/shadow/__init__.py` | pkg | 3 | Shadow forward-tester: candidate strategies logged and settled net of fees. |
 | `polymarket_bot/shadow/fees.py` | WIRED | 7 | Polymarket taker-fee math for the shadow forward-tester. |
 | `polymarket_bot/shadow/ledger.py` | WIRED | 2 | Persistence for the shadow forward-tester's would-be trades. |
@@ -130,6 +134,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/shadow/signals.py` | WIRED | 2 | Candidate strategies for the shadow forward-tester. |
 | `polymarket_bot/shadow/types.py` | WIRED | 3 | Shared data contracts for the shadow forward-tester. |
 | `polymarket_bot/strategy.py` | WIRED | 8 | Shared BTC 5-minute binary strategy math. |
+| `polymarket_bot/strategy_slot_entry.py` | WIRED | 2 | Shared entry step for strategy position slots (hourly and daily BTC strategies), paper and live. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/backtest/__init__.py` | pkg | 0 | Backtesting harness and metrics. |
 | `polymarket_exec/backtest/conditional.py` | DEAD? | 0 | Conditional backtest — evaluates strategy on historical user trades. |

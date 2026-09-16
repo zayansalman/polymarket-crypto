@@ -165,7 +165,13 @@ async def test_open_decisions_of_ended_hours_are_finalized_per_strategy_and_mode
         )
         position_id = cur.lastrowid
         await conn.commit()
-    await ledger.set_action(H - 3600, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "SUBMITTING", mode="paper")
+    # A live position only counts with its order in the journal (Claude, 2026-09-16, review
+    # of the merged branch).
+    await _db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=prev_slug, token_id="t",
+        price=0.5, size=5.0, clob_order_id="0xFILLED", strategy_id=kronos)
+    spot_push = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+    await ledger.set_action(H - 3600, spot_push, "SUBMITTING", mode="paper")
 
     counts = await ledger.finalize_ended_hours(H, "UNCERTAIN:entry attempt did not finish")
     assert counts == {"entered": 1, "unfinished": 1, "missed": 1}
@@ -179,3 +185,25 @@ async def test_open_decisions_of_ended_hours_are_finalized_per_strategy_and_mode
     assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper"))["action"] == "PENDING"
     assert (await ledger.get_decision(H, kronos, mode="paper"))["action"] == "NO_SIGNAL"
     assert await ledger.finalize_ended_hours(H, "x") == {"entered": 0, "unfinished": 0, "missed": 0}
+
+
+@pytest.mark.asyncio
+async def test_ended_hour_ignores_closed_rows_and_live_rows_without_a_journaled_order(test_db) -> None:
+    """Claude, 2026-09-16, review of the merged branch: only a still-open position counts, and a
+    live one only with its order in the journal."""
+    spot_push = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+    await _record(start=H - 3600, mode="live")
+    await _record(start=H - 3600, mode="paper")
+    await ledger.set_action(H - 3600, spot_push, "SUBMITTING", mode="live")
+    await ledger.set_action(H - 3600, spot_push, "SUBMITTING", mode="paper")
+    async with _db.connect() as conn:
+        for mode, state in (("live", "open"), ("paper", "closed")):  # untraced live; sold paper
+            await conn.execute(
+                "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+                " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
+                " VALUES ('x', ?, 'Down', ?, 0.5, 2.5, 5, ?, '1h', ?, ?)",
+                (SLUG, state, spot_push, H - 3600, mode),
+            )
+        await conn.commit()
+    counts = await ledger.finalize_ended_hours(H, "UNCERTAIN:entry attempt did not finish")
+    assert counts == {"entered": 0, "unfinished": 2, "missed": 0}

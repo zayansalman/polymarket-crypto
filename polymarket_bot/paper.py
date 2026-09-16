@@ -559,11 +559,18 @@ async def paper_tick_once() -> PaperSnapshot:
             return await hourly_engine.tick(client, allow_entries=not kill_active)
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
-        await _close_due_positions(snapshot, client)
+        # A paper run never closes live rows: that would book their loss on the paper leg and
+        # mark real tokens flat (Claude, 2026-09-16, review of the merged branch).
+        await _close_due_positions(snapshot, client, include_live_rows=_live_executor is not None)
         # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
         # boot adopts open 1h rows into their slots whatever timeframe runs, so a 5m run
-        # settles them from the Binance candle too, before any new entry.
-        await hourly_engine.settle_due(client, snapshot, _now())
+        # settles them from the Binance candle too, before any new entry. A failure there
+        # never fails the 5m tick (Claude, 2026-09-16, review of the merged branch).
+        try:
+            await hourly_engine.settle_due(client, snapshot, _now())
+        except Exception as e:  # noqa: BLE001 — retried on the next tick
+            log.warning("paper_tick.hourly_settlement_failed_during_5m_run",
+                        error=f"{type(e).__name__}: {e}")
         if not kill_active:
             await _maybe_open_position(snapshot)
         await _record_and_settle_shadow(snapshot, client)
@@ -1910,6 +1917,17 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
         )
     else:
         header = "BTC paper loop running. No real orders are placed.\n\n"
+    if _timeframe == hourly_engine.TIMEFRAME:
+        # The 5m line's fair value, edge and confidence don't exist for the hourly
+        # strategies; show what they actually use (Claude, 2026-09-16, paper smoke run).
+        return header + (
+            f"Hour: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
+            f"Binance spot: ${snapshot.spot_price:,.2f} vs hour open "
+            f"${snapshot.reference_price:,.2f}\n"
+            f"Up ask: {_fmt3(snapshot.up_best_ask)}; Down ask: {_fmt3(snapshot.down_best_ask)}\n"
+            f"Decisions: {snapshot.reason}\n"
+            f"{_feed_label(snapshot.feed_source)}"
+        )
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
@@ -1932,6 +1950,11 @@ _FEED_SOURCE_LABELS = {
     "binance_shape_fallback": "Binance (vol shape)",
     "binance_public": "Binance public",
     "binance": "Binance",
+    # Hourly BTC loop (Claude, 2026-09-16, found in the paper smoke run): spot from Binance
+    # REST, the hour's open from the Binance 1h kline, no volatility input.
+    "binance_rest": "Binance REST",
+    "binance_kline": "Binance 1h kline",
+    "none": "not used",
     "clob": "CLOB",
     "unavailable": "unavailable",
 }
@@ -1971,7 +1994,11 @@ def _feed_label(feed_source: str) -> str:
 
     spot_src = parts.get("spot", "") or ""
     ref_src = parts.get("ref", "") or ""
-    if spot_src.startswith("chainlink") and ref_src.startswith("chainlink"):
+    if ref_src == "binance_kline":
+        # Hourly BTC markets settle on the Binance BTCUSDT 1h candle, so Binance is the
+        # settlement source there, not a risk (Claude, 2026-09-16, paper smoke run).
+        line += " (settles on the Binance 1h candle)"
+    elif spot_src.startswith("chainlink") and ref_src.startswith("chainlink"):
         line += " (settlement-aligned)"
     elif not spot_src.startswith("chainlink"):
         line += " (⚠ spot off Chainlink — settlement risk)"

@@ -1000,21 +1000,50 @@ async def test_pending_decision_from_a_stopped_hour_is_missed_on_a_later_tick(te
 # Claude, 2026-09-15, branch-review finding pending-row-never-finalized
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["paper", "live"])
-async def test_open_decision_with_a_position_for_its_ended_hour_is_entered(
+async def test_attempt_with_an_open_position_for_its_ended_hour_is_entered(
     test_db, monkeypatch, mode
 ):
+    """A crash after the order but before the ENTERED write, found only after the hour ended.
+    Live also needs the order in the journal (Claude, 2026-09-16, review of the merged branch)."""
     venue = _Venue(hour_close=109.0)
     if mode == "live":
         await _go_live(monkeypatch)
     await _tick(monkeypatch, H + 30, venue, allow=False)
-    # A crash after the live submit but before the ENTERED write leaves the position row.
+    await ledger.set_action(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", engine.SUBMITTING, mode=mode)
     await _insert_hourly(H, mode)
+    if mode == "live":
+        await _db.journal_live_order(
+            intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=SLUG, token_id="t",
+            price=0.52, size=5.0, clob_order_id="0xFILLED", strategy_id="btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     position_id = (await _positions())[0]["position_id"]
     venue.end_hour = H + 3600
     monkeypatch.setattr(engine, "open_entries", AsyncMock())  # only the ended hour matters
     await _tick(monkeypatch, H + 3600 + 20, venue)
     row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode)
     assert (row["action"], row["position_id"]) == ("ENTERED", position_id)
+
+
+@pytest.mark.asyncio
+async def test_live_attempt_without_a_journaled_order_in_an_ended_hour_stays_uncertain(
+    test_db, monkeypatch
+):
+    """The post may have reached Polymarket but its journal write failed: never ENTERED, and
+    the operator is told (Claude, 2026-09-16, review of the merged branch)."""
+    venue = _Venue(hour_close=109.0)
+    await _go_live(monkeypatch)
+    await _tick(monkeypatch, H + 30, venue, allow=False)
+    await ledger.set_action(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", engine.SUBMITTING, mode="live")
+    await _insert_hourly(H, "live")
+    venue.end_hour = H + 3600
+    monkeypatch.setattr(engine, "open_entries", AsyncMock())
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live")
+    assert row["action"] == engine.UNFINISHED_ATTEMPT
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM notification_feed "
+            "WHERE event_type = 'entry_attempt_unfinished'")
+        assert (await cur.fetchone())["n"] == 1
 
 
 # Claude, 2026-09-15, branch-review finding pending-row-never-finalized
@@ -1024,10 +1053,11 @@ async def test_ended_hour_is_missed_when_boot_reconciliation_closed_its_row_as_n
     test_db, monkeypatch, exit_reason
 ):
     venue = _Venue()
+    await _go_live(monkeypatch)
     await _tick(monkeypatch, H + 30, venue, allow=False)
-    # Crash between the row insert and a filled order: the next start's boot reconciliation
-    # closes the row because no order was placed, or none filled.
-    await _insert_hourly(H, "paper")
+    # Crash between the row insert and a filled order: the next live start's boot
+    # reconciliation closes the row because no order was placed, or none filled.
+    await _insert_hourly(H, "live")
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE paper_positions SET state = 'closed', exit_reason = ?", (exit_reason,))
@@ -1035,7 +1065,7 @@ async def test_ended_hour_is_missed_when_boot_reconciliation_closed_its_row_as_n
     venue.end_hour = H + 3600
     monkeypatch.setattr(engine, "open_entries", AsyncMock())
     await _tick(monkeypatch, H + 3600 + 20, venue)
-    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live")
     assert (row["action"], row["position_id"]) == ("MISSED", None)
 
 
@@ -1058,3 +1088,46 @@ async def test_attempt_left_submitting_in_an_ended_hour_is_uncertain_and_the_ope
             "SELECT COUNT(*) AS n FROM notification_feed "
             "WHERE event_type = 'entry_attempt_unfinished'")
         assert (await cur.fetchone())["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tick_records_the_opening_book_once_per_offset(test_db, monkeypatch):
+    """Book record wired into the tick (approved by Zayan (operator), 2026-09-15)."""
+    await _tick(monkeypatch, H + 2, _Venue())
+    await _tick(monkeypatch, H + 5, _Venue())
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT window_start_ts, offset_s, up_best_ask, down_best_ask FROM hourly_book_snapshots")
+        rows = [tuple(r) for r in await cur.fetchall()]
+    assert rows == [(H, 0, 0.52, 0.52)]
+
+
+@pytest.mark.asyncio
+async def test_decision_saves_the_candles_and_times_the_audit_needs(test_db, monkeypatch):
+    """Candle audit inputs (approved by Zayan (operator), 2026-09-15)."""
+    await _tick(monkeypatch, H + 30, _Venue())
+    row = await ledger.get_decision(
+        H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
+    signal = json.loads(row["signal_json"])
+    assert signal["decided_at_ms"] == (H + 30) * 1000
+    assert signal["candles_fetched_at_ms"] > 0
+    assert signal["spot_h1"]["open_time_ms"] == (H - 3600) * 1000
+    assert signal["perp_h1"]["open_time_ms"] == (H - 3600) * 1000
+    assert row["candle_audit"] is None  # the archive for that day is not due yet
+
+
+@pytest.mark.asyncio
+async def test_a_crashing_record_never_changes_the_decision_or_the_entry(test_db, monkeypatch):
+    """Book record and candle audit are observation only (Claude, 2026-09-16, review of the
+    merged branch)."""
+    from polymarket_bot.hourly import book_record, candle_audit
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("record crashed")
+
+    monkeypatch.setattr(book_record, "_record", boom)
+    monkeypatch.setattr(candle_audit, "_audit_due", boom)
+    await _tick(monkeypatch, H + 30, _Venue())
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
+    assert row["action"] == "ENTERED"
+    assert [p["side"] for p in await _positions()] == ["Down"]

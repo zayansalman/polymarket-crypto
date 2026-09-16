@@ -203,7 +203,10 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
   mode TEXT NOT NULL,
   hour_close REAL,
   outcome_side TEXT,
-  settled_at TEXT
+  settled_at TEXT,
+  candle_audit TEXT,
+  candle_audit_json TEXT,
+  candle_audited_at TEXT
 );
 -- Keyed by the hour's UTC start, not its slug: on the November fall-back day two UTC hours
 -- share one ET-labelled slug (Claude, 2026-09-15, branch-review finding
@@ -216,6 +219,42 @@ DROP INDEX IF EXISTS idx_hourly_context_window_strategy;
 DROP INDEX IF EXISTS idx_hourly_context_start_strategy;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy_mode
   ON hourly_strategy_context(window_start_ts, strategy_id, mode);
+
+-- Hourly BTC book 0/10/30/60/120 s after H:00 with a spot-based fair value, every hour the
+-- hourly loop runs, bet or no bet: does the opening price already lean against the previous
+-- hour? Observation only (polymarket_bot/hourly/book_record.py; approved by Zayan
+-- (operator), 2026-09-15). Keyed by the UTC hour start, not the ET slug.
+CREATE TABLE IF NOT EXISTS hourly_book_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  window_slug TEXT NOT NULL,
+  window_start_ts INTEGER NOT NULL,
+  offset_s INTEGER NOT NULL,
+  elapsed_s INTEGER NOT NULL,
+  fetched_at_ms INTEGER NOT NULL,
+  up_best_bid REAL,
+  up_best_ask REAL,
+  down_best_bid REAL,
+  down_best_ask REAL,
+  up_bids_json TEXT,
+  up_asks_json TEXT,
+  down_bids_json TEXT,
+  down_asks_json TEXT,
+  up_book_ts_ms INTEGER,
+  down_book_ts_ms INTEGER,
+  mirror_gap_ask REAL,
+  mirror_gap_bid REAL,
+  spot REAL,
+  hour_open REAL,
+  sigma_1h REAL,
+  seconds_left INTEGER,
+  fair_up REAL,
+  prev_hour_return REAL,
+  prev_hour_vol_units REAL,
+  own_live_order_this_hour INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_start_offset
+  ON hourly_book_snapshots(window_start_ts, offset_s);
 
 -- Daily BTC strategies (Tsinghua-Kronos BTC 24h, 2026-09-16): one decision row per
 -- (noon-ET window, strategy, mode), written for EVERY window whether or not it traded,
@@ -247,6 +286,20 @@ CREATE TABLE IF NOT EXISTS btc_daily_market_decisions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_btc_daily_decisions_window_strategy_mode
   ON btc_daily_market_decisions(reference_ts, strategy_id, mode);
 """
+
+# Candle audit of hourly decisions (approved by Zayan (operator), 2026-09-15). The table is
+# new on this branch; this upgrades a database created by an earlier build of it.
+HOURLY_CONTEXT_COLUMN_MIGRATIONS = {
+    "candle_audit": "TEXT",
+    "candle_audit_json": "TEXT",
+    "candle_audited_at": "TEXT",
+}
+
+# Book record columns added after the table first appeared on this branch (Claude,
+# 2026-09-16, found in the paper smoke run: an older table rejected every insert).
+HOURLY_BOOK_COLUMN_MIGRATIONS = {
+    "own_live_order_this_hour": "INTEGER",
+}
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
     "mode": "TEXT",
@@ -397,6 +450,10 @@ async def init_db() -> None:
         await _migrate_columns(db, "paper_positions", POSITION_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "paper_ticks", TICK_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "live_orders", LIVE_ORDERS_COLUMN_MIGRATIONS)
+        await _migrate_columns(
+            db, "hourly_strategy_context", HOURLY_CONTEXT_COLUMN_MIGRATIONS
+        )
+        await _migrate_columns(db, "hourly_book_snapshots", HOURLY_BOOK_COLUMN_MIGRATIONS)
         await _migrate_columns(
             db, "model_shadow_positions", SHADOW_COLUMN_MIGRATIONS
         )
