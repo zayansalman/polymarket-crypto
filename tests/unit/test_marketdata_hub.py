@@ -370,7 +370,12 @@ def test_shard_statuses_merge_into_one_feed_status() -> None:
         60, 11.5, 4, 2)
     assert (merged.subscribed, merged.desired) == (8, 12)
     assert (merged.last_frame_at, merged.connected_since) == (160.0, 90.0)
-    assert (merged.latency_ms_p50, merged.latency_ms_p90) == (40.0, 60.0)
+    # The slowest socket's latency, so one lagging market is never averaged away.
+    assert (merged.latency_ms_p50, merged.latency_ms_p90) == (60.0, 60.0)
+    assert hub_mod.slowest_socket(shards) is None  # the statuses carry no percentiles
+    timed = {"btc-5m": _shard(latency_ms_p50=103.0), "eth-5m": _shard(latency_ms_p50=9_800.0),
+             "sol-1d": _shard(latency_ms_p50=None)}
+    assert hub_mod.slowest_socket(timed) == "eth-5m"
     assert merged.last_error == "sol-1d: OSError: reset"
     assert merged.last_notice == "INVALID OPERATION"
     healthy = hub_mod.merge_shard_status(

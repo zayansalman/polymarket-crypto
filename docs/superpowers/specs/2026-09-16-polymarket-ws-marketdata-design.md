@@ -79,6 +79,14 @@ holding that pair's current and next window (and an ended window until it resolv
 Windows roll inside their socket, and a window's two tokens always share a socket,
 because every `price_change` carries both outcomes.
 
+Sharding removed the constant drops, but on this network the full grid (~2,300-2,800
+frames/s, ~1.4-1.7 MiB/s) is still close to what gets through. In a later run the BTC
+5m socket drifted to 23 s behind before the server reset it. So a socket whose median
+latency over its last 64 events is more than 10 s above its own best on that
+connection is replaced, which throws the backlog away and starts from a fresh snapshot
+(a constant clock offset raises the best too, so it doesn't trigger). The FEEDS delay
+is the slowest socket's median, so one lagging market can't hide behind 23 healthy ones.
+
 Every subscribe frame still carries `custom_feature_enabled`, so each socket also
 receives the platform-wide `new_market` broadcast: measured at 0.6-1.4 events/s
 (1.4-3.3 KiB/s) per socket, so roughly 35-80 KiB/s across 24 sockets. A later option
@@ -93,7 +101,7 @@ anchor) and turn it off on the others. A check on 2026-09-16 showed that
 |---|---|
 | `clob_messages.py` | Pure `parse_frame(text) -> [event]`; unknown or malformed objects become `Unknown`. |
 | `order_book.py` | `OrderBook` per token; `top()` is O(1) and returns a frozen `TopOfBook`. |
-| `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s watchdog (resubscribe, then reconnect), 1-30 s jittered backoff, stop within ~1 s. |
+| `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s. |
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. |
 | `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. |
 | `hub.py` | `MarketDataHub`: the public API; one `ClobMarketStream` per asset x timeframe, merged into one status. |
@@ -127,7 +135,8 @@ The universe follows an ended window for 30 s, and until its `market_resolved` a
 ## FEEDS card
 
 Four rows under the feed-monitor rows: "Polymarket books" (CLOB market WS; delay =
-event latency p50 over all sockets; STALE after 45 s without data; DOWN names the
-sockets that are down, e.g. "1 of 24 sockets down; btc-5m: ..."), and "Chainlink prices",
+the slowest socket's median event latency, flagged past 2 s and STALE past 5 s with the
+socket named; STALE after 45 s without data; DOWN names the sockets that are down, e.g.
+"1 of 24 sockets down; btc-5m: ..."), and "Chainlink prices",
 "Chainlink 60s TWAP", "Binance prices" (RTDS WS; delay = age of the newest print;
 STALE past 10 s). The full FEEDS redesign is a later change.

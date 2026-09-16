@@ -17,12 +17,18 @@ Protocol rules this client follows (live-checked 2026-09-16):
   once a connection has delivered data).
 * A subscription can go silent. No data for 45 s means unsubscribe and subscribe again
   (fresh snapshots); still nothing 45 s later means a new connection.
+* A connection can also fall behind when the network can't carry the flow; the server
+  only drops it (1013 "slow consumer", or a reset) 20-30 s later. When the median
+  latency of the last 64 events is more than 10 s above this connection's best, the
+  connection is replaced, which throws the backlog away (a constant clock offset
+  raises the best as well, so it never triggers this).
 * At 350-900 frames/s the websockets default ``max_queue`` (16) stalls, so the queue is
   large and each frame is handled synchronously and quickly.
 """
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import random
 import time
@@ -61,6 +67,9 @@ RATE_LIMITED_BACKOFF_S = 60.0
 TICK_S = 0.5  # heartbeat / watchdog check cadence
 RATE_WINDOW_S = 10
 LATENCY_SAMPLES = 512
+MAX_LAG_S = 10.0
+LAG_WINDOW = 64  # events in the lag check's median
+LAG_FRESH_S = 5.0  # the lag check only runs while events are flowing
 
 # (event, received_ms) — called synchronously for every event in every frame.
 EventHandler = Callable[[ClobEvent, int], None]
@@ -88,6 +97,10 @@ class StreamStatus:
 
 class StreamSilent(Exception):
     """No data even after a resubscribe: the connection is replaced."""
+
+
+class StreamLagging(Exception):
+    """The connection is far behind the market: it is replaced to drop the backlog."""
 
 
 def _default_connect(url: str) -> Any:
@@ -242,6 +255,7 @@ class ClobMarketStream:
         time_fn: Callable[[], float] = time.time,
         ping_interval_s: float = PING_INTERVAL_S,
         silence_resubscribe_s: float = SILENCE_RESUBSCRIBE_S,
+        max_lag_s: float = MAX_LAG_S,
         max_tokens_per_frame: int = MAX_TOKENS_PER_FRAME,
         initial_backoff_s: float = INITIAL_BACKOFF_S,
         max_backoff_s: float = MAX_BACKOFF_S,
@@ -254,6 +268,7 @@ class ClobMarketStream:
         self._time_fn = time_fn
         self._ping_interval_s = ping_interval_s
         self._silence_s = silence_resubscribe_s
+        self._max_lag_ms = max_lag_s * 1000
         self._max_per_frame = max_tokens_per_frame
         self._backoff = Backoff(initial_backoff_s, max_backoff_s, rng)
         self._tick_s = tick_s
@@ -270,6 +285,7 @@ class ClobMarketStream:
         self._resync_at: float | None = None
         self._last_ping_at = 0.0
         self._session_had_data = False
+        self._best_latency_ms: int | None = None  # lowest latency on this connection
         # Lifetime counters.
         self._last_frame_at: float | None = None
         self._last_pong_at: float | None = None
@@ -381,6 +397,8 @@ class ClobMarketStream:
         self._resync_at = None
         self._resync_requested = False  # a fresh connection sends everything anyway
         self._last_ping_at = now
+        self._latency.clear()  # latency is judged per connection
+        self._best_latency_ms = None
         log.info("marketdata.clob_connected", tokens=len(self._desired))
 
     def _mark_down(self) -> None:
@@ -444,6 +462,11 @@ class ClobMarketStream:
                 await self._resync(ws, now, f"no data for {silent_for:.0f}s")
         elif now - self._resync_at >= self._silence_s:
             raise StreamSilent(f"no data for {silent_for:.0f}s, even after a resubscribe")
+        if silent_for < LAG_FRESH_S and len(self._latency) >= LAG_WINDOW:
+            recent = sorted(itertools.islice(reversed(self._latency), LAG_WINDOW))
+            behind_ms = recent[LAG_WINDOW // 2] - (self._best_latency_ms or 0)
+            if behind_ms > self._max_lag_ms:
+                raise StreamLagging(f"{behind_ms / 1000:.0f}s behind this connection's best")
 
     async def _read(self, ws: Any) -> None:
         on_frame = self._on_frame
@@ -484,7 +507,10 @@ class ClobMarketStream:
         else:
             buckets.append([second, 1])
         if sample is not None:
-            self._latency.append(received_ms - sample)
+            latency_ms = received_ms - sample
+            self._latency.append(latency_ms)
+            if self._best_latency_ms is None or latency_ms < self._best_latency_ms:
+                self._best_latency_ms = latency_ms
 
     def _on_text(self, event: TextFrame, now: float) -> None:
         if event.kind == PONG:

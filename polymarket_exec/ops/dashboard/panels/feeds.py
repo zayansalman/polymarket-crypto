@@ -8,7 +8,7 @@ more row.
 
 Delay is the age of the latest print for the Chainlink WS stream and the RTDS price
 rows, the round-trip time of the latest check for each monitored REST feed, the event
-latency (p50, over all of the hub's CLOB market sockets), and the age of the last
+latency (p50 of the slowest of the hub's CLOB market sockets), and the age of the last
 successful pull for recorder feeds.
 """
 from __future__ import annotations
@@ -77,6 +77,8 @@ _PRICE_FEEDS = (
 )
 # The CLOB market socket, connected, with no data frame for this long is flagged.
 BOOKS_STALE_S = 45.0
+# A market socket whose median event latency is above this is serving stale books.
+BOOKS_LAG_S = 5.0
 # A reference price whose newest print is older than this is flagged.
 PRICE_STALE_S = 10.0
 
@@ -195,7 +197,12 @@ def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
         if quiet > BOOKS_STALE_S:
             return FeedRow(name, role, source, delay, "STALE", "warn", True,
                            f"connected, but no data for {_secs(quiet)}")
-        return FeedRow(name, role, source, delay, "OK", "on", slow)
+        slowest = md.slowest_socket or "a socket"
+        if p50 is not None and p50 > BOOKS_LAG_S * 1000:
+            return FeedRow(name, role, source, delay, "STALE", "warn", True,
+                           f"{slowest} is {_secs(p50 / 1000)} behind (median event latency)")
+        return FeedRow(name, role, source, delay, "OK", "on", slow,
+                       f"slowest socket: {slowest}" if slow else None)
     if md.taken_at - md.started_at <= WS_CONNECT_GRACE_S:
         return FeedRow(name, role, source, delay, "CONNECTING", "idle")
     if md.tokens == 0:

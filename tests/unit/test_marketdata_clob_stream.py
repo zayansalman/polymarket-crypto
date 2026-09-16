@@ -351,6 +351,49 @@ async def test_data_after_a_resubscribe_keeps_the_connection() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_socket_far_behind_its_best_is_replaced() -> None:
+    clock = Clock(1_000.0)
+    first, second = FakeWs(), FakeWs()
+    conn = Connector([first, second])
+    stream = _stream(conn, clock, max_lag_s=10.0)
+    stream.set_tokens({"a"})
+    async with running(stream):
+        await until(lambda: first.sent)
+        for _ in range(64):  # 100 ms behind: this connection's best
+            first.push(_trade(1_000_000 - 100))
+        await until(lambda: stream.status().frames_total == 64)
+        for _ in range(64):  # 9.9 s more than the best: still tolerated
+            first.push(_trade(1_000_000 - 10_000))
+        await until(lambda: stream.status().frames_total == 128)
+        await asyncio.sleep(0.02)
+        assert len(conn.made) == 1
+        for _ in range(64):  # 11.9 s more than the best: drop the backlog, reconnect
+            first.push(_trade(1_000_000 - 12_000))
+        await until(lambda: second.sent)
+        st = stream.status()
+        assert st.reconnects == 1 and "behind" in (st.last_error or "")
+        assert st.latency_ms_p50 is None  # samples restart with the new connection
+    assert first.exited is True
+
+
+@pytest.mark.asyncio
+async def test_a_steady_clock_offset_is_not_lag() -> None:
+    clock = Clock(1_000.0)
+    conn = Connector()
+    stream = _stream(conn, clock, max_lag_s=10.0)
+    stream.set_tokens({"a"})
+    async with running(stream):
+        await until(lambda: conn.made and conn.made[0].sent)
+        for _ in range(200):  # our clock runs 30 s ahead of the server's
+            conn.made[0].push(_trade(1_000_000 - 30_000))
+        await until(lambda: stream.status().frames_total == 200)
+        await asyncio.sleep(0.05)
+        st = stream.status()
+    assert len(conn.made) == 1 and st.reconnects == 0
+    assert st.latency_ms_p50 == 30_000.0
+
+
+@pytest.mark.asyncio
 async def test_requested_resync_sends_fresh_subscriptions() -> None:
     conn = Connector()
     stream = _stream(conn)

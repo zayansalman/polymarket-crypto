@@ -119,6 +119,7 @@ class MarketDataSnapshot:
     started_at: float
     clob: StreamStatus  # all market-channel sockets together (see merge_shard_status)
     clob_shards: dict[str, StreamStatus]  # by socket, e.g. "btc-5m"
+    slowest_socket: str | None  # the socket with the highest median latency
     prices: dict[str, SourceStatus]  # by source
     price_ages: dict[str, float | None]  # seconds since the newest print, by source
     markets: int  # windows followed
@@ -141,8 +142,8 @@ def merge_shard_status(
     """One status for the per-pair sockets.
 
     ``connected`` means every socket that wants tokens is up; ``last_error`` names the
-    ones that are down. Counts and rates are summed; latency percentiles are taken over
-    every socket's samples.
+    ones that are down. Counts and rates are summed. The latency percentiles are the
+    slowest socket's, so one market that has fallen behind is never averaged away.
     """
     wanted = {name: st for name, st in shards.items() if st.desired > 0}
     down = [name for name, st in wanted.items() if not st.connected]
@@ -151,7 +152,12 @@ def merge_shard_status(
     frames = [st.last_frame_at for st in shards.values() if st.last_frame_at is not None]
     pongs = [st.last_pong_at for st in shards.values() if st.last_pong_at is not None]
     notices = [st.last_notice for st in shards.values() if st.last_notice]
-    merged = sorted(x for name in shards for x in samples.get(name, ()))
+    p50s, p90s = [], []
+    for name in wanted:
+        values = sorted(samples.get(name, ()))
+        if values:
+            p50s.append(percentile(values, 0.5))
+            p90s.append(percentile(values, 0.9))
     error = None
     if down:
         error = f"{down[0]}: {wanted[down[0]].last_error or 'connecting'}"
@@ -164,8 +170,8 @@ def merge_shard_status(
         last_pong_at=max(pongs) if pongs else None,
         frames_total=sum(st.frames_total for st in shards.values()),
         frames_per_s=sum(st.frames_per_s for st in shards.values()),
-        latency_ms_p50=percentile(merged, 0.5),
-        latency_ms_p90=percentile(merged, 0.9),
+        latency_ms_p50=max(p50s) if p50s else None,
+        latency_ms_p90=max(p90s) if p90s else None,
         reconnects=sum(st.reconnects for st in shards.values()),
         resyncs=sum(st.resyncs for st in shards.values()),
         subscribed=sum(st.subscribed for st in shards.values()),
@@ -175,6 +181,12 @@ def merge_shard_status(
         last_error=error[:200] if error else None,
         last_notice=notices[0] if notices else None,
     )
+
+
+def slowest_socket(shards: dict[str, StreamStatus]) -> str | None:
+    timed = [(st.latency_ms_p50, name) for name, st in shards.items()
+             if st.desired > 0 and st.latency_ms_p50 is not None]
+    return max(timed)[1] if timed else None
 
 
 class Listener:
@@ -352,6 +364,7 @@ class MarketDataHub:
             started_at=self._started_at,
             clob=clob,
             clob_shards=shards,
+            slowest_socket=slowest_socket(shards),
             prices=prices,
             price_ages={
                 source: (None if st.newest_obs_ms is None

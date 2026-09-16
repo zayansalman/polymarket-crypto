@@ -330,11 +330,13 @@ def _src(**kw) -> rs.SourceStatus:
 def _md(clob: cs.StreamStatus | None = None, prices: dict | None = None,
         ages: dict | None = None, started_at: float = HT - 600, markets: int = 48,
         tokens: int = 96, gamma_errors: int = 0, gamma_last_error: str | None = None,
-        shards: dict | None = None) -> md_hub.MarketDataSnapshot:
+        shards: dict | None = None, slowest: str | None = "btc-5m"
+        ) -> md_hub.MarketDataSnapshot:
     clob = clob or _clob()
     return md_hub.MarketDataSnapshot(
         taken_at=HT, started_at=started_at, clob=clob,
         clob_shards=shards if shards is not None else {"btc-5m": clob},
+        slowest_socket=slowest,
         prices=prices or {s: _src() for s in rs.SOURCES},
         price_ages=ages if ages is not None else {s: 1.5 for s in rs.SOURCES},
         markets=markets, tokens=tokens, subscribed=clob.subscribed, gamma_lookups=60,
@@ -398,7 +400,13 @@ def test_books_row_states() -> None:
     fresh = books(clob=_clob(connected_since=HT - 5, last_frame_at=HT - 400))
     assert fresh.status == "OK"
     slow = books(clob=_clob(latency_ms_p50=2500.0))
-    assert (slow.status, slow.delay, slow.delay_warn) == ("OK", "2.5s", True)
+    assert (slow.status, slow.delay, slow.delay_warn, slow.detail) == (
+        "OK", "2.5s", True, "slowest socket: btc-5m")
+    lagging = books(clob=_clob(latency_ms_p50=12_300.0), slowest="eth-5m")
+    assert (lagging.status, lagging.level, lagging.delay, lagging.delay_warn) == (
+        "STALE", "warn", "12s", True)
+    assert lagging.detail == "eth-5m is 12s behind (median event latency)"
+    assert books(clob=_clob(latency_ms_p50=5_000.0)).status == "OK"
     idle = books(clob=_clob(subscribed=0, last_frame_at=HT - 400))
     assert (idle.status, idle.level) == ("IDLE", "idle")
     no_markets = books(clob=_clob(connected=False, connected_since=None, subscribed=0),
