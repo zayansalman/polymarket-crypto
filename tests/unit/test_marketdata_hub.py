@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from polymarket_exec.marketdata import clob_messages as cm
+from polymarket_exec.marketdata import clob_shard as sh
 from polymarket_exec.marketdata import clob_stream as cs
 from polymarket_exec.marketdata import hub as hub_mod
 from polymarket_exec.marketdata import rtds_stream as rs
@@ -259,7 +260,9 @@ async def test_run_wires_the_universe_both_streams_and_the_listeners() -> None:
     stop = asyncio.Event()
     task = asyncio.create_task(_REAL_RUN(hub, stop))
     try:
-        await until(lambda: clob.made and clob.made[0].sent and rtds.made and rtds.made[0].sent)
+        await until(lambda: len(clob.made) == 2 and all(ws.sent for ws in clob.made)
+                    and rtds.made and rtds.made[0].sent)
+        assert clob.made[0].sent == clob.made[1].sent  # two connections, same subscription
         first = json.loads(clob.made[0].sent[0])
         assert first["type"] == "market" and set(first["assets_ids"]) == {
             UP, DOWN, f"{NEXT}:up", f"{NEXT}:down"}
@@ -270,8 +273,12 @@ async def test_run_wires_the_universe_both_streams_and_the_listeners() -> None:
         resolved.update(market=MARKET, assets_ids=[UP, DOWN], winning_asset_id=DOWN,
                         winning_outcome="Down")
         clob.made[0].incoming.put_nowait(json.dumps(resolved))
+        await until(lambda: hub.snapshot().clob.frames_total == 2)
+        for frame in ((FIXTURES / "clob_book_snapshot_array.json").read_text(),
+                      json.dumps(resolved)):
+            clob.made[1].incoming.put_nowait(frame)  # the same frames, later
         await until(lambda: hub.price(rs.BINANCE, "btc") is not None
-                    and hub.snapshot().clob.frames_total == 2)
+                    and hub.snapshot().clob.frames_total == 4)
         snap = hub.snapshot()
         assert (snap.markets, snap.tokens, snap.subscribed, snap.gamma_lookups) == (2, 4, 4, 2)
         assert snap.gamma_errors == 0 and snap.listeners == 1
@@ -309,7 +316,7 @@ async def test_market_resolved_names_the_window() -> None:
     assert events[0].market.slug == CURRENT
     assert (events[0].winning_token, events[0].winning_outcome) == (DOWN, "Down")
     # Still inside its window, so it stays followed until 30 s after the end.
-    shard = hub._clob_streams["btc-5m"]
+    shard = hub._shards["btc-5m"]
     assert UP in shard.desired
     clock["t"] = 1_789_554_600 + 31
     hub._apply_groups(hub._universe.groups())
@@ -319,7 +326,7 @@ async def test_market_resolved_names_the_window() -> None:
 @pytest.mark.asyncio
 async def test_each_asset_timeframe_gets_its_own_socket() -> None:
     clob = Connector()
-    hub = _hub(clob_connect=clob, timeframes=("5m", "15m"))
+    hub = _hub(clob_connect=clob, timeframes=("5m", "15m"), hedge={})
     stop = asyncio.Event()
     task = asyncio.create_task(_REAL_RUN(hub, stop))
     try:
@@ -339,49 +346,97 @@ async def test_each_asset_timeframe_gets_its_own_socket() -> None:
         await until(lambda: hub.top(UP) is not None)
         snap = hub.snapshot()
         assert set(snap.clob_shards) == {"btc-5m", "btc-15m"}
+        assert all(len(s.connections) == 1 for s in snap.clob_shards.values())
         assert snap.clob.connected is True and snap.subscribed == 8
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=2)
 
 
-def _shard(**kw) -> cs.StreamStatus:
+def _conn(**kw) -> cs.StreamStatus:
     base = dict(connected=True, connected_since=100.0, last_frame_at=150.0,
                 last_pong_at=None, frames_total=10, frames_per_s=2.0, latency_ms_p50=None,
                 latency_ms_p90=None, reconnects=1, resyncs=0, subscribed=4, desired=4,
-                unknown=0, handler_errors=0, last_error=None, last_notice=None)
+                unknown=0, handler_errors=0, last_error=None, last_notice=None,
+                bytes_total=1000)
     base.update(kw)
     return cs.StreamStatus(**base)
 
 
+def _group(name: str, *conns: cs.StreamStatus, p50=None, p90=None, top=None,
+           desired: int = 4, **kw) -> sh.ShardStatus:
+    base = dict(name=name, connections=conns,
+                connected=sum(1 for c in conns if c.connected), desired=desired,
+                served_latency_ms_p50=p50, served_latency_ms_p90=p90,
+                served_latency_ms_max=top, served_staleness_s=None, leader_switches=0,
+                stalls_avoided=0, recycles=0, stall_episodes=tuple(0 for _ in conns))
+    base.update(kw)
+    return sh.ShardStatus(**base)
+
+
 def test_shard_statuses_merge_into_one_feed_status() -> None:
     shards = {
-        "btc-5m": _shard(last_frame_at=160.0, frames_total=30, frames_per_s=5.5),
-        "eth-5m": _shard(connected_since=90.0, resyncs=2, last_notice="INVALID OPERATION"),
-        "sol-1d": _shard(connected=False, connected_since=None, subscribed=0,
-                         last_error="OSError: reset"),
-        "bnb-1h": _shard(connected=False, connected_since=None, subscribed=0, desired=0,
-                         last_error="old error"),  # wants nothing: not counted as down
+        "btc-5m": _group("btc-5m", _conn(last_frame_at=160.0, frames_total=30,
+                                         frames_per_s=5.5),
+                         _conn(connected=False, connected_since=None, subscribed=0,
+                               last_error="recycled: 3.2s behind the freshest connection"),
+                         p50=120.0, p90=300.0, top=900.0),
+        "eth-5m": _group("eth-5m", _conn(connected_since=90.0, resyncs=2,
+                                         last_notice="INVALID OPERATION"),
+                         p50=4_000.0, p90=4_500.0, top=5_000.0),
+        "sol-1d": _group("sol-1d", _conn(connected=False, connected_since=None,
+                                         subscribed=0, last_error="OSError: reset"),
+                         p50=90.0, p90=95.0, top=99.0),
+        "bnb-1h": _group("bnb-1h", _conn(connected=False, connected_since=None,
+                                         subscribed=0, desired=0, last_error="old"),
+                         p50=9_999.0, desired=0),  # wants nothing: ignored
     }
-    samples = {"btc-5m": (10, 20, 30, 40), "eth-5m": (50, 60), "sol-1d": (), "bnb-1h": ()}
-    merged = hub_mod.merge_shard_status(shards, samples)
-    assert merged.connected is False  # one wanted socket is down
-    assert (merged.frames_total, merged.frames_per_s, merged.reconnects, merged.resyncs) == (
-        60, 11.5, 4, 2)
-    assert (merged.subscribed, merged.desired) == (8, 12)
-    assert (merged.last_frame_at, merged.connected_since) == (160.0, 90.0)
-    # The slowest socket's latency, so one lagging market is never averaged away.
-    assert (merged.latency_ms_p50, merged.latency_ms_p90) == (60.0, 60.0)
-    assert hub_mod.slowest_socket(shards) is None  # the statuses carry no percentiles
-    timed = {"btc-5m": _shard(latency_ms_p50=103.0), "eth-5m": _shard(latency_ms_p50=9_800.0),
-             "sol-1d": _shard(latency_ms_p50=None)}
-    assert hub_mod.slowest_socket(timed) == "eth-5m"
+    merged = hub_mod.merge_shard_status(shards)
+    assert merged.connected is False  # sol-1d has no connection up
     assert merged.last_error == "sol-1d: OSError: reset"
+    assert (merged.frames_total, merged.frames_per_s, merged.reconnects, merged.resyncs) == (
+        70, 13.5, 5, 2)
+    assert (merged.subscribed, merged.desired, merged.bytes_total) == (8, 12, 5000)
+    assert (merged.last_frame_at, merged.connected_since) == (160.0, 90.0)
+    # The worst market's served latency, not the worst single connection's.
+    assert (merged.latency_ms_p50, merged.latency_ms_p90, merged.latency_ms_max) == (
+        4_000.0, 4_500.0, 5_000.0)
     assert merged.last_notice == "INVALID OPERATION"
-    healthy = hub_mod.merge_shard_status(
-        {k: v for k, v in shards.items() if k != "sol-1d"}, samples)
-    assert healthy.connected is True and healthy.last_error is None
-    assert hub_mod.merge_shard_status({}, {}).connected is False
+    assert hub_mod.slowest_shard(shards) == "eth-5m"
+    healthy = hub_mod.merge_shard_status({k: v for k, v in shards.items() if k != "sol-1d"})
+    assert healthy.connected is True and healthy.last_error is None  # btc-5m still serves
+    assert hub_mod.merge_shard_status({}).connected is False
+    assert hub_mod.slowest_shard({}) is None
+
+
+def test_hedge_counts() -> None:
+    def counts(hub: hub_mod.MarketDataHub) -> dict[str, int]:
+        return {name: shard.connections for name, shard in hub._shards.items()
+                if shard.connections > 1}
+
+    assert counts(hub_mod.MarketDataHub()) == {"btc-5m": 2, "btc-15m": 2, "btc-1h": 2}
+    assert counts(hub_mod.MarketDataHub(hedge={"btc": 2})) == {
+        "btc-5m": 2, "btc-15m": 2, "btc-1h": 2, "btc-1d": 2}
+    assert counts(hub_mod.MarketDataHub(hedge={("eth", "5m"): 3, "sol-1h": 2})) == {
+        "eth-5m": 3, "sol-1h": 2}
+    assert counts(hub_mod.MarketDataHub(hedge={})) == {}
+    assert hub_mod.hedge_count({"btc": 0}, "btc", "5m") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_resolution_from_two_connections_is_pushed_once() -> None:
+    hub = _hub()
+    try:
+        update = await hub._universe.refresh()
+    finally:
+        await hub._universe.aclose()
+    hub._apply_groups(update.groups)
+    listener = hub.listen()
+    resolved = cm.MarketResolvedEvent("1", MARKET, (UP, DOWN), DOWN, "Down", 5, ("5M",))
+    shard = hub._shards["btc-5m"]
+    shard.handle_event(0, resolved, 6)
+    shard.handle_event(1, resolved, 7)
+    assert [type(e).__name__ for e in _drain(listener)] == ["MarketResolved"]
 
 
 def test_snapshot_before_running() -> None:
@@ -390,6 +445,7 @@ def test_snapshot_before_running() -> None:
     assert snap.taken_at == T0 and snap.started_at == T0
     assert (snap.markets, snap.tokens, snap.subscribed, snap.listeners) == (0, 0, 0, 0)
     assert snap.clob.connected is False and set(snap.clob_shards) == {"btc-5m"}
+    assert len(snap.clob_shards["btc-5m"].connections) == 2 and snap.slowest_shard is None
     assert set(snap.prices) == set(rs.SOURCES)
     assert all(age is None for age in snap.price_ages.values())
 
@@ -398,8 +454,8 @@ def test_default_grid_and_registry() -> None:
     hub = hub_mod.MarketDataHub()
     assert hub.assets == ("btc", "eth", "sol", "xrp", "doge", "bnb")
     assert hub.timeframes == ("5m", "15m", "1h", "1d")
-    assert len(hub._clob_streams) == 24  # one market-channel socket per asset x timeframe
-    assert "btc-5m" in hub._clob_streams and "bnb-1d" in hub._clob_streams
+    assert len(hub._shards) == 24  # one market-channel socket group per asset x timeframe
+    assert sum(s.connections for s in hub._shards.values()) == 27  # busy BTC ones doubled
     hub_mod.set_current(hub)
     try:
         assert hub_mod.current() is hub

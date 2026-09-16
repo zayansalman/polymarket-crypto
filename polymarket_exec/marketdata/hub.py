@@ -5,11 +5,14 @@ resolutions for the followed Up/Down windows), one RTDS connection (Chainlink, C
 60 s TWAP and Binance prices) and the universe refresher (which windows to follow, every
 2 s). The dashboard lifespan starts it and registers it with ``set_current``.
 
-There is one market-channel socket per asset x timeframe (24 for the default grid). Live
-on 2026-09-16, all 96 tokens on one socket (~2,100 frames/s, ~1.2 MiB/s) fell seconds
-behind and the server dropped it with 1013 "slow consumer: send buffer full" every
-15-30 s, even with a reader that did no parsing; one socket per pair kept every socket
-near 110 ms. A window's two tokens always share a socket, because each ``price_change``
+Each asset x timeframe has its own market-channel socket group (``clob_shard.ClobShard``).
+Live on 2026-09-16, all 96 tokens on one socket (~2,100 frames/s, ~1.2 MiB/s) fell
+seconds behind and the server dropped it with 1013 "slow consumer: send buffer full"
+every 15-30 s, even with a reader that did no parsing; one socket per pair kept most
+sockets near 110 ms. A busy market's single connection could still stall for seconds
+while a second connection to the same tokens stayed current, so the busiest groups
+(``DEFAULT_HEDGE``: btc 5m, 15m, 1h) run two connections and serve whichever is
+freshest. A window's two tokens always share a group, because each ``price_change``
 carries both outcomes.
 
 Reads are safe from any thread (the BTC loop runs on its own thread and event loop):
@@ -17,9 +20,10 @@ they return frozen objects that are swapped in whole, never mutated.
 
 Event-driven code calls ``listen()`` on its own event loop and iterates the listener:
 ``TopChanged`` (best bid/ask or their sizes moved), ``Trade``, ``PriceTick`` (a new
-reference print), ``MarketResolved`` and ``WindowOpened``. Delivery crosses threads with
-``call_soon_threadsafe``; a listener that falls ``maxsize`` events behind loses its
-oldest events, and the losses are counted.
+reference print), ``MarketResolved`` and ``WindowOpened``, each pushed once however many
+connections deliver it. Delivery crosses threads with ``call_soon_threadsafe``; a
+listener that falls ``maxsize`` events behind loses its oldest events, and the losses
+are counted.
 
 Observation only: nothing here decides or gates trades, or reads the trading mode.
 """
@@ -29,7 +33,7 @@ import asyncio
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Union
 
@@ -45,13 +49,9 @@ from polymarket_exec.marketdata.clob_messages import (
     PriceChangeEvent,
     TickSizeEvent,
 )
-from polymarket_exec.marketdata.clob_stream import (
-    ClobMarketStream,
-    StreamStatus,
-    pause,
-    percentile,
-)
-from polymarket_exec.marketdata.order_book import Level, OrderBook, TopOfBook
+from polymarket_exec.marketdata.clob_shard import ClobShard, ShardStatus
+from polymarket_exec.marketdata.clob_stream import StreamStatus, pause
+from polymarket_exec.marketdata.order_book import Level, TopOfBook
 from polymarket_exec.marketdata.rtds_stream import PricePoint, RtdsPriceStream, SourceStatus
 from polymarket_exec.marketdata.universe import (
     ASSETS,
@@ -65,6 +65,10 @@ from polymarket_exec.marketdata.universe import (
 log = get_logger("marketdata.hub")
 
 LISTENER_MAXSIZE = 2048
+# Connections per asset x timeframe; anything not listed gets one. Keys may be
+# (asset, timeframe), "asset-timeframe" or an asset (all its timeframes).
+DEFAULT_HEDGE: dict[Any, int] = {"btc-5m": 2, "btc-15m": 2, "btc-1h": 2}
+RESOLVED_MEMORY = 512
 
 
 @dataclass(frozen=True)
@@ -117,14 +121,14 @@ class MarketDataSnapshot:
 
     taken_at: float
     started_at: float
-    clob: StreamStatus  # all market-channel sockets together (see merge_shard_status)
-    clob_shards: dict[str, StreamStatus]  # by socket, e.g. "btc-5m"
-    slowest_socket: str | None  # the socket with the highest median latency
+    clob: StreamStatus  # every market-channel connection together (merge_shard_status)
+    clob_shards: dict[str, ShardStatus]  # by asset x timeframe, e.g. "btc-5m"
+    slowest_shard: str | None  # the group with the highest served latency
     prices: dict[str, SourceStatus]  # by source
     price_ages: dict[str, float | None]  # seconds since the newest print, by source
     markets: int  # windows followed
     tokens: int  # tokens wanted
-    subscribed: int  # tokens on the open socket
+    subscribed: int  # tokens with at least one open subscription
     gamma_lookups: int
     gamma_errors: int
     gamma_last_error: str | None
@@ -136,31 +140,41 @@ def shard_name(asset: str, timeframe: str) -> str:
     return f"{asset}-{timeframe}"
 
 
-def merge_shard_status(
-    shards: dict[str, StreamStatus], samples: dict[str, tuple[int, ...]]
-) -> StreamStatus:
-    """One status for the per-pair sockets.
+def hedge_count(hedge: Mapping[Any, int], asset: str, timeframe: str) -> int:
+    """Connections for one asset x timeframe (the most specific key wins; at least one)."""
+    for key in ((asset, timeframe), shard_name(asset, timeframe), asset):
+        if key in hedge:
+            return max(1, int(hedge[key]))
+    return 1
 
-    ``connected`` means every socket that wants tokens is up; ``last_error`` names the
-    ones that are down. Counts and rates are summed. The latency percentiles are the
-    slowest socket's, so one market that has fallen behind is never averaged away.
+
+def merge_shard_status(shards: dict[str, ShardStatus]) -> StreamStatus:
+    """One status for every market-channel connection.
+
+    ``connected`` means every group that wants tokens has a connection up; ``last_error``
+    names the groups with none. Counts and rates are summed over connections. The latency
+    percentiles are the SERVED latency of the worst group (what readers actually get),
+    not the worst single connection.
     """
     wanted = {name: st for name, st in shards.items() if st.desired > 0}
-    down = [name for name, st in wanted.items() if not st.connected]
-    since = [st.connected_since for st in wanted.values()
-             if st.connected and st.connected_since is not None]
-    frames = [st.last_frame_at for st in shards.values() if st.last_frame_at is not None]
-    pongs = [st.last_pong_at for st in shards.values() if st.last_pong_at is not None]
-    notices = [st.last_notice for st in shards.values() if st.last_notice]
-    p50s, p90s = [], []
-    for name in wanted:
-        values = sorted(samples.get(name, ()))
-        if values:
-            p50s.append(percentile(values, 0.5))
-            p90s.append(percentile(values, 0.9))
+    down = [name for name, st in wanted.items() if st.connected == 0]
+    conns = [c for st in shards.values() for c in st.connections]
+    since = [c.connected_since for st in wanted.values() for c in st.connections
+             if c.connected and c.connected_since is not None]
+    frames = [c.last_frame_at for c in conns if c.last_frame_at is not None]
+    pongs = [c.last_pong_at for c in conns if c.last_pong_at is not None]
+    notices = [c.last_notice for c in conns if c.last_notice]
+    p50s = [st.served_latency_ms_p50 for st in wanted.values()
+            if st.served_latency_ms_p50 is not None]
+    p90s = [st.served_latency_ms_p90 for st in wanted.values()
+            if st.served_latency_ms_p90 is not None]
+    maxes = [st.served_latency_ms_max for st in wanted.values()
+             if st.served_latency_ms_max is not None]
     error = None
     if down:
-        error = f"{down[0]}: {wanted[down[0]].last_error or 'connecting'}"
+        detail = next((c.last_error for c in wanted[down[0]].connections if c.last_error),
+                      None)
+        error = f"{down[0]}: {detail or 'connecting'}"
         if len(down) > 1:
             error += f" (+{len(down) - 1} more)"
     return StreamStatus(
@@ -168,25 +182,36 @@ def merge_shard_status(
         connected_since=min(since) if since else None,
         last_frame_at=max(frames) if frames else None,
         last_pong_at=max(pongs) if pongs else None,
-        frames_total=sum(st.frames_total for st in shards.values()),
-        frames_per_s=sum(st.frames_per_s for st in shards.values()),
+        frames_total=sum(c.frames_total for c in conns),
+        frames_per_s=sum(c.frames_per_s for c in conns),
         latency_ms_p50=max(p50s) if p50s else None,
         latency_ms_p90=max(p90s) if p90s else None,
-        reconnects=sum(st.reconnects for st in shards.values()),
-        resyncs=sum(st.resyncs for st in shards.values()),
-        subscribed=sum(st.subscribed for st in shards.values()),
+        reconnects=sum(c.reconnects for c in conns),
+        resyncs=sum(c.resyncs for c in conns),
+        subscribed=sum(max((c.subscribed for c in st.connections), default=0)
+                       for st in shards.values()),
         desired=sum(st.desired for st in shards.values()),
-        unknown=sum(st.unknown for st in shards.values()),
-        handler_errors=sum(st.handler_errors for st in shards.values()),
+        unknown=sum(c.unknown for c in conns),
+        handler_errors=sum(c.handler_errors for c in conns),
         last_error=error[:200] if error else None,
         last_notice=notices[0] if notices else None,
+        bytes_total=sum(c.bytes_total for c in conns),
+        latency_ms_max=max(maxes) if maxes else None,
     )
 
 
-def slowest_socket(shards: dict[str, StreamStatus]) -> str | None:
-    timed = [(st.latency_ms_p50, name) for name, st in shards.items()
-             if st.desired > 0 and st.latency_ms_p50 is not None]
+def slowest_shard(shards: dict[str, ShardStatus]) -> str | None:
+    timed = [(st.served_latency_ms_p50, name) for name, st in shards.items()
+             if st.desired > 0 and st.served_latency_ms_p50 is not None]
     return max(timed)[1] if timed else None
+
+
+def _token_of(event: ClobEvent) -> str | None:
+    if isinstance(event, (BookEvent, LastTradeEvent, TickSizeEvent)):
+        return event.asset_id
+    if isinstance(event, PriceChangeEvent):
+        return event.changes[0].asset_id
+    return None
 
 
 class Listener:
@@ -282,6 +307,7 @@ class MarketDataHub:
         assets: Iterable[str] = ASSETS,
         timeframes: Iterable[str] = TIMEFRAMES,
         *,
+        hedge: Mapping[Any, int] | None = None,
         clob_connect: Callable[[str], Any] | None = None,
         rtds_connect: Callable[[str], Any] | None = None,
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
@@ -292,16 +318,18 @@ class MarketDataHub:
         self._refresh_s = refresh_s
         self._universe = MarketUniverse(assets, timeframes, client_factory=client_factory,
                                         time_fn=time_fn)
-        self._clob_streams = {
-            shard_name(asset, timeframe): ClobMarketStream(
-                self.handle_clob_event, connect=clob_connect, time_fn=time_fn)
+        hedge = DEFAULT_HEDGE if hedge is None else hedge
+        self._shards = {
+            shard_name(asset, timeframe): ClobShard(
+                shard_name(asset, timeframe), hedge_count(hedge, asset, timeframe),
+                on_top=self._on_top, on_trade=self._on_trade, on_other=self._on_other_event,
+                connect=clob_connect, time_fn=time_fn)
             for asset, timeframe in self._universe.grid
         }
         self._rtds = RtdsPriceStream(self._universe.assets, on_point=self._on_price,
                                      connect=rtds_connect, time_fn=time_fn)
-        self._desired: frozenset[str] = frozenset()
-        self._books: dict[str, OrderBook] = {}
-        self._tops: dict[str, TopOfBook] = {}
+        self._shard_by_token: dict[str, ClobShard] = {}
+        self._resolved_seen: dict[str, None] = {}  # markets whose resolution was pushed
         self._listeners: tuple[Listener, ...] = ()
         self._listeners_lock = threading.Lock()
         self._closed_listener_drops = 0
@@ -318,12 +346,14 @@ class MarketDataHub:
     # --- reads (any thread) ---------------------------------------------------------
 
     def top(self, token_id: str) -> TopOfBook | None:
-        return self._tops.get(token_id)
+        """The top of the freshest connection's book for a followed token."""
+        shard = self._shard_by_token.get(token_id)
+        return shard.top(token_id) if shard is not None else None
 
     def levels(self, token_id: str, side: str = "bid", n: int = 10) -> tuple[Level, ...]:
-        """The best ``n`` levels of ``side`` ("bid" | "ask") for a followed token."""
-        book = self._books.get(token_id)
-        return book.levels(side, n) if book is not None else ()
+        """The best ``n`` levels of ``side`` ("bid" | "ask"), from the freshest connection."""
+        shard = self._shard_by_token.get(token_id)
+        return shard.levels(token_id, side, n) if shard is not None else ()
 
     def market(self, asset: str, timeframe: str, which: str = CURRENT) -> MarketRef | None:
         """The followed ``"current"`` or ``"next"`` window of ``asset``/``timeframe``."""
@@ -333,7 +363,7 @@ class MarketDataHub:
         ref = self._universe.market(asset, timeframe, which)
         if ref is None:
             return None
-        return MarketQuote(ref, self._tops.get(ref.up_token), self._tops.get(ref.down_token))
+        return MarketQuote(ref, self.top(ref.up_token), self.top(ref.down_token))
 
     def price(self, source: str, asset: str) -> PricePoint | None:
         """Newest print from ``source`` (chainlink | chainlink_twap60 | binance)."""
@@ -353,9 +383,8 @@ class MarketDataHub:
 
     def snapshot(self) -> MarketDataSnapshot:
         now = self._time_fn()
-        shards = {name: stream.status() for name, stream in self._clob_streams.items()}
-        clob = merge_shard_status(
-            shards, {name: s.latency_samples() for name, s in self._clob_streams.items()})
+        shards = {name: shard.status() for name, shard in self._shards.items()}
+        clob = merge_shard_status(shards)
         prices = self._rtds.status()
         universe = self._universe.status()
         listeners = self._listeners
@@ -364,7 +393,7 @@ class MarketDataHub:
             started_at=self._started_at,
             clob=clob,
             clob_shards=shards,
-            slowest_socket=slowest_socket(shards),
+            slowest_shard=slowest_shard(shards),
             prices=prices,
             price_ages={
                 source: (None if st.newest_obs_ms is None
@@ -386,8 +415,8 @@ class MarketDataHub:
     async def run(self, stop_event: asyncio.Event) -> None:
         """Follow the markets and prices until ``stop_event``."""
         self._started_at = self._time_fn()
-        tasks = [asyncio.ensure_future(stream.run(stop_event))
-                 for stream in self._clob_streams.values()]
+        tasks = [asyncio.ensure_future(shard.run(stop_event))
+                 for shard in self._shards.values()]
         tasks.append(asyncio.ensure_future(self._rtds.run(stop_event)))
         tasks.append(asyncio.ensure_future(self._refresh_forever(stop_event)))
         try:
@@ -413,63 +442,43 @@ class MarketDataHub:
             await pause(stop_event, self._refresh_s)
 
     def _apply_groups(self, groups: dict[tuple[str, str], frozenset[str]]) -> None:
-        """Give each pair's socket its tokens; forget books no socket follows any more."""
-        desired: set[str] = set()
+        """Give each group its tokens; each group drops the books it no longer follows."""
+        by_token: dict[str, ClobShard] = {}
         for asset, timeframe in self._universe.grid:
+            shard = self._shards[shard_name(asset, timeframe)]
             tokens = groups.get((asset, timeframe), frozenset())
-            self._clob_streams[shard_name(asset, timeframe)].set_tokens(tokens)
-            desired |= tokens
-        self._desired = frozenset(desired)
-        for token in [t for t in self._books if t not in self._desired]:
-            del self._books[token]
-            self._tops.pop(token, None)
+            shard.set_tokens(tokens)
+            for token in tokens:
+                by_token[token] = shard
+        self._shard_by_token = by_token
 
     def handle_clob_event(self, event: ClobEvent, received_ms: int) -> None:
-        """Apply one market-channel event (the stream's callback; synchronous)."""
-        if isinstance(event, PriceChangeEvent):
-            for change in event.changes:
-                book = self._book(change.asset_id)
-                if book is not None:
-                    book.apply(change.side, change.price, change.size, event.ts_ms, received_ms)
-                    self._publish_top(book)
-        elif isinstance(event, BookEvent):
-            book = self._book(event.asset_id)
-            if book is not None:
-                book.reset(event.bids, event.asks, event.tick_size, event.last_trade_price,
-                           event.ts_ms, received_ms)
-                self._publish_top(book)
-        elif isinstance(event, LastTradeEvent):
-            book = self._book(event.asset_id)
-            if book is not None:
-                book.record_trade(event.price, event.size, event.side, event.ts_ms,
-                                  received_ms)
-                self._publish_top(book)
-                self._emit(Trade(event.asset_id, event.price, event.size, event.side,
-                                 event.ts_ms))
-        elif isinstance(event, TickSizeEvent):
-            book = self._book(event.asset_id)
-            if book is not None and book.set_tick_size(event.new_tick_size):
-                self._publish_top(book)
-        elif isinstance(event, NewMarketEvent):
+        """Apply one event as if its group's first connection delivered it (replays, tests)."""
+        token = _token_of(event)
+        if token is None:
+            self._on_other_event(event)
+            return
+        shard = self._shard_by_token.get(token)
+        if shard is not None:
+            shard.handle_event(0, event, received_ms)
+
+    def _on_top(self, token_id: str, top: TopOfBook) -> None:
+        self._emit(TopChanged(token_id, top))
+
+    def _on_trade(self, event: LastTradeEvent) -> None:
+        self._emit(Trade(event.asset_id, event.price, event.size, event.side, event.ts_ms))
+
+    def _on_other_event(self, event: ClobEvent) -> None:
+        if isinstance(event, NewMarketEvent):
             self._universe.observe(event)
         elif isinstance(event, MarketResolvedEvent):
+            if event.market in self._resolved_seen:
+                return  # another connection delivered it first
+            self._resolved_seen[event.market] = None
+            while len(self._resolved_seen) > RESOLVED_MEMORY:
+                del self._resolved_seen[next(iter(self._resolved_seen))]
             self._on_resolved(event)
-        # best_bid_ask repeats what the rebuilt book already shows.
-
-    def _book(self, token_id: str) -> OrderBook | None:
-        book = self._books.get(token_id)
-        if book is None and token_id in self._desired:
-            book = self._books[token_id] = OrderBook(token_id)
-        return book
-
-    def _publish_top(self, book: OrderBook) -> None:
-        top = book.top()
-        previous = self._tops.get(book.token_id)
-        self._tops[book.token_id] = top
-        if (previous is None
-                or previous.best_bid != top.best_bid or previous.best_ask != top.best_ask
-                or previous.bid_size != top.bid_size or previous.ask_size != top.ask_size):
-            self._emit(TopChanged(book.token_id, top))
+        # best_bid_ask repeats what the rebuilt books already show.
 
     def _on_resolved(self, event: MarketResolvedEvent) -> None:
         ref = None

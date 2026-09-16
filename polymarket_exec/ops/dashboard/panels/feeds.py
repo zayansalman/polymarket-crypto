@@ -8,8 +8,8 @@ more row.
 
 Delay is the age of the latest print for the Chainlink WS stream and the RTDS price
 rows, the round-trip time of the latest check for each monitored REST feed, the event
-latency (p50 of the slowest of the hub's CLOB market sockets), and the age of the last
-successful pull for recorder feeds.
+latency (p50 served to readers, for the slowest asset x timeframe), and the age of the
+last successful pull for recorder feeds.
 """
 from __future__ import annotations
 
@@ -185,9 +185,10 @@ def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
     name, source = "Polymarket books", "CLOB market WS"
     role = f"Up/Down books · trades ({md.markets} markets)"
     st = md.clob
-    p50 = st.latency_ms_p50
+    p50 = st.latency_ms_p50  # the worst group's served latency
     delay = _ms(p50) if p50 is not None else "—"
     slow = p50 is not None and p50 > SLOW_MS
+    wanted = [s for s in md.clob_shards.values() if s.desired > 0]
     if st.connected:
         if st.subscribed == 0:
             return FeedRow(name, role, source, delay, "IDLE", "idle", False,
@@ -197,12 +198,17 @@ def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
         if quiet > BOOKS_STALE_S:
             return FeedRow(name, role, source, delay, "STALE", "warn", True,
                            f"connected, but no data for {_secs(quiet)}")
-        slowest = md.slowest_socket or "a socket"
+        slowest = md.slowest_shard or "a market"
         if p50 is not None and p50 > BOOKS_LAG_S * 1000:
             return FeedRow(name, role, source, delay, "STALE", "warn", True,
-                           f"{slowest} is {_secs(p50 / 1000)} behind (median event latency)")
-        return FeedRow(name, role, source, delay, "OK", "on", slow,
-                       f"slowest socket: {slowest}" if slow else None)
+                           f"{slowest} is {_secs(p50 / 1000)} behind (served latency)")
+        detail = f"slowest: {slowest}" if slow else None
+        conns = [c for s in wanted for c in s.connections]
+        reconnecting = sum(1 for c in conns if not c.connected)
+        if reconnecting and detail is None:
+            detail = (f"{reconnecting} of {len(conns)} connections reconnecting; "
+                      "every market is still served")
+        return FeedRow(name, role, source, delay, "OK", "on", slow, detail)
     if md.taken_at - md.started_at <= WS_CONNECT_GRACE_S:
         return FeedRow(name, role, source, delay, "CONNECTING", "idle")
     if md.tokens == 0:
@@ -211,10 +217,9 @@ def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
             detail += f" (Gamma lookups failing: {md.gamma_last_error or 'error'})"
     else:
         detail = st.last_error or "not connected (reconnecting)"
-        wanted = [s for s in md.clob_shards.values() if s.desired > 0]
-        down = sum(1 for s in wanted if not s.connected)
-        if 0 < down < len(wanted):  # one socket per asset x timeframe
-            detail = f"{down} of {len(wanted)} sockets down; {detail}"
+        down = sum(1 for s in wanted if s.connected == 0)
+        if 0 < down < len(wanted):  # one socket group per asset x timeframe
+            detail = f"{down} of {len(wanted)} asset/timeframe feeds down; {detail}"
     return FeedRow(name, role, source, delay, "DOWN", "down", slow, detail[:200])
 
 

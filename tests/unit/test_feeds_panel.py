@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 import config as _config
+from polymarket_exec.marketdata import clob_shard as sh
 from polymarket_exec.marketdata import clob_stream as cs
 from polymarket_exec.marketdata import hub as md_hub
 from polymarket_exec.marketdata import rtds_stream as rs
@@ -327,6 +328,14 @@ def _src(**kw) -> rs.SourceStatus:
     return rs.SourceStatus(**base)
 
 
+def _group(*conns: cs.StreamStatus, desired: int = 4) -> sh.ShardStatus:
+    return sh.ShardStatus(
+        name="x", connections=conns, connected=sum(1 for c in conns if c.connected),
+        desired=desired, served_latency_ms_p50=48.0, served_latency_ms_p90=90.0,
+        served_latency_ms_max=120.0, served_staleness_s=0.1, leader_switches=0,
+        stalls_avoided=0, recycles=0, stall_episodes=tuple(0 for _ in conns))
+
+
 def _md(clob: cs.StreamStatus | None = None, prices: dict | None = None,
         ages: dict | None = None, started_at: float = HT - 600, markets: int = 48,
         tokens: int = 96, gamma_errors: int = 0, gamma_last_error: str | None = None,
@@ -335,8 +344,8 @@ def _md(clob: cs.StreamStatus | None = None, prices: dict | None = None,
     clob = clob or _clob()
     return md_hub.MarketDataSnapshot(
         taken_at=HT, started_at=started_at, clob=clob,
-        clob_shards=shards if shards is not None else {"btc-5m": clob},
-        slowest_socket=slowest,
+        clob_shards=shards if shards is not None else {"btc-5m": _group(clob)},
+        slowest_shard=slowest,
         prices=prices or {s: _src() for s in rs.SOURCES},
         price_ages=ages if ages is not None else {s: 1.5 for s in rs.SOURCES},
         markets=markets, tokens=tokens, subscribed=clob.subscribed, gamma_lookups=60,
@@ -401,11 +410,15 @@ def test_books_row_states() -> None:
     assert fresh.status == "OK"
     slow = books(clob=_clob(latency_ms_p50=2500.0))
     assert (slow.status, slow.delay, slow.delay_warn, slow.detail) == (
-        "OK", "2.5s", True, "slowest socket: btc-5m")
+        "OK", "2.5s", True, "slowest: btc-5m")
     lagging = books(clob=_clob(latency_ms_p50=12_300.0), slowest="eth-5m")
     assert (lagging.status, lagging.level, lagging.delay, lagging.delay_warn) == (
         "STALE", "warn", "12s", True)
-    assert lagging.detail == "eth-5m is 12s behind (median event latency)"
+    assert lagging.detail == "eth-5m is 12s behind (served latency)"
+    hedged = {"btc-5m": _group(_clob(), _clob(connected=False)), "eth-5m": _group(_clob())}
+    degraded = books(shards=hedged)
+    assert (degraded.status, degraded.level, degraded.detail) == (
+        "OK", "on", "1 of 3 connections reconnecting; every market is still served")
     assert books(clob=_clob(latency_ms_p50=5_000.0)).status == "OK"
     idle = books(clob=_clob(subscribed=0, last_frame_at=HT - 400))
     assert (idle.status, idle.level) == ("IDLE", "idle")
@@ -415,13 +428,13 @@ def test_books_row_states() -> None:
     assert (no_markets.status, no_markets.role) == (
         "DOWN", "Up/Down books · trades (0 markets)")
     assert "Gamma" in (no_markets.detail or "") and "ConnectError" in (no_markets.detail or "")
-    shards = {"btc-5m": _clob(), "eth-5m": _clob(),
-              "sol-1d": _clob(connected=False, connected_since=None, subscribed=0),
-              "bnb-1d": _clob(connected=False, connected_since=None, subscribed=0, desired=0)}
+    down = _clob(connected=False, connected_since=None, subscribed=0)
+    shards = {"btc-5m": _group(_clob(), down), "eth-5m": _group(_clob()),
+              "sol-1d": _group(down), "bnb-1d": _group(down, desired=0)}
     partial = books(clob=_clob(connected=False, last_error="sol-1d: OSError: reset"),
                     shards=shards)
     assert (partial.status, partial.level, partial.detail) == (
-        "DOWN", "down", "1 of 3 sockets down; sol-1d: OSError: reset")
+        "DOWN", "down", "1 of 3 asset/timeframe feeds down; sol-1d: OSError: reset")
 
 
 def test_price_row_states() -> None:
