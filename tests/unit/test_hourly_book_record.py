@@ -208,3 +208,29 @@ async def test_rows_after_our_own_live_entry_are_flagged(test_db) -> None:
         await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET, now=H + 12)
     first, second = await _rows()
     assert (first["own_live_order_this_hour"], second["own_live_order_this_hour"]) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_table_from_an_earlier_build_is_upgraded(tmp_path, monkeypatch) -> None:
+    """Claude, 2026-09-16, paper smoke run: the table first shipped without
+    own_live_order_this_hour, and CREATE TABLE IF NOT EXISTS keeps the old table."""
+    import aiosqlite
+
+    path = tmp_path / "old.db"
+    async with aiosqlite.connect(path) as conn:
+        await conn.execute(
+            "CREATE TABLE hourly_book_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " created_at TEXT NOT NULL, window_slug TEXT NOT NULL, window_start_ts INTEGER NOT NULL,"
+            " offset_s INTEGER NOT NULL, elapsed_s INTEGER NOT NULL, fetched_at_ms INTEGER NOT NULL,"
+            " up_best_bid REAL, up_best_ask REAL, down_best_bid REAL, down_best_ask REAL,"
+            " up_bids_json TEXT, up_asks_json TEXT, down_bids_json TEXT, down_asks_json TEXT,"
+            " up_book_ts_ms INTEGER, down_book_ts_ms INTEGER, mirror_gap_ask REAL,"
+            " mirror_gap_bid REAL, spot REAL, hour_open REAL, sigma_1h REAL,"
+            " seconds_left INTEGER, fair_up REAL, prev_hour_return REAL, prev_hour_vol_units REAL)")
+        await conn.commit()
+    monkeypatch.setattr(_db, "DB_PATH", path)
+    await _db.init_db()
+    book_record.reset_caches()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_Venue())) as client:
+        assert await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET, now=H + 2)
+    assert (await _rows())[0]["own_live_order_this_hour"] == 0

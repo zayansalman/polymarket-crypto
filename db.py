@@ -265,6 +265,12 @@ HOURLY_CONTEXT_COLUMN_MIGRATIONS = {
     "candle_audited_at": "TEXT",
 }
 
+# Book record columns added after the table first appeared on this branch (Claude,
+# 2026-09-16, found in the paper smoke run: an older table rejected every insert).
+HOURLY_BOOK_COLUMN_MIGRATIONS = {
+    "own_live_order_this_hour": "INTEGER",
+}
+
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
     "mode": "TEXT",
     # Issue #137: the CLOB placement response's status, promoted from
@@ -417,6 +423,7 @@ async def init_db() -> None:
         await _migrate_columns(
             db, "hourly_strategy_context", HOURLY_CONTEXT_COLUMN_MIGRATIONS
         )
+        await _migrate_columns(db, "hourly_book_snapshots", HOURLY_BOOK_COLUMN_MIGRATIONS)
         await _migrate_columns(
             db, "model_shadow_positions", SHADOW_COLUMN_MIGRATIONS
         )
