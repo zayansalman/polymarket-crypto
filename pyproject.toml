@@ -35,6 +35,9 @@ dev = ["ruff>=0.4", "mypy>=1.9"]
 # One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
 # Day-to-day trading uses py-clob-client-v2, a core dependency.
 setup = ["polymarket-client"]
+# Isolated Kronos forecast worker (polymarket_bot/kronos_forecast/worker.py) for
+# Tsinghua-Kronos BTC 24h. The app process never imports these.
+kronos = ["torch>=2.2", "einops>=0.8", "pandas>=2.0", "safetensors>=0.4", "huggingface-hub>=0.26", "tqdm>=4.66"]
 
 [tool.setuptools]
 packages = ["polymarket_exec", "polymarket_bot"]
