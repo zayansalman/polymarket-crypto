@@ -4,8 +4,9 @@ The worker (worker.py) starts as ``python -I -B worker.py`` with an explicit min
 environment, so it never sees the app's environment (which holds the wallet key). ``-I``
 ignores every PYTHON* variable, so ``-B`` is what stops it writing bytecode. It runs in an
 empty folder of its own and reads pinned weights from a local folder with the Hugging Face
-hub offline. Only one
-worker runs at a time, and if a call times out, is cancelled or fails, the worker is
+hub offline.
+
+Only one worker runs at a time. If a call times out, is cancelled or fails, the worker is
 killed together with every process it started. Pinned sources:
 docs/strategies/tsinghua-kronos-btc-24h.md.
 """
