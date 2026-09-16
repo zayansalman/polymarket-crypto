@@ -22,6 +22,7 @@ FAKE_KEY = "0xDEADBEEF_TEST_KEY_NOT_REAL"
 @pytest.fixture
 def models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(kc._config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(kc._config, "KRONOS_PYTHON", "")  # the test's own interpreter
     monkeypatch.setattr(kc, "models_dir", lambda: tmp_path / "models")
     for repo, rev in ((SPEC.model_repo, SPEC.model_revision),
                       (SPEC.tokenizer_repo, SPEC.tokenizer_revision)):
@@ -74,6 +75,22 @@ async def test_missing_weights_are_reported_without_starting_a_process(
     monkeypatch.setattr(kc.asyncio, "create_subprocess_exec", boom)
     result = await kc.run_forecast(REQUEST)
     assert result.ok is False and "fetch_kronos_mini_weights" in result.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["python3", "venv/bin/python", "~/venv/bin/python"])
+async def test_a_kronos_python_that_is_not_an_absolute_path_is_refused(
+    models: Path, monkeypatch: pytest.MonkeyPatch, setting: str
+) -> None:
+    monkeypatch.setattr(kc._config, "KRONOS_PYTHON", setting)
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("no process may start with a relative KRONOS_PYTHON")
+
+    monkeypatch.setattr(kc.asyncio, "create_subprocess_exec", boom)
+    result = await kc.run_forecast(REQUEST)
+    assert result == kc.ForecastResult(
+        ok=False, error="KRONOS_PYTHON must be an absolute path to a Python interpreter")
 
 
 @pytest.mark.asyncio

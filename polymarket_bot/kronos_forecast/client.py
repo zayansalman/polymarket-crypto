@@ -134,6 +134,11 @@ async def run_forecast(
     missing = missing_weights(spec)
     if missing:
         return ForecastResult(ok=False, error=missing)
+    # A bare name would be looked up on the worker's PATH (/usr/bin:/bin) and a relative
+    # path from the worker's own folder, neither of which is what the operator meant.
+    if _config.KRONOS_PYTHON and not Path(_config.KRONOS_PYTHON).is_absolute():
+        return ForecastResult(
+            ok=False, error="KRONOS_PYTHON must be an absolute path to a Python interpreter")
     payload = {
         **asdict(request),
         "code_dir": str(CODE_DIR),
