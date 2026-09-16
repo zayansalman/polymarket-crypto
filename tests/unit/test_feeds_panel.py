@@ -4,6 +4,9 @@ from __future__ import annotations
 import pytest
 
 import config as _config
+from polymarket_exec.marketdata import clob_stream as cs
+from polymarket_exec.marketdata import hub as md_hub
+from polymarket_exec.marketdata import rtds_stream as rs
 from polymarket_exec.ops import feed_monitor as fm
 from polymarket_exec.ops import flow_recorder as fr
 from polymarket_exec.ops import macro_recorder as mr
@@ -298,3 +301,133 @@ def test_macro_wait_row_lasts_until_the_retry_tick_and_not_past_the_stale_limit(
 def test_long_age_formatter(seconds: float, text: str) -> None:
     assert feeds._age(seconds) == text
     assert feeds._secs(90) == "1m30s"  # the short formatter is unchanged
+
+
+# --- Market-data hub rows (CLOB books + RTDS prices) ------------------------------
+
+HT = 5_000_000.0
+MD_NAMES = ["Polymarket books", "Chainlink prices", "Chainlink 60s TWAP", "Binance prices"]
+
+
+def _clob(**kw) -> cs.StreamStatus:
+    base = dict(connected=True, connected_since=HT - 300, last_frame_at=HT - 1,
+                last_pong_at=HT - 3, frames_total=1000, frames_per_s=400.0,
+                latency_ms_p50=48.0, latency_ms_p90=120.0, reconnects=0, resyncs=0,
+                subscribed=96, desired=96, unknown=0, handler_errors=0, last_error=None,
+                last_notice=None)
+    base.update(kw)
+    return cs.StreamStatus(**base)
+
+
+def _src(**kw) -> rs.SourceStatus:
+    base = dict(connected=True, last_update_age_s=0.4, newest_obs_ms=int((HT - 1.5) * 1000),
+                points=900, updates=5000, snapshots=6, latency_ms_p50=1400.0, gaps=0,
+                assets=6, reconnects=0, handler_errors=0, last_error=None)
+    base.update(kw)
+    return rs.SourceStatus(**base)
+
+
+def _md(clob: cs.StreamStatus | None = None, prices: dict | None = None,
+        ages: dict | None = None, started_at: float = HT - 600, markets: int = 48,
+        tokens: int = 96, gamma_errors: int = 0,
+        gamma_last_error: str | None = None) -> md_hub.MarketDataSnapshot:
+    clob = clob or _clob()
+    return md_hub.MarketDataSnapshot(
+        taken_at=HT, started_at=started_at, clob=clob,
+        prices=prices or {s: _src() for s in rs.SOURCES},
+        price_ages=ages if ages is not None else {s: 1.5 for s in rs.SOURCES},
+        markets=markets, tokens=tokens, subscribed=clob.subscribed, gamma_lookups=60,
+        gamma_errors=gamma_errors, gamma_last_error=gamma_last_error, listeners=0,
+        listener_drops=0,
+    )
+
+
+def _md_rows(md: md_hub.MarketDataSnapshot) -> dict[str, feeds.FeedRow]:
+    return {r.name: r for r in feeds.build_rows(None, None, None, md) if r.name in MD_NAMES}
+
+
+def test_no_marketdata_rows_without_a_hub() -> None:
+    assert feeds.build_rows(_snap()) == feeds.build_rows(_snap(), None, None, None)
+    assert feeds.render(_snap(), _flow({})) == feeds.render(_snap(), _flow({}), None, None)
+    names = {r.name for r in feeds.build_rows(_snap(), _flow({}), _macro({}))}
+    assert names.isdisjoint(MD_NAMES)
+
+
+def test_marketdata_rows_sit_right_under_the_monitor_rows() -> None:
+    rows = feeds.build_rows(_snap(), _flow({}), _macro({}), _md())
+    assert [r.name for r in rows[:5]] == [
+        "Chainlink BTC/USD", "Chainlink BTC/USD", "Polymarket Gamma", "Polymarket book",
+        "Binance BTCUSDT"]
+    assert [r.name for r in rows[5:9]] == MD_NAMES
+    assert (rows[9].name, rows[9].role) == ("Binance BTCUSDT", "hourly flow")
+    assert rows[-1].name == "ForexFactory week"
+
+
+def test_healthy_marketdata_rows() -> None:
+    rows = _md_rows(_md())
+    books = rows["Polymarket books"]
+    assert (books.role, books.source, books.delay, books.status, books.level) == (
+        "Up/Down books · trades (48 markets)", "CLOB market WS", "48ms", "OK", "on")
+    assert [(rows[n].role, rows[n].source, rows[n].delay, rows[n].status)
+            for n in MD_NAMES[1:]] == [
+        ("spot · vol", "RTDS WS", "1.5s", "OK"),
+        ("5m·15m settle ref", "RTDS WS", "1.5s", "OK"),
+        ("1h·1d settle ref", "RTDS WS", "1.5s", "OK"),
+    ]
+    html = feeds.render(None, None, None, _md())
+    assert "Polymarket books" in html and "Chainlink 60s TWAP" in html
+
+
+def test_books_row_states() -> None:
+    def books(**kw) -> feeds.FeedRow:
+        return _md_rows(_md(**kw))["Polymarket books"]
+
+    booting = books(clob=_clob(connected=False, connected_since=None, last_frame_at=None,
+                               latency_ms_p50=None), started_at=HT - 10)
+    assert (booting.status, booting.level, booting.delay) == ("CONNECTING", "idle", "—")
+    down = books(clob=_clob(connected=False, connected_since=None,
+                            last_error="ConnectionClosedError: no close frame received"))
+    assert (down.status, down.level, down.detail) == (
+        "DOWN", "down", "ConnectionClosedError: no close frame received")
+    stale = books(clob=_clob(last_frame_at=HT - 46))
+    assert (stale.status, stale.level, stale.delay_warn) == ("STALE", "warn", True)
+    assert "46s" in (stale.detail or "")
+    assert books(clob=_clob(last_frame_at=HT - 45)).status == "OK"
+    # Connected a moment ago with no data yet: timed from the connect, not an old frame.
+    fresh = books(clob=_clob(connected_since=HT - 5, last_frame_at=HT - 400))
+    assert fresh.status == "OK"
+    slow = books(clob=_clob(latency_ms_p50=2500.0))
+    assert (slow.status, slow.delay, slow.delay_warn) == ("OK", "2.5s", True)
+    idle = books(clob=_clob(subscribed=0, last_frame_at=HT - 400))
+    assert (idle.status, idle.level) == ("IDLE", "idle")
+    no_markets = books(clob=_clob(connected=False, connected_since=None, subscribed=0),
+                       markets=0, tokens=0, gamma_errors=12,
+                       gamma_last_error="ConnectError: [Errno 8] nodename nor servname")
+    assert (no_markets.status, no_markets.role) == (
+        "DOWN", "Up/Down books · trades (0 markets)")
+    assert "Gamma" in (no_markets.detail or "") and "ConnectError" in (no_markets.detail or "")
+
+
+def test_price_row_states() -> None:
+    def twap(**kw) -> feeds.FeedRow:
+        return _md_rows(_md(**kw))["Chainlink 60s TWAP"]
+
+    ages = {s: 1.5 for s in rs.SOURCES}
+    stale = twap(ages={**ages, rs.CHAINLINK_TWAP60: 11.0})
+    assert (stale.status, stale.level, stale.delay, stale.delay_warn) == (
+        "STALE", "warn", "11s", True)
+    assert twap(ages={**ages, rs.CHAINLINK_TWAP60: 10.0}).status == "OK"
+    offline = {s: _src(connected=False, last_error="OSError: network is down")
+               for s in rs.SOURCES}
+    booting = twap(prices=offline, ages={s: None for s in rs.SOURCES}, started_at=HT - 5)
+    assert (booting.status, booting.level, booting.delay) == ("CONNECTING", "idle", "—")
+    down = twap(prices=offline, ages={**ages, rs.CHAINLINK_TWAP60: 300.0})
+    assert (down.status, down.level, down.detail, down.delay_warn) == (
+        "DOWN", "down", "OSError: network is down", True)
+    waiting = twap(ages={s: None for s in rs.SOURCES}, started_at=HT - 5)
+    assert waiting.status == "CONNECTING"
+    silent = twap(ages={s: None for s in rs.SOURCES})
+    assert (silent.status, silent.level, silent.detail) == (
+        "STALE", "warn", "connected, but no prints yet")
+    html = feeds.render(None, None, None, _md(prices=offline, ages={s: None for s in rs.SOURCES}))
+    assert "3 issues" in html  # the three price rows are DOWN; books are OK

@@ -329,3 +329,20 @@ def test_default_grid_and_registry() -> None:
     finally:
         hub_mod.set_current(None)
     assert hub_mod.current() is None
+
+
+def test_dashboard_lifespan_registers_and_clears_the_hub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import db as _db
+
+    monkeypatch.setattr(_db, "DB_PATH", tmp_path / "t.db")
+    from fastapi.testclient import TestClient
+
+    from polymarket_exec.ops.dashboard.app import app
+
+    with TestClient(app) as client:
+        assert isinstance(hub_mod.current(), hub_mod.MarketDataHub)
+        page = client.get("/").text
+        assert "Polymarket books" in page and "Chainlink 60s TWAP" in page  # FEEDS card
+    assert hub_mod.current() is None
