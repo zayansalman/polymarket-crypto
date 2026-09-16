@@ -701,6 +701,9 @@ async def test_settlement_books_entry_taker_fee_on_loss(
 
     assert result.ok
     assert executor.daily_realized_pnl == pytest.approx(-2.68493, abs=1e-3)
+    # The journal error now depends on the payout (payout > 0), not on won.
+    settle = [r for r in await _journal_rows(journal_db) if r["intent"] == "SETTLEMENT"][-1]
+    assert settle["error"] == "resolved against position; tokens worthless"
 
 
 @pytest.mark.asyncio
