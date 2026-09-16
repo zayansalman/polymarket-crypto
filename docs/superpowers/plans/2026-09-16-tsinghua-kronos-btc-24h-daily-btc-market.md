@@ -47,7 +47,7 @@
   - Sampling: 24 steps, 30 paths, T=1.0, top_p=0.95, top_k=0, seed = window_start_ts // 3600.
   - `P(up)` = share of paths whose step-24 close is strictly above the last input close.
 - **Worker safety.**
-  - Started as `python -I <abs path>/worker.py` with an explicit environment dict: `PATH, HOME, HF_HUB_OFFLINE, HF_HUB_DISABLE_TELEMETRY, TRANSFORMERS_OFFLINE, OMP_NUM_THREADS, PYTHON_DOTENV_DISABLED, PYTHONDONTWRITEBYTECODE`.
+  - Started as `python -I -B <abs path>/worker.py` in its own process group (one worker at a time; the timeout includes waiting for that lock) with an explicit environment dict: `PATH, HOME, HF_HUB_OFFLINE, HF_HUB_DISABLE_TELEMETRY, TRANSFORMERS_OFFLINE, OMP_NUM_THREADS, PYTHON_DOTENV_DISABLED, PYTHONDONTWRITEBYTECODE`.
   - It never imports `config`, `db`, `polymarket_bot`, `polymarket_exec` or `dotenv`, and never downloads.
   - Timeout 90 s, under the loop watchdog's 180 s stall threshold (`controller.WATCHDOG_STALL_SECONDS`).
 - **Tests.**

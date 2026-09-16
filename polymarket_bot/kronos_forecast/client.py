@@ -155,7 +155,17 @@ async def run_forecast(
         "model_dir": str(snapshot_dir(spec.model_repo, spec.model_revision)),
         "tokenizer_dir": str(snapshot_dir(spec.tokenizer_repo, spec.tokenizer_revision)),
     }
-    async with _WORKER_LOCK:
+    loop = asyncio.get_running_loop()
+    # The timeout covers waiting for the one-worker lock too, so queued calls can never add
+    # up past the loop watchdog's stall limit (Claude, 2026-09-16).
+    deadline = loop.time() + timeout_s
+    try:
+        await asyncio.wait_for(_WORKER_LOCK.acquire(), timeout_s)
+    except TimeoutError:
+        log.warning("kronos_forecast.worker_lock_timeout", timeout_s=timeout_s)
+        return _failed(f"Kronos worker timed out after {timeout_s:g} s "
+                       "waiting for another forecast to finish")
+    try:
         try:
             # A new session makes the worker the leader of its own process group, so
             # everything it starts can be killed with it.
@@ -169,8 +179,9 @@ async def run_forecast(
             return _failed(f"could not start the Kronos worker: {exc}")
         finished = False
         try:
+            remaining = max(0.0, deadline - loop.time())
             out, err = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()),
-                                              timeout_s)
+                                              remaining)
             finished = True
         except TimeoutError:
             log.warning("kronos_forecast.worker_timeout", timeout_s=timeout_s)
@@ -178,6 +189,8 @@ async def run_forecast(
         finally:
             if not finished:  # timeout, cancellation or any other exception
                 await _kill_process_group(proc)
+    finally:
+        _WORKER_LOCK.release()
     return read_worker_output(out, err, proc.returncode, request.paths)
 
 

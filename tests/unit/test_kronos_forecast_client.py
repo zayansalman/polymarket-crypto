@@ -342,3 +342,29 @@ async def test_only_one_worker_runs_at_a_time(
     """, MARKER=str(models / "running"), LINE=json.dumps(GOOD_RESULT)))
     first, second = await asyncio.gather(kc.run_forecast(REQUEST), kc.run_forecast(REQUEST))
     assert first.ok and second.ok, (first.error, second.error)
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_the_worker_lock_counts_toward_the_timeout(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two queued calls never add up past the loop watchdog's limit (Claude, 2026-09-16)."""
+    lock = asyncio.Lock()
+    monkeypatch.setattr(kc, "_WORKER_LOCK", lock, raising=False)
+    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
+        import sys, time
+        sys.stdin.read()
+        time.sleep(30)
+    """))
+    loop = asyncio.get_running_loop()
+    await lock.acquire()  # a worker is already running
+    try:
+        started = loop.time()
+        # The outer guard turns the old behaviour (waiting on the lock forever) into a
+        # failure instead of a hung test run.
+        queued = await asyncio.wait_for(kc.run_forecast(REQUEST, timeout_s=0.5), 5.0)
+        waited = loop.time() - started
+    finally:
+        lock.release()
+    assert queued.ok is False and "timed out" in queued.error
+    assert waited < 2.0
