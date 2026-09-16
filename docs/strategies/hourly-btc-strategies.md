@@ -43,11 +43,19 @@ Break-even hit rate at a 50¢ price:
   - **Pay the ask:** a marketable buy at the best ask, which fills now.
   - **Resting order:** a post-only buy at the best bid, cancelled at the entry deadline if unfilled.
 - **Entry deadline.** A setting, 120 s after H:00 by default. If a strategy has no entry by then, the hour is recorded as `MISSED` and nothing is chased later.
+- **At most one order attempt per hour per strategy** (Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried).
+  - A tick with no executable ask, or with the strategy's slot still held, just waits for the next tick, up to the deadline.
+  - Otherwise the record is set to `SUBMITTING` before any order goes out, in paper and live.
+  - A refusal before the order is sent (gate, no token id, venue minimum, kill switch) records `BLOCKED:<reason>`.
+  - Any other live failure (an exception or timeout on the post, or a reply without success and an order id) may still have put an order on the book, and a re-post would be a second order. The hour ends as `UNCERTAIN:<status> <reason>`, nothing is re-posted, and the operator gets a notification to check the account's open orders and trades.
+  - If a later tick still finds `SUBMITTING` (the attempt raised, or the process stopped mid-attempt), the hour ends as `UNCERTAIN:entry attempt did not finish`. Boot reconciliation still adopts any live fill the order journal recorded.
+  - Exception: if the entry actually went through and only the `ENTERED` write was lost (a failed database write, or a restart after which boot reconciliation adopted the fill), the next tick records `ENTERED` with that position, even after the entry deadline. Only a position that is still open counts, in both modes; one already closed (sold at Stop, or closed by boot reconciliation) leaves the hour as `UNCERTAIN`. In live the strategy's position slot must also hold the entry. (Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed; open-only rule from a review by Claude session polymarket-crypto-95, 2026-09-16.)
+  - That close-out also notifies the operator (`entry_attempt_unfinished`), in paper and live. If the process died right after a live post but before its journal write, the order can be on Polymarket with no journal entry, and boot reconciliation closes its ledger row as `RECONCILED_NO_LIVE_TRACE`. The hour is still never posted again; check the account's open orders and trades. (Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post)
 - **Size.** The operator's share count from the order-size ticket.
 - **Every hour is recorded for both strategies, bet or no bet.** The record holds:
   - the signal values and the decision;
   - the book at decision time;
-  - what happened to the entry: `ENTERED`, `BLOCKED:<gate reason>`, `NO_SIGNAL`, `MISSED` or `UNFILLED`;
+  - what happened to the entry: `ENTERED`, `BLOCKED:<gate reason>`, `NO_SIGNAL`, `MISSED`, `UNFILLED`, `SUBMITTING` or `UNCERTAIN:<reason>` (the last two: Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried);
   - the hour's outcome;
   - context factors: Kronos agreement, ETH's last hour, US stock-open hour, 08:00 UTC options expiry, scheduled US macro releases, funding, open interest, liquidations, Kraken flow, weekend.
 

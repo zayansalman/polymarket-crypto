@@ -60,14 +60,23 @@ async def get_decision(window_slug: str, strategy_id: str) -> dict[str, Any] | N
 
 
 async def set_action(
-    window_slug: str, strategy_id: str, action: str, position_id: int | None = None
+    window_slug: str,
+    strategy_id: str,
+    action: str,
+    position_id: int | None = None,
+    *,
+    expected_action: str | None = None,
 ) -> None:
+    # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+    # expected_action makes the update apply only while the row still holds that action,
+    # so closing out an unfinished attempt never overwrites a result written meanwhile.
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE hourly_strategy_context SET action = ?, "
             "position_id = COALESCE(?, position_id) "
-            "WHERE window_slug = ? AND strategy_id = ?",
-            (action[:240], position_id, window_slug, strategy_id),
+            "WHERE window_slug = ? AND strategy_id = ? AND (? IS NULL OR action = ?)",
+            (action[:240], position_id, window_slug, strategy_id,
+             expected_action, expected_action),
         )
         await conn.commit()
 

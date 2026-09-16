@@ -687,7 +687,7 @@ git commit -m "feat(hourly): Hourly Mean Reversion signal (frozen rule, stdlib m
   - `paper_positions` columns `strategy_id TEXT`, `market_timeframe TEXT`, `window_start_ts INTEGER`
   - `async record_decision(*, strategy_id: str, window_slug: str, window_start_ts: int, side: str | None, reason: str, signal: dict, factors: dict, up_bid: float | None, up_ask: float | None, down_bid: float | None, down_ask: float | None, hour_open: float | None, mode: str, late: bool) -> bool` (sets `action` to `PENDING` when `side` is set and not late, `MISSED` when set and late, `NO_SIGNAL` when `side` is None; returns True iff a row was inserted)
   - `async get_decision(window_slug: str, strategy_id: str) -> dict | None`
-  - `async set_action(window_slug: str, strategy_id: str, action: str, position_id: int | None = None) -> None`
+  - `async set_action(window_slug: str, strategy_id: str, action: str, position_id: int | None = None, *, expected_action: str | None = None) -> None` (with `expected_action`, updates only while the row still holds that action; Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
   - `async unsettled_windows(now: int) -> list[int]` (distinct `window_start_ts` with `settled_at IS NULL` and `window_start_ts + 3600 <= now`)
   - `async settle_window(window_start_ts: int, hour_open: float, hour_close: float) -> None`
 
@@ -884,14 +884,23 @@ async def get_decision(window_slug: str, strategy_id: str) -> dict[str, Any] | N
 
 
 async def set_action(
-    window_slug: str, strategy_id: str, action: str, position_id: int | None = None
+    window_slug: str,
+    strategy_id: str,
+    action: str,
+    position_id: int | None = None,
+    *,
+    expected_action: str | None = None,
 ) -> None:
+    # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+    # expected_action makes the update apply only while the row still holds that action,
+    # so closing out an unfinished attempt never overwrites a result written meanwhile.
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE hourly_strategy_context SET action = ?, "
             "position_id = COALESCE(?, position_id) "
-            "WHERE window_slug = ? AND strategy_id = ?",
-            (action[:240], position_id, window_slug, strategy_id),
+            "WHERE window_slug = ? AND strategy_id = ? AND (? IS NULL OR action = ?)",
+            (action[:240], position_id, window_slug, strategy_id,
+             expected_action, expected_action),
         )
         await conn.commit()
 
@@ -1467,6 +1476,8 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
   - `TIMEFRAME = "1h"`
   - `STRATEGIES: tuple[tuple[str, str], ...] = (("hourly_mean_reversion", "hourly_mean_reversion_enabled"),)`
   - knobs `hourly_mean_reversion_enabled` (bool, default True) and `hourly_entry_deadline_seconds` (int, default 120, 10–1800)
+  - `SUBMITTING`, `UNCERTAIN_PREFIX`, `UNFINISHED_ATTEMPT` decision-record actions for an entry attempt (Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
+  - `open_entries` links a `PENDING`/`SUBMITTING` hour to this strategy's same-hour position that is still open (both modes; open-only rule from a review by Claude session polymarket-crypto-95, 2026-09-16) as `ENTERED`, before the deadline check; in live only while `LiveExecutor.tracks_position` is true for the strategy's slot (Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed)
   - `reset_caches() -> None`
   - `async build_snapshot(client, now: int | None = None) -> PaperSnapshot`
   - `async settle_due(client, snapshot, now: int) -> None`
@@ -1773,17 +1784,21 @@ async def test_live_blocked_entry_is_recorded_once_and_leaves_no_row(test_db, mo
     assert row["action"] == "BLOCKED:daily loss halt: test"
 
 
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried: a failed
+# post may still have reached the book, so it ends the hour instead of retrying.
 @pytest.mark.asyncio
-async def test_live_order_error_retries_until_the_deadline(test_db, monkeypatch):
+async def test_live_order_error_ends_the_hour_as_uncertain_without_a_second_post(
+    test_db, monkeypatch
+):
     account = await _go_live(monkeypatch, LiveOrderResult(ok=False, status="ERROR", reason="venue"))
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     submit = account.slots["hourly_mean_reversion"].submit_entry
-    assert submit.await_count == 2 and await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert submit.await_count == 1 and await _positions() == []
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:ERROR venue"
     await _tick(monkeypatch, H + 121, _Venue())
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
-    assert submit.await_count == 2
+    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:ERROR venue"
+    assert submit.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -1849,6 +1864,13 @@ _CANDLES = mean_reversion.WINDOW + 2
 STRATEGIES: tuple[tuple[str, str], ...] = (
     (mean_reversion.STRATEGY_ID, "hourly_mean_reversion_enabled"),
 )
+
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+# decision-record actions for an entry attempt. SUBMITTING is written before any order
+# goes out; UNCERTAIN ends an hour whose order may have reached the venue.
+SUBMITTING = "SUBMITTING"
+UNCERTAIN_PREFIX = "UNCERTAIN:"
+UNFINISHED_ATTEMPT = f"{UNCERTAIN_PREFIX}entry attempt did not finish"
 
 _market_cache: dict[int, HourMarket] = {}
 _open_cache: dict[int, float] = {}
@@ -2042,6 +2064,11 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
     token = snapshot.up_token_id if side == "Up" else snapshot.down_token_id
     reason = (await ledger.get_decision(snapshot.window_slug, strategy_id) or {}).get(
         "decision_reason")
+    # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+    # record the attempt before any order goes out, in both modes. open_entries only
+    # enters from PENDING, so a tick that dies mid-attempt (or a restart within the
+    # hour) can never place a second order for this hour.
+    await ledger.set_action(snapshot.window_slug, strategy_id, SUBMITTING)
     if executor is not None:
         slot = executor.slot_executor(strategy_id)
         # The ledger says this strategy is flat in live: heal any phantom slot
@@ -2050,6 +2077,10 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         # Row first, then the real order (the legacy loop's ordering): a failed
         # submit deletes the row, and a crash after submit leaves a row that boot
         # reconciliation adopts from the journal. RiskGate runs inside submit_entry.
+        # Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post:
+        # a crash between the post and its journal write leaves no journal entry, so
+        # reconciliation closes the row instead; the SUBMITTING record above is what
+        # stops a second post for this hour.
         position_id = await _insert_row(
             snapshot, strategy_id=strategy_id, side=side, price=ask, notional=notional,
             shares=shares, start=start, reason=reason, mode=mode,
@@ -2061,10 +2092,28 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
         if not result.ok:
             await P._delete_position_row(position_id)
             if result.status == "BLOCKED":
+                # Refused before any post (gate, no token id, venue minimum, kill
+                # switch): nothing reached the venue.
                 await ledger.set_action(
                     snapshot.window_slug, strategy_id, f"BLOCKED:{result.reason}")
-            # Any other failure stays PENDING and retries until the entry deadline.
-            log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
+                log.warning("hourly_engine.live_entry_not_placed", strategy_id=strategy_id,
+                            status=result.status, reason=result.reason)
+                return
+            # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+            # every other failure happened at or after the post (an exception or timeout,
+            # or a response without success and an order id). The venue may still have
+            # accepted the order, and a re-post is a new order, so the hour ends here.
+            uncertain = f"{UNCERTAIN_PREFIX}{result.status} {result.reason}".strip()
+            await ledger.set_action(snapshot.window_slug, strategy_id, uncertain)
+            await notify(
+                "live_entry_uncertain",
+                f"LIVE entry for {strategy_id} may or may not be on Polymarket "
+                f"({result.status}: {result.reason}). No retry this hour; check the "
+                "account's open orders and trades.",
+                {"window_slug": snapshot.window_slug, "strategy_id": strategy_id,
+                 "token_id": token},
+            )
+            log.warning("hourly_engine.live_entry_outcome_unknown", strategy_id=strategy_id,
                         status=result.status, reason=result.reason)
             return
         ask = result.price or ask
@@ -2111,6 +2160,26 @@ async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool
         if not _knobs.cached(knob):
             continue
         row = await ledger.get_decision(snapshot.window_slug, sid)
+        if row is not None and row["action"] == SUBMITTING:
+            # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+            # an earlier tick started an entry and never recorded its result (it raised,
+            # or the process stopped). Close the hour out; never enter again.
+            # Claude, 2026-09-15, branch-review finding hourly-reentry-after-untraced-post:
+            # a live post can land right before its journal write fails. Boot reconciliation
+            # then closes that row as RECONCILED_NO_LIVE_TRACE and nothing tracks the
+            # tokens, so tell the operator before closing the hour (notify first: if the
+            # record write fails, the next tick still finds SUBMITTING and repeats both).
+            await notify(
+                "entry_attempt_unfinished",
+                f"Entry attempt for {sid} ({snapshot.window_slug}) did not finish: the tick "
+                "failed or the bot stopped mid-order. No retry this hour. If the bot was "
+                "LIVE, an order may be on Polymarket with no ledger row; check the "
+                "account's open orders and trades.",
+                {"window_slug": snapshot.window_slug, "strategy_id": sid},
+            )
+            await ledger.set_action(snapshot.window_slug, sid, UNFINISHED_ATTEMPT,
+                                    expected_action=SUBMITTING)
+            continue
         if row is None or row["action"] != "PENDING":
             continue
         if now - start > deadline:

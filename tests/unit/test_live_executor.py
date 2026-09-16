@@ -516,6 +516,20 @@ async def test_resync_flat_heals_phantom_open_state(
 
 
 @pytest.mark.asyncio
+async def test_tracks_position_follows_the_entry_lifecycle(journal_db, tmp_path: Path) -> None:
+    """Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed."""
+    client = _mock_client()
+    executor = _executor(client, tmp_path)
+    assert executor.tracks_position is False
+
+    assert (await executor.submit_entry(UP_TOKEN, 0.57, 3.0)).ok  # rests unfilled
+    assert executor.tracks_position is True
+
+    await executor.resync_flat()
+    assert executor.tracks_position is False
+
+
+@pytest.mark.asyncio
 async def test_resync_flat_noop_when_already_flat(
     journal_db, tmp_path: Path
 ) -> None:
