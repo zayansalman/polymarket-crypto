@@ -148,3 +148,19 @@ async def test_consensus_inserts_only_changes_and_reads_as_of(test_db) -> None:
     assert (await store.consensus_as_of(*key, NOW + 9_000_000))["impact"] == "High"
     assert (await store.consensus_as_of(*key, NOW + 99 * DAY))["forecast"] is None
     assert await store.consensus_as_of("forexfactory", "CPI m/m", NOW + 3 * DAY, NOW + DAY) is None
+
+
+@pytest.mark.asyncio
+async def test_consensus_same_slot_twice_in_one_pull_keeps_the_last_without_flip_flop(
+    test_db,
+) -> None:
+    # One pull carries two rows for the same slot with different values: the last one wins
+    # (as in sync_events), so repeated pulls insert nothing and first-seen stays put.
+    pull = [_cons("1", previous="2"), _cons("3", previous="4")]
+    assert await store.record_consensus(pull, NOW) == 1
+    assert await store.record_consensus(pull, NOW + 3_600_000) == 0
+    assert await store.record_consensus(pull, NOW + 7_200_000) == 0
+    key = ("forexfactory", "Unemployment Claims", NOW + 3 * DAY)
+    latest = await store.consensus_as_of(*key, NOW + 99 * DAY)
+    assert latest is not None
+    assert (latest["forecast"], latest["previous"], latest["taken_at_ms"]) == ("3", "4", NOW)

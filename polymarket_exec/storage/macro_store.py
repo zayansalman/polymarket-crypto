@@ -69,8 +69,12 @@ def _values(row: Any) -> tuple[str | None, str | None, str | None]:
 
 
 async def record_consensus(rows: Iterable[ConsensusRow], now_ms: int) -> int:
-    """Insert a consensus row only when (impact, forecast, previous) changed since the latest."""
-    rows = list(rows)
+    """Insert a consensus row only when (impact, forecast, previous) changed since the latest.
+
+    A pull holding the same (source, title, time) slot twice keeps the last row, as
+    ``sync_events`` does, so one value per slot is compared and stored per pull.
+    """
+    rows = list({(r.source, r.title, r.scheduled_at_ms): r for r in rows}.values())
     if not rows:
         return 0
     recorded_at = _db.utc_now_iso()
