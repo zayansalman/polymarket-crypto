@@ -765,6 +765,12 @@ if __name__ == "__main__":
 kronos = ["torch>=2.2", "einops>=0.8", "pandas>=2.0", "safetensors>=0.4", "huggingface-hub>=0.26", "tqdm>=4.66"]
 ```
 
+**Tsinghua-Kronos BTC 24h setup** (the operator does this once per machine; agents never install packages). The worker runs under `KRONOS_PYTHON` if that is set, otherwise under the app's own interpreter. That interpreter needs torch, einops and pandas. Do one of these:
+- Install the optional extra into it. From the repo root, with that interpreter, run `python3 -m pip install -e '.[kronos]'`.
+- Set `KRONOS_PYTHON=/absolute/path/to/python` in `.env`, pointing at an interpreter that already has them. A relative path is refused.
+
+Then fetch the pinned weights once with `python3 tools/fetch_kronos_mini_weights.py`. Expected: "Kronos weights ready." Until both are done, every window is recorded `UNAVAILABLE`, and its reason says what is missing and how to fix it.
+
 - [ ] **Step 12: Real-model check against the Kronos team's published numbers** (not a unit test; needs torch and the weights)
 
 Write `tools/check_tsinghua_kronos_btc_24h_against_published.py`:
@@ -2449,6 +2455,8 @@ async def decide_window(
             up_ask=snapshot.up_best_ask, down_ask=snapshot.down_best_ask,
             edge_threshold=float(
                 _knobs.cached("daily_btc_tsinghua_kronos_btc_24h_edge_threshold")),
+            # 23 or 25 on daylight-saving days; the forecast always covers 24 hours.
+            window_hours=(m.window.settle_ts - m.window.reference_ts) / 3600,
         )
         late = P._now() - window.reference_ts > deadline  # the forecast takes ~9 s
         wrote = await ledger.record_decision(
@@ -2906,15 +2914,19 @@ Expected: all tests pass, ruff `All checks passed!`, and `--check` exits 0.
 
 - [ ] **Step 8: Paper smoke run around noon ET** (the operator's machine; never click LIVE)
 
-1. `python3 tools/fetch_kronos_mini_weights.py`. Expected: "Kronos weights ready."
-2. Start the app from this worktree with an isolated DB and no `.env`. Use a preview config that sets `PYTHON_DOTENV_DISABLED=1 BOT_MODE=paper DATA_DIR=<scratch> DB_PATH=<scratch>/smoke.db DASHBOARD_SERVER_PORT=7873`. Point `DATA_DIR` at the folder holding `kronos_models`, or copy it there.
-3. Select **BTC 1d** in the header and press **Start** a few minutes before 12:00 America/New_York.
-4. Before noon: `paper_ticks` rows carry the current `bitcoin-up-or-down-on-…` slug with both books.
-5. Between 12:00:05 and 12:05 ET: `btc_daily_market_decisions` gets one `tsinghua_kronos_btc_24h` paper row.
-   - Its `signal_json` holds `p_up`, `paths = 30`, the pinned model and tokenizer, and `worker_seconds` under 60.
-   - The action is `NO_SIGNAL`, `PENDING` then `ENTERED`, or `UNAVAILABLE` with a readable reason.
-6. `ps` shows no Kronos worker left running after the decision.
-7. Press Stop, stop the smoke app, and remove the preview config entry.
+1. **Tsinghua-Kronos BTC 24h setup**, as in Task 1 Step 11. The interpreter that will run the worker (`KRONOS_PYTHON`, or the app's own) must have torch, einops and pandas. Either run `python3 -m pip install -e '.[kronos]'` with that interpreter from the repo root, or use an absolute `KRONOS_PYTHON`.
+2. `python3 tools/fetch_kronos_mini_weights.py`. Expected: "Kronos weights ready."
+3. Start the app from this worktree with an isolated DB and no `.env`. Use a preview config that sets `PYTHON_DOTENV_DISABLED=1 BOT_MODE=paper DATA_DIR=<scratch> DB_PATH=<scratch>/smoke.db DASHBOARD_SERVER_PORT=7873`.
+   - Point `DATA_DIR` at the folder holding `kronos_models`, or copy it there.
+   - `.env` is not read here, so if the worker needs `KRONOS_PYTHON`, set it in the preview config too.
+4. Select **BTC 1d** in the header and press **Start** a few minutes before 12:00 America/New_York.
+5. Before noon: `paper_ticks` rows carry the current `bitcoin-up-or-down-on-…` slug with both books.
+6. Between 12:00:05 and 12:05 ET: `btc_daily_market_decisions` gets one `tsinghua_kronos_btc_24h` paper row.
+   - Its `signal_json` **must** hold a numeric `p_up` between 0 and 1. It also holds `paths = 30`, the pinned model and tokenizer, `torch_version`, and `worker_seconds` under 60.
+   - The action is `NO_SIGNAL`, or `PENDING` then `ENTERED`.
+   - **A row that is `UNAVAILABLE`, or has no `p_up`, fails the smoke run.** Read its reason, fix the setup (items 1–3), and run the check again at the next noon.
+7. `ps` shows no Kronos worker left running after the decision.
+8. Press Stop, stop the smoke app, and remove the preview config entry.
 
 - [ ] **Step 9: Commit**
 
