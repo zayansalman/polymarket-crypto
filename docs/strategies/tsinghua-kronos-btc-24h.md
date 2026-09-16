@@ -3,7 +3,7 @@
 The strategy name was chosen by Zayan (operator) on 2026-09-16, and this strategy trades Polymarket's daily **Bitcoin Up or Down** market.
 
 **What it does:**
-1. At noon New York time, it runs the Kronos team's own BTCUSDT forecast: Kronos-mini, the same setup and code they published every hour.
+1. At noon New York time, it runs the Kronos team's own BTCUSDT forecast: Kronos-mini with the same settings they published every hour, run with their MIT-licensed Kronos code.
 2. It gets the chance that BTC is higher 24 hours later.
 3. It buys Up or Down when that chance beats the market price by the edge threshold.
 
@@ -32,28 +32,32 @@ Sources: the Gamma market rows and descriptions for the September 16 and 17, 202
 2. **Input.** The 383 closed Binance spot BTCUSDT 1-hour candles before S, with open, high, low, close, volume and quote volume ("amount"). Timestamps are naive UTC open times. This matches the Kronos team's demo, which fetches 384 candles and drops the still-forming one.
 3. **Model.**
    - Kronos-mini (`NeoQuasar/Kronos-mini`, snapshot f4e68697d9d5aed55cef5c96aabc3376bcad9f81) with `NeoQuasar/Kronos-Tokenizer-2k` (snapshot 26966d0035065a0cae0ebad7af8ece35bc1fb51c). Both run in eval mode on CPU with max context 512.
-   - The model code is the demo repo's own `model/` package at commit eba16695 (2025-09-16, the attention-dropout fix), vendored unchanged under `third_party/kronos_demo_eba16695/` (MIT).
+   - The model code is github.com/shiyu-coder/Kronos `model/` at commit 67b630e67f6a18c9e9be918d9b4337c960db1e9a, vendored unchanged in `third_party/kronos_67b630e/` (MIT). The Kronos-demo repo has no licence, so only its recipe is followed.
+   - Rerun on 40 published hours, this code matches the published forecasts within sampling noise: [check output](evidence/tsinghua-kronos-btc-24h-mit-code-check-2026-09-16.txt).
 4. **Forecast.**
    - It samples **30** paths of the next **24** hours, with temperature 1.0, top_p 0.95 and top_k 0. The sampler is seeded with the window start hour, so a rerun gives the same numbers.
    - `P(up)` is the share of paths whose close 24 hours ahead is above the close of the last input candle, which is the price at S.
    - The paths and settings are fixed to match the published record this strategy is scored on.
+   - On the 23-hour and 25-hour daylight-saving days, the fixed 24-step forecast ends an hour away from settlement; the record's `window_hours` shows this.
 5. **Bet.**
-   - Up edge = `P(up) − Up ask`. Down edge = `(1 − P(up)) − Down ask`.
-   - Buy the side with the larger edge if that edge is at least the **edge threshold**, a dashboard setting with default 0.05. Otherwise skip.
+   - Up edge = `P(up) − Up ask`. Down edge = `(1 − P(up)) − Down ask`. Both are rounded to 9 decimals before they are compared. A missing, zero or negative ask gives no edge.
+   - Buy the side with the larger edge if that edge is at least the **edge threshold**, a dashboard setting with default 0.05. If the two edges are equal, buy Up. Otherwise skip.
 6. **Entry deadline.** A dashboard setting, default 300 s after S. With no entry by then, the day is recorded as `MISSED`.
 7. **Hold to resolution.**
    - Settlement reads the two Binance 1-minute closes named in the market rules. A tie pays 0.50 a share on either side.
    - The market's own closes are one minute after the forecast's reference: the candle *opening* at 12:00 ET closes at 12:01. The forecast compares hourly closes at 12:00:00.
 8. **Runs in whichever mode the operator selects at Start**, paper or live. It has one open position of its own (Zayan, 2026-09-14: "there is nothing such as paper mode only from now on, we will run what we run when we select mode").
 9. **Safety.**
-   - The model runs in a separate process with a minimal environment. It never gets the app's environment, which holds the wallet key.
+   - The model runs in a separate process with a minimal environment. It never gets the app's environment, which holds the wallet key, and it refuses to import the app's modules.
+   - One worker runs at a time. If it times out or the call is cancelled, it is killed together with anything it started.
    - It reads weights from a local folder and never downloads at decision time.
-   - If the model can't run (torch not installed, weights missing, timeout), the day is recorded as `UNAVAILABLE` and nothing is bought.
+   - If the model can't run (torch or einops missing, weights missing, timeout), the day is recorded as `UNAVAILABLE` and nothing is bought.
+   - **Setup, once per machine.** The worker runs under `KRONOS_PYTHON` if that is set, otherwise under the app's own interpreter. That interpreter needs torch, einops and pandas. Either install the optional `kronos` extra into it (from the repo root, with that interpreter: `python3 -m pip install -e '.[kronos]'`), or set `KRONOS_PYTHON` in `.env` to an absolute path of an interpreter that has torch, einops and pandas. Then fetch the pinned weights once: `python3 tools/fetch_kronos_mini_weights.py`. If either step is missing, the `UNAVAILABLE` reason says which and how to fix it.
 
 ## Recorded every day, bet or no bet
 
 - `P(up)`, the number of paths, and the sampling error `sqrt(P(1 − P)/30)`. That error is about 9 points near 50%, which is more than the default edge threshold, so part of what crosses the threshold is sampling noise.
-- The first and last input candle and the last close. The model and tokenizer snapshots and the vendored code commit. The worker's run time and the seed.
+- The first and last input candle and the last input close (the price at S), even when the forecast fails. The model and tokenizer snapshots, the vendored code commit and the worker's torch version. The worker's run time, the seed and the window length in hours.
 - The book at decision time, both edges, and the threshold.
 - The side the published demo record was scored on: Up if `P(up) > 0.5`, Down if below.
 - What happened to the entry, the two settlement closes, and the outcome (Up, Down or 50-50).
@@ -68,7 +72,7 @@ The Kronos team published this forecast every hour from 2025-07-11 to 2026-07-04
 | Noon-ET forecasts only, this market's window | 52.2% | 46.3–58.1% (276 days) |
 
 - **Calibration.** Confidence did not match outcomes. Whether it said about 9% or about 88%, BTC was higher 45–51% of the time. So its probabilities scored worse than always saying 50%.
-- **Break-even.** Paying the ask at a 50¢ price needs about 52.25%. **The published record gives no reason to expect a profit.** It runs so its calls are measured against real daily prices.
+- **Break-even.** Paying the ask needs about 51.75% at a 50¢ ask (the fee alone), and about 52.75% if the ask is a cent above a 50¢ mid. **The published record gives no reason to expect a profit.** It runs so its calls are measured against real daily prices.
 
 ## Sources
 
@@ -76,9 +80,11 @@ The Kronos team published this forecast every hour from 2025-07-11 to 2026-07-04
 |---|---|
 | Kronos model family | Shi et al., arXiv 2508.02739 (Tsinghua University); github.com/shiyu-coder/Kronos, repo pointed to by Zayan 2026-09-16 |
 | The forecast recipe (Kronos-mini, 383 candles, 30 paths, T 1.0, top_p 0.95, 24h, upside definition) | github.com/shiyu-coder/Kronos-demo `update_predictions.py` at eba16695; found by Claude 2026-09-16 |
+| The model code: github.com/shiyu-coder/Kronos `model/` at commit 67b630e67f6a18c9e9be918d9b4337c960db1e9a, MIT licence, vendored unchanged in `third_party/kronos_67b630e/` (the Kronos-demo repo has no licence, so only its recipe is used) | Claude, 2026-09-16 |
+| This code reproduces the published forecasts within sampling noise (40 hours) | [`evidence/tsinghua-kronos-btc-24h-mit-code-check-2026-09-16.txt`](evidence/tsinghua-kronos-btc-24h-mit-code-check-2026-09-16.txt), Claude, 2026-09-16 |
 | Use this forecast as a strategy on the daily BTC market, name "Tsinghua-Kronos BTC 24h" | Zayan (operator), 2026-09-16 |
 | Bet only when the forecast beats the market price | Zayan (operator), 2026-09-13, for the Kronos strategies |
-| Edge threshold default 0.05, decide at noon ET, entry deadline default 300 s, seed = window start hour, `UNAVAILABLE` handling | Claude, 2026-09-16 |
+| Edge threshold default 0.05, decide at noon ET, entry deadline default 300 s, seed = window start hour, `UNAVAILABLE` handling, edges rounded to 9 decimals, equal edges go to Up, 90 s worker timeout, 4 worker threads, one worker at a time, worker setup (`kronos` extra or an absolute `KRONOS_PYTHON`) | Claude, 2026-09-16 |
 | Market rules, fee schedule | Gamma market rows, 2026-09-16 |
 | Scored record | `research/kronos_mini_official_btcusdt_demo/`, Claude 2026-09-16 |
 | One open position per strategy; runs in the selected mode | Zayan (operator), 2026-09-14 |
