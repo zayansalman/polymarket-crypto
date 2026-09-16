@@ -92,6 +92,57 @@ async def set_action(
         await conn.commit()
 
 
+async def finalize_ended_hours(current_hour_start: int, unfinished_action: str) -> dict[str, int]:
+    """Close out decisions still PENDING or SUBMITTING in hours that already ended.
+
+    Claude, 2026-09-15, branch-review finding pending-row-never-finalized: a row left open when
+    no tick ran before its hour ended (Stop, crash, sleep, failing ticks, strategy switched
+    off) otherwise stays open forever. The current hour is left to the engine's own entry
+    step. For each ended hour, per strategy and mode:
+    - ENTERED with the position, when this strategy has a 1h position for that hour in that
+      mode that boot reconciliation did not close as never placed (RECONCILED_NO_LIVE_TRACE)
+      or never filled (RECONCILED_UNFILLED);
+    - otherwise an attempt that was started (SUBMITTING) becomes ``unfinished_action``
+      (branch-review finding hourly-ambiguous-post-error-retried: never assume it failed);
+    - otherwise MISSED.
+    Rows are matched by UTC hour start and mode (branch-review findings
+    dst-fallback-slug-collision and decision-row-shared-across-modes).
+    """
+    position_for_row = (
+        "SELECT p.position_id FROM paper_positions p "
+        "WHERE p.window_start_ts = hourly_strategy_context.window_start_ts "
+        "AND p.strategy_id = hourly_strategy_context.strategy_id "
+        "AND p.mode = hourly_strategy_context.mode "
+        "AND p.market_timeframe = '1h' "
+        "AND COALESCE(p.exit_reason, '') "
+        "NOT IN ('RECONCILED_NO_LIVE_TRACE', 'RECONCILED_UNFILLED')"
+    )
+    async with _db.connect() as conn:
+        entered = await conn.execute(
+            "UPDATE hourly_strategy_context SET action = 'ENTERED', "
+            f"position_id = ({position_for_row} ORDER BY p.position_id LIMIT 1) "
+            "WHERE action IN ('PENDING', 'SUBMITTING') AND window_start_ts < ? "
+            f"AND EXISTS ({position_for_row})",
+            (current_hour_start,),
+        )
+        unfinished = await conn.execute(
+            "UPDATE hourly_strategy_context SET action = ? "
+            "WHERE action = 'SUBMITTING' AND window_start_ts < ?",
+            (unfinished_action[:240], current_hour_start),
+        )
+        missed = await conn.execute(
+            "UPDATE hourly_strategy_context SET action = 'MISSED' "
+            "WHERE action = 'PENDING' AND window_start_ts < ?",
+            (current_hour_start,),
+        )
+        await conn.commit()
+        return {
+            "entered": max(entered.rowcount, 0),
+            "unfinished": max(unfinished.rowcount, 0),
+            "missed": max(missed.rowcount, 0),
+        }
+
+
 async def unsettled_windows(now: int) -> list[int]:
     async with _db.connect() as conn:
         cur = await conn.execute(

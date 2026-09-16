@@ -691,6 +691,7 @@ git commit -m "feat(hourly): Hourly Mean Reversion signal (frozen rule, stdlib m
   - `async set_action(window_start_ts: int, strategy_id: str, action: str, position_id: int | None = None, *, mode: str, expected_action: str | None = None) -> None` (with `expected_action`, updates only while the row still holds that action; Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
   - Amended (Claude, 2026-09-15, branch-review finding dst-fallback-slug-collision): rows are unique on `(window_start_ts, strategy_id)`, not the slug; the code blocks below predate this.
   - Amended (Claude, 2026-09-15, branch-review finding decision-row-shared-across-modes): rows are unique on `(window_start_ts, strategy_id, mode)`. The engine works out the mode once per tick and passes it to `decide_hour`, `open_entries` and every row lookup, so a paper run and a live run in the same hour each act on their own row. The code blocks below predate this.
+  - `async finalize_ended_hours(current_hour_start: int, unfinished_action: str) -> dict[str, int]` (decisions still `PENDING`/`SUBMITTING` in hours before the current one: `ENTERED` with this strategy's 1h position for that hour and mode unless boot reconciliation closed it as `RECONCILED_NO_LIVE_TRACE` or `RECONCILED_UNFILLED`; otherwise `SUBMITTING` becomes `unfinished_action` and `PENDING` becomes `MISSED`) _(Claude, 2026-09-15, branch-review finding pending-row-never-finalized; adapted when merged with the per-mode and attempt-marker fixes)_
   - `async unsettled_windows(now: int) -> list[int]` (distinct `window_start_ts` with `settled_at IS NULL` and `window_start_ts + 3600 <= now`)
   - `async settle_window(window_start_ts: int, hour_open: float, hour_close: float) -> None`
 
@@ -1485,7 +1486,7 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
   - `open_entries` links a `PENDING`/`SUBMITTING` hour to this strategy's same-hour position that is still open (both modes; open-only rule from a review by Claude session polymarket-crypto-95, 2026-09-16) as `ENTERED`, before the deadline check; in live only while `LiveExecutor.tracks_position` is true for the strategy's slot (Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed)
   - `reset_caches() -> None`
   - `async build_snapshot(client, now: int | None = None) -> PaperSnapshot`
-  - `async settle_due(client, snapshot, now: int) -> None`
+  - `async settle_due(client, snapshot, now: int) -> None` (first calls `ledger.finalize_ended_hours(hour_start(now), UNFINISHED_ATTEMPT)` on every tick, so a decision left open in an hour the loop stopped in is closed out on a later tick, with the `entry_attempt_unfinished` warning when an order attempt had started) _(Claude, 2026-09-15, branch-review finding pending-row-never-finalized)_
   - `async decide_hour(client, snapshot, now: int) -> dict[str, dict]` (strategy_id → decision row)
   - `async open_entries(snapshot, now: int, *, allow_entries: bool) -> None`
   - `async tick(client, *, allow_entries: bool = True) -> PaperSnapshot`

@@ -415,6 +415,23 @@ async def settle_due(client: httpx.AsyncClient, snapshot: PaperSnapshot, now: in
     """Settle hourly positions and decision rows whose hour candle has closed on Binance."""
     from polymarket_bot import paper as P
 
+    # Claude, 2026-09-15, branch-review finding pending-row-never-finalized: every tick,
+    # before anything that can skip or fail, close out decisions left open in hours that
+    # already ended. The current hour is handled by open_entries.
+    finalized = await ledger.finalize_ended_hours(market.hour_start(now), UNFINISHED_ATTEMPT)
+    if any(finalized.values()):
+        log.info("hourly_engine.ended_hours_finalized", **finalized)
+    if finalized["unfinished"]:
+        # Same operator warning as a current-hour unfinished attempt (branch-review finding
+        # hourly-reentry-after-untraced-post): a live order may exist with no ledger row.
+        await notify(
+            "entry_attempt_unfinished",
+            f"{finalized['unfinished']} entry attempt(s) in an earlier hour did not finish: the "
+            "bot stopped or its tick failed mid-order. If the bot was LIVE, an order may be on "
+            "Polymarket with no ledger row; check the account's open orders and trades.",
+            finalized,
+        )
+
     now_ms = now * 1000
     candles: dict[int, market.HourCandle | None] = {}
 

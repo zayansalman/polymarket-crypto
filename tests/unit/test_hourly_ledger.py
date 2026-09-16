@@ -144,3 +144,38 @@ async def test_db_made_with_the_older_unique_indexes_accepts_a_row_per_mode(test
     await _db.init_db()
     assert await _record(mode="paper") is True
     assert await _record(mode="live") is True
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+async def test_open_decisions_of_ended_hours_are_finalized_per_strategy_and_mode(test_db) -> None:
+    prev_slug = "bitcoin-up-or-down-september-13-2026-2pm-et"
+    kronos = "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"
+    await _record(start=H - 3600, slug=prev_slug)
+    await _record(strategy_id=kronos, start=H - 3600, slug=prev_slug)
+    await _record(strategy_id=kronos, start=H - 3600, slug=prev_slug, mode="live")
+    await _record()
+    await _record(strategy_id=kronos, side=None)
+    async with _db.connect() as conn:  # the Kronos strategy's live position for the previous hour
+        cur = await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
+            " VALUES ('x', ?, 'Down', 'open', 0.5, 2.5, 5, ?, '1h', ?, 'live')",
+            (prev_slug, kronos, H - 3600),
+        )
+        position_id = cur.lastrowid
+        await conn.commit()
+    await ledger.set_action(H - 3600, "hourly_mean_reversion", "SUBMITTING", mode="paper")
+
+    counts = await ledger.finalize_ended_hours(H, "UNCERTAIN:entry attempt did not finish")
+    assert counts == {"entered": 1, "unfinished": 1, "missed": 1}
+    prev = await ledger.get_decision(H - 3600, "hourly_mean_reversion", mode="paper")
+    assert (prev["action"], prev["position_id"]) == ("UNCERTAIN:entry attempt did not finish", None)
+    live = await ledger.get_decision(H - 3600, kronos, mode="live")
+    assert (live["action"], live["position_id"]) == ("ENTERED", position_id)
+    paper_row = await ledger.get_decision(H - 3600, kronos, mode="paper")  # live position: not its own
+    assert (paper_row["action"], paper_row["position_id"]) == ("MISSED", None)
+    # The current hour is left alone.
+    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, kronos, mode="paper"))["action"] == "NO_SIGNAL"
+    assert await ledger.finalize_ended_hours(H, "x") == {"entered": 0, "unfinished": 0, "missed": 0}

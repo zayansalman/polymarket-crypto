@@ -979,3 +979,81 @@ async def test_thin_top_ask_venue_minimum_over_the_per_trade_cap_blocks_in_both_
     assert gate_notionals and all(n == pytest.approx(2.6) for n in gate_notionals)
     action = (await ledger.get_decision(H, "hourly_mean_reversion", mode=mode))["action"]
     assert action.startswith("BLOCKED:per-trade cap: 2.60 USD exceeds 2.00 USD")
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+async def test_pending_decision_from_a_stopped_hour_is_missed_on_a_later_tick(test_db, monkeypatch):
+    venue = _Venue(hour_close=109.0)
+    await _tick(monkeypatch, H + 30, venue, allow=False)  # entries held: the row stays PENDING
+    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == "PENDING"
+    # Loop stopped before H's deadline; the next tick runs in hour H+1.
+    venue.end_hour = H + 3600
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    assert row["settled_at"] is not None and row["outcome_side"] == "Down"
+    assert row["action"] == "MISSED"
+    assert [p["window_slug"] for p in await _positions()] == [NEXT_SLUG]  # nothing chased in H
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["paper", "live"])
+async def test_open_decision_with_a_position_for_its_ended_hour_is_entered(
+    test_db, monkeypatch, mode
+):
+    venue = _Venue(hour_close=109.0)
+    if mode == "live":
+        await _go_live(monkeypatch)
+    await _tick(monkeypatch, H + 30, venue, allow=False)
+    # A crash after the live submit but before the ENTERED write leaves the position row.
+    await _insert_hourly(H, mode)
+    position_id = (await _positions())[0]["position_id"]
+    venue.end_hour = H + 3600
+    monkeypatch.setattr(engine, "open_entries", AsyncMock())  # only the ended hour matters
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(H, "hourly_mean_reversion", mode=mode)
+    assert (row["action"], row["position_id"]) == ("ENTERED", position_id)
+
+
+# Claude, 2026-09-15, branch-review finding pending-row-never-finalized
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_reason", ["RECONCILED_NO_LIVE_TRACE", "RECONCILED_UNFILLED"])
+async def test_ended_hour_is_missed_when_boot_reconciliation_closed_its_row_as_no_bet(
+    test_db, monkeypatch, exit_reason
+):
+    venue = _Venue()
+    await _tick(monkeypatch, H + 30, venue, allow=False)
+    # Crash between the row insert and a filled order: the next start's boot reconciliation
+    # closes the row because no order was placed, or none filled.
+    await _insert_hourly(H, "paper")
+    async with _db.connect() as conn:
+        await conn.execute(
+            "UPDATE paper_positions SET state = 'closed', exit_reason = ?", (exit_reason,))
+        await conn.commit()
+    venue.end_hour = H + 3600
+    monkeypatch.setattr(engine, "open_entries", AsyncMock())
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    assert (row["action"], row["position_id"]) == ("MISSED", None)
+
+
+@pytest.mark.asyncio
+async def test_attempt_left_submitting_in_an_ended_hour_is_uncertain_and_the_operator_is_told(
+    test_db, monkeypatch
+):
+    """Claude, 2026-09-16: merging pending-row-never-finalized with the attempt marker from
+    hourly-ambiguous-post-error-retried; an unfinished attempt is never recorded as MISSED."""
+    venue = _Venue(hour_close=109.0)
+    await _tick(monkeypatch, H + 30, venue, allow=False)
+    await ledger.set_action(H, "hourly_mean_reversion", engine.SUBMITTING, mode="paper")
+    venue.end_hour = H + 3600
+    monkeypatch.setattr(engine, "open_entries", AsyncMock())
+    await _tick(monkeypatch, H + 3600 + 20, venue)
+    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    assert row["action"] == engine.UNFINISHED_ATTEMPT
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM notification_feed "
+            "WHERE event_type = 'entry_attempt_unfinished'")
+        assert (await cur.fetchone())["n"] == 1
