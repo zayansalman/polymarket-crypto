@@ -3,7 +3,8 @@
 Every hour the hourly loop runs, bet or no bet, this stores both tokens' top three levels, a
 spot-based fair value for Up and the previous hour's move. It answers whether the opening
 price already leans against the previous hour. Observation only: nothing here changes a
-decision or an entry.
+decision or an entry. Rows taken after one of our live entries this hour are flagged
+(``own_live_order_this_hour``), since our own order may then be in the book.
 
 Sources: approved by Zayan (operator), 2026-09-15, from the alphaXiv sweep by Claude,
 2026-09-15 (research/hourly_btc_2026_09/literature/). Fair value is the digital-option value
@@ -14,6 +15,7 @@ Rows are keyed by the hour's UTC start (branch-review finding dst-fallback-slug-
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import statistics
@@ -36,6 +38,7 @@ OFFSETS_S: tuple[int, ...] = (0, 10, 30, 60, 120)
 _LAST_WINDOW_END_S = 180
 SIGMA_WINDOW = 168
 MIRROR_GAP_LOG_THRESHOLD = 0.011
+REQUEST_TIMEOUT_S = 2.0
 
 _recorded: set[tuple[int, int]] = set()
 _candles_by_hour: dict[int, list[Candle]] = {}
@@ -96,7 +99,8 @@ def _levels(raw: Any, depth: int) -> list[tuple[float, float]]:
 
 async def fetch_levels(client: httpx.AsyncClient, token_id: str, depth: int = 3) -> BookLevels | None:
     try:
-        resp = await client.get(f"{_config.POLYMARKET_CLOB_API}/book", params={"token_id": token_id})
+        resp = await client.get(f"{_config.POLYMARKET_CLOB_API}/book", params={"token_id": token_id},
+                                timeout=REQUEST_TIMEOUT_S)
         resp.raise_for_status()
         data = resp.json()
         stamp = data.get("timestamp")
@@ -125,14 +129,34 @@ async def _closed_candles(client: httpx.AsyncClient, start: int, now: int) -> li
     if start not in _candles_by_hour:
         try:
             candles = await market.fetch_closed_candles(
-                client, market="spot", symbol="BTCUSDT", now_ms=now * 1000, limit=SIGMA_WINDOW + 2
+                client, market="spot", symbol="BTCUSDT", now_ms=now * 1000, limit=SIGMA_WINDOW + 2,
+                timeout=REQUEST_TIMEOUT_S,
             )
         except httpx.HTTPError as exc:
             log.warning("hourly_book_record.candles_failed", error=str(exc))
             return []
+        if not candles or candles[-1].open_time_ms != (start - HOUR_S) * 1000:
+            # Binance has not closed the previous hour yet: use this list once, fetch again
+            # next time (Claude, 2026-09-16, review of the merged branch).
+            return candles
         _candles_by_hour.clear()
         _candles_by_hour[start] = candles
     return _candles_by_hour[start]
+
+
+async def _own_live_order_this_hour(start: int) -> bool:
+    """True once any strategy started a live entry this hour: its order may be in the book.
+
+    Claude, 2026-09-16, review of the merged branch: rows recorded after our own live entry
+    can include our resting order, which skews the opening-price lean this record measures.
+    """
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT 1 FROM hourly_strategy_context WHERE window_start_ts = ? AND mode = 'live' "
+            "AND (action IN ('ENTERED', 'SUBMITTING') OR action LIKE 'UNCERTAIN:%') LIMIT 1",
+            (start,),
+        )
+        return await cur.fetchone() is not None
 
 
 async def maybe_record(
@@ -152,8 +176,9 @@ async def _record(client: httpx.AsyncClient, *, snapshot: Any, hour: HourMarket,
     offset = offset_for(elapsed)
     if offset is None or (start, offset) in _recorded:
         return False
-    up = await fetch_levels(client, hour.up_token_id)
-    down = await fetch_levels(client, hour.down_token_id)
+    # Both books at once, with a short timeout, so the record barely delays the entry step.
+    up, down = await asyncio.gather(
+        fetch_levels(client, hour.up_token_id), fetch_levels(client, hour.down_token_id))
     if up is None and down is None:
         return False  # nothing to record; retry on the next tick inside this window
     candles = await _closed_candles(client, start, now)
@@ -176,8 +201,8 @@ async def _record(client: httpx.AsyncClient, *, snapshot: Any, hour: HourMarket,
               up_bids_json, up_asks_json, down_bids_json, down_asks_json,
               up_book_ts_ms, down_book_ts_ms, mirror_gap_ask, mirror_gap_bid,
               spot, hour_open, sigma_1h, seconds_left, fair_up,
-              prev_hour_return, prev_hour_vol_units
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              prev_hour_return, prev_hour_vol_units, own_live_order_this_hour
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _db.utc_now_iso(), hour.slug, start, offset, elapsed, int(time.time() * 1000),
@@ -191,6 +216,7 @@ async def _record(client: httpx.AsyncClient, *, snapshot: Any, hour: HourMarket,
                         seconds_left),
                 prev_return,
                 prev_return / sigma if prev_return is not None and sigma else None,
+                int(await _own_live_order_this_hour(start)),
             ),
         )
         await conn.commit()

@@ -169,7 +169,8 @@ def _klines_url(market: str) -> str:
 
 
 async def fetch_closed_candles(
-    client: httpx.AsyncClient, *, market: str, symbol: str, now_ms: int, limit: int
+    client: httpx.AsyncClient, *, market: str, symbol: str, now_ms: int, limit: int,
+    timeout: float | None = None,
 ) -> list[Candle]:
     """Most recent closed 1h candles, oldest first (the forming candle is dropped).
 
@@ -178,8 +179,10 @@ async def fetch_closed_candles(
     stays as a second guard. A local clock running ahead of Binance cannot then hand the
     strategy a previous hour that is still forming.
     """
+    kwargs: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     resp = await client.get(
-        _klines_url(market), params={"symbol": symbol, "interval": "1h", "limit": limit}
+        _klines_url(market), params={"symbol": symbol, "interval": "1h", "limit": limit},
+        **kwargs,
     )
     resp.raise_for_status()
     return [

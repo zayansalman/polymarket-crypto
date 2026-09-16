@@ -75,11 +75,11 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
     account = MagicMock()
     account.slot_executor = MagicMock(return_value=slot)
     monkeypatch.setattr(paper, "_live_executor", account)
-    monkeypatch.setattr(paper, "_now", lambda: H + 30)  # Stop matches the hour by start time
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
-    # Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
+    # Stop matches the hour by start time (Claude, 2026-09-15, branch-review finding
+    # 5m-stop-depends-on-hourly-discovery).
     monkeypatch.setattr(paper, "_now", lambda: H + 600)
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 1
@@ -199,7 +199,6 @@ async def test_paper_stop_leaves_past_hour_and_no_bid_rows_open(test_db, monkeyp
     assert await paper.force_close_open_positions("STOP_REQUEST") == 0
     assert await paper.count_open_positions() == 1
 
-    monkeypatch.setattr(paper, "_now", lambda: H - 3600 + 30)
     own_hour_no_bid = SimpleNamespace(window_slug=hm.slug_for(H - 3600), created_at="y",
                                       spot_price=1.0, up_best_bid=0.49, down_best_bid=None)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=own_hour_no_bid))
@@ -217,7 +216,6 @@ async def test_live_stop_never_sells_a_past_hour_row(test_db, monkeypatch) -> No
     account = MagicMock()
     account.slot_executor = MagicMock(return_value=slot)
     monkeypatch.setattr(paper, "_live_executor", account)
-    monkeypatch.setattr(paper, "_now", lambda: H + 30)
     snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
                            up_best_bid=0.49, down_best_bid=0.50)
     monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
@@ -629,3 +627,31 @@ def test_hourly_detail_line_shows_what_the_hourly_strategies_use(monkeypatch) ->
     assert f"Hour: {SLUG} (1800s left)" in detail
     assert "Up ask: 0.430; Down ask: 0.580" in detail
     assert "Decisions: btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal" in detail
+
+
+@pytest.mark.asyncio
+async def test_paper_5m_tick_leaves_a_rolled_live_5m_row_for_a_live_run(test_db, monkeypatch) -> None:
+    """Claude, 2026-09-16, review of the merged branch: a paper run never closes a live row
+    (that would book its loss on the paper leg and mark real tokens flat)."""
+    async with _db.connect() as conn:
+        await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, mode, quote_source, strategy_style)"
+            " VALUES ('x', 'btc-updown-5m-1', 'Up', 'open', 0.52, 2.6, 5, 'live', 'clob', 'settle')"
+        )
+        await conn.commit()
+    five_minute = SimpleNamespace(
+        window_slug="btc-updown-5m-2", created_at="y", spot_price=1.0, up_best_bid=0.6,
+        down_best_bid=0.4, signal_side=None, notional_usd=0.0)
+    monkeypatch.setattr(paper, "_timeframe", "5m")
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", None)
+    monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(return_value=five_minute))
+    monkeypatch.setattr(paper, "_log_tick", AsyncMock())
+    monkeypatch.setattr(paper, "_record_and_settle_shadow", AsyncMock())
+    monkeypatch.setattr(paper, "_settle_position_outcome", AsyncMock(return_value=False))
+    monkeypatch.setattr(engine, "settle_due", AsyncMock(side_effect=ValueError("bad JSON")))
+
+    await paper.paper_tick_once()  # a failing hourly settlement doesn't fail the 5m tick
+
+    assert await paper.count_open_positions(mode="live") == 1

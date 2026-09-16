@@ -164,3 +164,47 @@ async def test_a_failing_venue_never_raises_and_writes_nothing(test_db) -> None:
         assert not await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET,
                                                   now=H + 2)
     assert await _rows() == []
+
+
+class _PreviousHourStillForming(_Venue):
+    """Binance has not closed hour H-1 yet on the first call (Claude, 2026-09-16, review)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.kline_calls = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(f"{_config.BINANCE_API_BASE}/api/v3/klines"):
+            self.kline_calls += 1
+            if self.kline_calls == 1:
+                rows = super().__call__(request).json()[:-1]  # H-1 is still the forming row
+                return httpx.Response(200, json=rows)
+        return super().__call__(request)
+
+
+@pytest.mark.asyncio
+async def test_candles_are_cached_only_once_the_previous_hour_has_closed(test_db) -> None:
+    venue = _PreviousHourStillForming()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(venue)) as client:
+        assert await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET, now=H + 1)
+        assert await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET, now=H + 11)
+    first, second = await _rows()
+    assert first["prev_hour_return"] is None
+    assert second["prev_hour_return"] == pytest.approx(math.log(101.0 / 100.0))
+
+
+@pytest.mark.asyncio
+async def test_rows_after_our_own_live_entry_are_flagged(test_db) -> None:
+    from polymarket_bot.hourly import ledger
+
+    spot_push = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_Venue())) as client:
+        await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET, now=H + 2)
+        await ledger.record_decision(
+            strategy_id=spot_push, window_slug=SLUG, window_start_ts=H, side="Down", reason="r",
+            signal={}, factors={}, up_bid=None, up_ask=None, down_bid=None, down_ask=None,
+            hour_open=101.0, mode="live", late=False)
+        await ledger.set_action(H, spot_push, "ENTERED", mode="live")
+        await book_record.maybe_record(client, snapshot=_snapshot(), market=MARKET, now=H + 12)
+    first, second = await _rows()
+    assert (first["own_live_order_this_hour"], second["own_live_order_this_hour"]) == (0, 1)

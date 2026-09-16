@@ -511,8 +511,9 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     # decision-row-shared-across-modes). Strategies never see it; it only picks the row.
     mode = "live" if P._live_executor is not None else "paper"
     snapshot = await build_snapshot(client, now)
-    # Book record before any entry, so it never includes our own order (observation only;
-    # approved by Zayan (operator), 2026-09-15). _market_for is cached: no extra Gamma call.
+    # Book record before this tick's entry step (observation only; approved by Zayan
+    # (operator), 2026-09-15). Rows taken after an earlier live entry this hour are flagged,
+    # since our own order may be in the book. _market_for is cached: no extra Gamma call.
     await book_record.maybe_record(
         client, snapshot=snapshot, market=await _market_for(client, start), now=now)
     await settle_due(client, snapshot, now)

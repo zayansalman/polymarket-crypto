@@ -250,7 +250,8 @@ CREATE TABLE IF NOT EXISTS hourly_book_snapshots (
   seconds_left INTEGER,
   fair_up REAL,
   prev_hour_return REAL,
-  prev_hour_vol_units REAL
+  prev_hour_vol_units REAL,
+  own_live_order_this_hour INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_start_offset
   ON hourly_book_snapshots(window_start_ts, offset_s);

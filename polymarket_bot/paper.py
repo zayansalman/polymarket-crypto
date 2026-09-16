@@ -559,11 +559,18 @@ async def paper_tick_once() -> PaperSnapshot:
             return await hourly_engine.tick(client, allow_entries=not kill_active)
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
-        await _close_due_positions(snapshot, client)
+        # A paper run never closes live rows: that would book their loss on the paper leg and
+        # mark real tokens flat (Claude, 2026-09-16, review of the merged branch).
+        await _close_due_positions(snapshot, client, include_live_rows=_live_executor is not None)
         # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
         # boot adopts open 1h rows into their slots whatever timeframe runs, so a 5m run
-        # settles them from the Binance candle too, before any new entry.
-        await hourly_engine.settle_due(client, snapshot, _now())
+        # settles them from the Binance candle too, before any new entry. A failure there
+        # never fails the 5m tick (Claude, 2026-09-16, review of the merged branch).
+        try:
+            await hourly_engine.settle_due(client, snapshot, _now())
+        except Exception as e:  # noqa: BLE001 — retried on the next tick
+            log.warning("paper_tick.hourly_settlement_failed_during_5m_run",
+                        error=f"{type(e).__name__}: {e}")
         if not kill_active:
             await _maybe_open_position(snapshot)
         await _record_and_settle_shadow(snapshot, client)
