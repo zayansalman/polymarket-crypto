@@ -53,6 +53,10 @@ def test_build_frames_uses_naive_utc_open_times_and_next_hours() -> None:
     assert list(y_ts) == [pd.Timestamp(candles[-1][0] + k * HOUR_MS, unit="ms") for k in (1, 2, 3)]
 
 
+APP_MODULES = {"config", "db", "polymarket_bot", "polymarket_exec", "dotenv", "logging_setup",
+               "tools"}
+
+
 def test_worker_imports_nothing_from_the_app() -> None:
     tree = ast.parse(WORKER.read_text())
     names = set()
@@ -61,7 +65,21 @@ def test_worker_imports_nothing_from_the_app() -> None:
             names.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
-    assert not names & {"config", "db", "polymarket_bot", "polymarket_exec", "dotenv", "logging_setup"}
+    assert not names & APP_MODULES
+
+
+def test_the_app_import_blocker_refuses_app_modules_only() -> None:
+    assert worker.BLOCKED_IMPORTS == APP_MODULES
+    blocker = worker.AppImportBlocker()
+    for name in ("config", "db", "polymarket_bot", "polymarket_bot.paper", "polymarket_exec",
+                 "dotenv", "logging_setup", "tools", "tools.gen_docs"):
+        with pytest.raises(worker.BlockedImportError):
+            blocker.find_spec(name, None)
+    for name in ("configparser", "sysconfig", "dbm", "toolz", "logging.config", "model",
+                 "model.kronos", "torch", "pandas"):
+        assert blocker.find_spec(name, None) is None
+    # Importing the worker module (as this test file does) must not install the blocker.
+    assert not any(isinstance(f, worker.AppImportBlocker) for f in sys.meta_path)
 
 
 FAKE_TORCH = '''
@@ -97,17 +115,28 @@ class KronosPredictor:
 '''
 
 
-def test_worker_process_runs_the_recipe_with_fake_torch_and_model(tmp_path: Path) -> None:
-    pytest.importorskip("pandas")
+def _run_worker(stdin_text: str) -> tuple[subprocess.CompletedProcess, dict]:
+    """Run the real worker script the way the client does; return the process and last line."""
+    proc = subprocess.run([sys.executable, "-I", "-B", str(WORKER)], input=stdin_text,
+                          capture_output=True, text=True, timeout=60,
+                          env={"PATH": "/usr/bin:/bin", "PYTHON_DOTENV_DISABLED": "1"})
+    return proc, json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _code_dir(tmp_path: Path, model_source: str) -> Path:
+    """A stand-in for third_party/kronos_67b630e with a fake torch and a fake model package."""
     code = tmp_path / "code"
     (code / "model").mkdir(parents=True)
     (code / "torch.py").write_text(FAKE_TORCH)
-    (code / "model" / "__init__.py").write_text(FAKE_MODEL)
+    (code / "model" / "__init__.py").write_text(model_source)
+    return code
+
+
+def test_worker_process_runs_the_recipe_with_fake_torch_and_model(tmp_path: Path) -> None:
+    pytest.importorskip("pandas")
+    code = _code_dir(tmp_path, FAKE_MODEL)
     req = _request(code_dir=str(code), threads=3, seed=497_000)
-    proc = subprocess.run([sys.executable, "-I", "-B", str(WORKER)], input=json.dumps(req),
-                          capture_output=True, text=True, timeout=60,
-                          env={"PATH": "/usr/bin:/bin", "PYTHON_DOTENV_DISABLED": "1"})
-    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    proc, out = _run_worker(json.dumps(req))
     assert proc.returncode == 0 and out["ok"] is True, proc.stderr
     assert out["upside_prob"] == pytest.approx(0.75)  # 3 of 4 paths close above the last close
     assert out["last_close"] == req["candles"][-1][4]
@@ -116,9 +145,18 @@ def test_worker_process_runs_the_recipe_with_fake_torch_and_model(tmp_path: Path
     assert (code / "threads.txt").read_text() == "3"
 
 
-def test_worker_reports_errors_as_json(tmp_path: Path) -> None:
-    proc = subprocess.run([sys.executable, "-I", "-B", str(WORKER)], input="not json",
-                          capture_output=True, text=True, timeout=30,
-                          env={"PATH": "/usr/bin:/bin"})
-    out = json.loads(proc.stdout.strip().splitlines()[-1])
+def test_worker_reports_errors_as_json() -> None:
+    proc, out = _run_worker("not json")
     assert proc.returncode == 0 and out["ok"] is False and "JSONDecodeError" in out["error"]
+
+
+def test_worker_process_refuses_to_import_app_modules(tmp_path: Path) -> None:
+    pytest.importorskip("pandas")
+    imported = tmp_path / "app_config_was_imported"
+    # A fake app config next to the model code, where an editable install could put the real one.
+    code = _code_dir(tmp_path, "import config\n" + FAKE_MODEL)
+    (code / "config.py").write_text(f"from pathlib import Path\nPath({str(imported)!r}).touch()\n")
+    proc, out = _run_worker(json.dumps(_request(code_dir=str(code))))
+    assert proc.returncode == 0 and out["ok"] is False, out
+    assert "refused to import the app module config" in out["error"]
+    assert not imported.exists()

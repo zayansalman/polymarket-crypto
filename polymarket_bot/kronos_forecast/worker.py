@@ -1,17 +1,43 @@
 """Kronos forecast worker: one Kronos forecast per process, JSON in on stdin, JSON out on stdout.
 
 Started by client.py as ``python -I -B worker.py`` with a minimal environment. It imports
-nothing from the app. The recipe follows github.com/shiyu-coder/Kronos-demo
-update_predictions.py (commit eba16695), run with the MIT Kronos code vendored in
-third_party/kronos_67b630e: ``predict_batch`` over ``paths`` identical copies of the input
-with ``sample_count=1`` gives one independently sampled path per copy (Claude, 2026-09-16).
+nothing from the app, and its import blocker refuses app modules if anything else tries.
+
+The recipe follows github.com/shiyu-coder/Kronos-demo update_predictions.py (commit
+eba16695), run with the MIT Kronos code vendored in third_party/kronos_67b630e:
+``predict_batch`` over ``paths`` identical copies of the input with ``sample_count=1`` gives
+one independently sampled path per copy (Claude, 2026-09-16).
 """
 from __future__ import annotations
 
+import importlib.abc
 import json
 import sys
 import time
 from typing import Any
+
+# App modules can load the app's .env, which holds the wallet key. The worker refuses them,
+# even when an editable install (pip install -e) puts the app on sys.path (Claude, 2026-09-16).
+BLOCKED_IMPORTS = frozenset({"config", "db", "polymarket_bot", "polymarket_exec", "dotenv",
+                             "logging_setup", "tools"})
+
+
+class BlockedImportError(ImportError):
+    """An import the worker process refuses."""
+
+
+class AppImportBlocker(importlib.abc.MetaPathFinder):
+    """A ``sys.meta_path`` finder that refuses the app's top-level modules and packages."""
+
+    def find_spec(self, fullname: str, path: Any, target: Any = None) -> None:
+        if fullname.partition(".")[0] in BLOCKED_IMPORTS:
+            raise BlockedImportError(
+                f"Kronos worker refused to import the app module {fullname}", name=fullname)
+        return None
+
+
+if __name__ == "__main__":  # the worker process only, before anything else is imported
+    sys.meta_path.insert(0, AppImportBlocker())
 
 REQUIRED_KEYS = ("candles", "horizon", "paths", "temperature", "top_p", "top_k", "seed",
                  "max_context", "threads", "code_dir", "model_dir", "tokenizer_dir")
