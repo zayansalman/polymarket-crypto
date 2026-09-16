@@ -210,10 +210,20 @@ class _HourlyDecision:
 
 
 async def open_entries(
-    snapshot: PaperSnapshot, now: int, *, allow_entries: bool, mode: str
+    snapshot: PaperSnapshot, now: int, *, allow_entries: bool, mode: str, executor: Any = None
 ) -> None:
+    """Advance this mode's entries. ``executor`` is the live executor the tick started with.
+
+    A runner whose mode changed mid-tick (the global executor is no longer the one this tick
+    started with) writes nothing (Claude session "Tsinghua base Kronos btc 24h", 2026-09-17).
+    """
+    from polymarket_bot import paper as P
+
     start = market.hour_start(now)
     deadline = _knobs.cached("hourly_entry_deadline_seconds")
+    if P._live_executor is not executor or (executor is not None) != (mode == "live"):
+        log.warning("hourly_engine.entries_skipped_runner_changed", tick_mode=mode)
+        return
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
@@ -315,7 +325,8 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     start = market.hour_start(now)
     # The decision record is per mode (Claude, 2026-09-15, branch-review finding
     # decision-row-shared-across-modes). Strategies never see it; it only picks the row.
-    mode = "live" if P._live_executor is not None else "paper"
+    executor = P._live_executor  # read once: entries use this executor or none at all
+    mode = "live" if executor is not None else "paper"
     snapshot = await build_snapshot(client, now)
     # Book record before this tick's entry step (observation only; approved by Zayan
     # (operator), 2026-09-15). Rows taken after an earlier live entry this hour are flagged,
@@ -324,7 +335,7 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
         client, snapshot=snapshot, market=await _market_for(client, start), now=now)
     await settle_due(client, snapshot, now)
     rows = await decide_hour(client, snapshot, now, mode=mode)
-    await open_entries(snapshot, now, allow_entries=allow_entries, mode=mode)
+    await open_entries(snapshot, now, allow_entries=allow_entries, mode=mode, executor=executor)
     for sid in list(rows):
         rows[sid] = await ledger.get_decision(start, sid, mode=mode) or rows[sid]
     snapshot.reason = _reason_line(rows)
