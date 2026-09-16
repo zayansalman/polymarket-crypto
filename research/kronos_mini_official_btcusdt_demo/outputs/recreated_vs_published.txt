@@ -1,6 +1,6 @@
-hours compared: 270
+hours compared: 279
 inputs identical (last close): 100.0%
-mean gap -0.002, mean absolute gap 0.086, correlation 0.896
-gaps beyond 2 SE: 13 of 270 (4.8%; about 5% expected from sampling alone)
-mean ours 0.519 vs published 0.520; sd ours 0.237 vs published 0.244
+mean gap -0.000, mean absolute gap 0.085, correlation 0.897
+gaps beyond 2 SE: 13 of 279 (4.7%; about 5% expected from sampling alone)
+mean ours 0.523 vs published 0.523; sd ours 0.237 vs published 0.244
 median seconds per recreated forecast: 8.8
