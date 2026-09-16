@@ -59,6 +59,34 @@ decides or gates trades, or reads the trading mode.
 - Settlement: 5m/15m markets resolve on the Chainlink 60 s TWAP (since 2026-08-14);
   1h/1d on Binance BTC_USDT.
 
+## Connections: one market-channel socket per asset x timeframe
+
+The first live run put all 96 tokens (48 windows) on one socket, as first designed. It
+carried ~2,100 frames/s (~1.2 MiB/s), fell 3-4 s behind, and the server closed it with
+1013 "slow consumer: send buffer full" four times in two minutes. A bare reader that
+did no parsing (9% CPU) was dropped the same way, so the limit is delivery to this
+machine, not the Python code. Measured on 2026-09-16 from this machine:
+
+| Layout | Result |
+|---|---|
+| 96 tokens, one socket | 1013 disconnect within 40 s |
+| one socket per asset (6) | no disconnects, but the BTC socket lagged (p50 1.9 s, max 23 s) |
+| BTC 5m current window alone | 956 frames/s, 644 KiB/s, p50 109 ms |
+| one socket per asset x timeframe (24) | every socket p50 103-188 ms, max 482 ms, no disconnects |
+
+So the hub opens one socket per (asset, timeframe): 24 for the default grid, each
+holding that pair's current and next window (and an ended window until it resolves).
+Windows roll inside their socket, and a window's two tokens always share a socket,
+because every `price_change` carries both outcomes.
+
+Every subscribe frame still carries `custom_feature_enabled`, so each socket also
+receives the platform-wide `new_market` broadcast: measured at 0.6-1.4 events/s
+(1.4-3.3 KiB/s) per socket, so roughly 35-80 KiB/s across 24 sockets. A later option
+is to keep the flag on one "lifecycle" socket (ended windows plus one unresolved
+anchor) and turn it off on the others. A check on 2026-09-16 showed that
+`market_resolved` also reaches a socket that subscribed after the window ended
+(116-126 s after the end).
+
 ## Modules
 
 | Module | Role |
@@ -68,7 +96,7 @@ decides or gates trades, or reads the trading mode.
 | `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s watchdog (resubscribe, then reconnect), 1-30 s jittered backoff, stop within ~1 s. |
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. |
 | `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. |
-| `hub.py` | `MarketDataHub`: the public API. |
+| `hub.py` | `MarketDataHub`: the public API; one `ClobMarketStream` per asset x timeframe, merged into one status. |
 
 ## API (`polymarket_exec/marketdata/hub.py`)
 
@@ -99,6 +127,7 @@ The universe follows an ended window for 30 s, and until its `market_resolved` a
 ## FEEDS card
 
 Four rows under the feed-monitor rows: "Polymarket books" (CLOB market WS; delay =
-event latency p50; STALE after 45 s without data), and "Chainlink prices",
+event latency p50 over all sockets; STALE after 45 s without data; DOWN names the
+sockets that are down, e.g. "1 of 24 sockets down; btc-5m: ..."), and "Chainlink prices",
 "Chainlink 60s TWAP", "Binance prices" (RTDS WS; delay = age of the newest print;
 STALE past 10 s). The full FEEDS redesign is a later change.

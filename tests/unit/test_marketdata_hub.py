@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from polymarket_exec.marketdata import clob_messages as cm
+from polymarket_exec.marketdata import clob_stream as cs
 from polymarket_exec.marketdata import hub as hub_mod
 from polymarket_exec.marketdata import rtds_stream as rs
 
@@ -69,11 +70,16 @@ def _hub(clock: dict | None = None, **kw) -> hub_mod.MarketDataHub:
     clock = clock if clock is not None else {"t": T0}
     kw.setdefault("clob_connect", Connector())
     kw.setdefault("rtds_connect", Connector())
+    kw.setdefault("assets", ("btc",))
+    kw.setdefault("timeframes", ("5m",))
     return hub_mod.MarketDataHub(
-        assets=("btc",), timeframes=("5m",),
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(_gamma)),
         time_fn=lambda: clock["t"], **kw,
     )
+
+
+def _follow(hub: hub_mod.MarketDataHub, *tokens: str) -> None:
+    hub._apply_groups({("btc", "5m"): frozenset(tokens)})
 
 
 def _drain(listener: hub_mod.Listener) -> list:
@@ -94,7 +100,7 @@ def _price_change(changes: list[tuple[str, str, str, str]], ts: int = 1_789_554_
 @pytest.mark.asyncio
 async def test_top_changed_is_pushed_only_when_the_top_moves() -> None:
     hub = _hub()
-    hub._apply_tokens({UP, DOWN})
+    _follow(hub, UP, DOWN)
     listener = hub.listen()
     for event in _events("clob_book_snapshot_array.json"):
         hub.handle_clob_event(event, 1_000)
@@ -118,7 +124,7 @@ async def test_top_changed_is_pushed_only_when_the_top_moves() -> None:
 @pytest.mark.asyncio
 async def test_trades_tick_sizes_and_unfollowed_tokens() -> None:
     hub = _hub()
-    hub._apply_tokens({UP, DOWN})
+    _follow(hub, UP, DOWN)
     for event in _events("clob_book_snapshot_array.json"):
         hub.handle_clob_event(event, 1_000)
     listener = hub.listen()
@@ -134,7 +140,7 @@ async def test_trades_tick_sizes_and_unfollowed_tokens() -> None:
     hub.handle_clob_event(cm.BookEvent("m", "stranger", ((0.1, 1.0),), (), 1, "h"), 4_000)
     assert hub.top("stranger") is None and hub.levels("stranger", "bid", 5) == ()
     # Unfollowing a token drops its book.
-    hub._apply_tokens({DOWN})
+    _follow(hub, DOWN)
     assert hub.top(UP) is None and hub.top(DOWN) is not None
 
 
@@ -146,7 +152,7 @@ async def test_reads_return_immutable_objects() -> None:
         update = await hub._universe.refresh()
     finally:
         await hub._universe.aclose()
-    hub._apply_tokens(update.tokens)
+    hub._apply_groups(update.groups)
     for event in _events("clob_book_snapshot_array.json"):
         hub.handle_clob_event(event, 1_000)
     quote = hub.quote("btc", "5m")
@@ -294,7 +300,7 @@ async def test_market_resolved_names_the_window() -> None:
         update = await hub._universe.refresh()
     finally:
         await hub._universe.aclose()
-    hub._apply_tokens(update.tokens)
+    hub._apply_groups(update.groups)
     listener = hub.listen()
     resolved = cm.MarketResolvedEvent("1", MARKET, (UP, DOWN), DOWN, "Down", 5, ("5M",))
     hub.handle_clob_event(resolved, 6)
@@ -303,10 +309,74 @@ async def test_market_resolved_names_the_window() -> None:
     assert events[0].market.slug == CURRENT
     assert (events[0].winning_token, events[0].winning_outcome) == (DOWN, "Down")
     # Still inside its window, so it stays followed until 30 s after the end.
-    assert UP in hub._clob.desired
+    shard = hub._clob_streams["btc-5m"]
+    assert UP in shard.desired
     clock["t"] = 1_789_554_600 + 31
-    hub._apply_tokens(hub._universe.tokens())
-    assert UP not in hub._clob.desired
+    hub._apply_groups(hub._universe.groups())
+    assert UP not in shard.desired and f"{NEXT}:up" in shard.desired
+
+
+@pytest.mark.asyncio
+async def test_each_asset_timeframe_gets_its_own_socket() -> None:
+    clob = Connector()
+    hub = _hub(clob_connect=clob, timeframes=("5m", "15m"))
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        await until(lambda: len(clob.made) == 2 and all(ws.sent for ws in clob.made))
+        sent = sorted(json.loads(ws.sent[0])["assets_ids"] for ws in clob.made)
+        fifteen = ["btc-updown-15m-1789553700", "btc-updown-15m-1789554600"]
+        assert sent == [
+            sorted([UP, DOWN, f"{NEXT}:up", f"{NEXT}:down"]),
+            sorted([f"{fifteen[0]}:down", f"{fifteen[0]}:up",
+                    f"{fifteen[1]}:down", f"{fifteen[1]}:up"]),
+        ]
+        # Events reach the books whichever socket delivered them.
+        clob.made[0].incoming.put_nowait(
+            (FIXTURES / "clob_book_snapshot_array.json").read_text())
+        clob.made[1].incoming.put_nowait(
+            (FIXTURES / "clob_book_snapshot_array.json").read_text())
+        await until(lambda: hub.top(UP) is not None)
+        snap = hub.snapshot()
+        assert set(snap.clob_shards) == {"btc-5m", "btc-15m"}
+        assert snap.clob.connected is True and snap.subscribed == 8
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+def _shard(**kw) -> cs.StreamStatus:
+    base = dict(connected=True, connected_since=100.0, last_frame_at=150.0,
+                last_pong_at=None, frames_total=10, frames_per_s=2.0, latency_ms_p50=None,
+                latency_ms_p90=None, reconnects=1, resyncs=0, subscribed=4, desired=4,
+                unknown=0, handler_errors=0, last_error=None, last_notice=None)
+    base.update(kw)
+    return cs.StreamStatus(**base)
+
+
+def test_shard_statuses_merge_into_one_feed_status() -> None:
+    shards = {
+        "btc-5m": _shard(last_frame_at=160.0, frames_total=30, frames_per_s=5.5),
+        "eth-5m": _shard(connected_since=90.0, resyncs=2, last_notice="INVALID OPERATION"),
+        "sol-1d": _shard(connected=False, connected_since=None, subscribed=0,
+                         last_error="OSError: reset"),
+        "bnb-1h": _shard(connected=False, connected_since=None, subscribed=0, desired=0,
+                         last_error="old error"),  # wants nothing: not counted as down
+    }
+    samples = {"btc-5m": (10, 20, 30, 40), "eth-5m": (50, 60), "sol-1d": (), "bnb-1h": ()}
+    merged = hub_mod.merge_shard_status(shards, samples)
+    assert merged.connected is False  # one wanted socket is down
+    assert (merged.frames_total, merged.frames_per_s, merged.reconnects, merged.resyncs) == (
+        60, 11.5, 4, 2)
+    assert (merged.subscribed, merged.desired) == (8, 12)
+    assert (merged.last_frame_at, merged.connected_since) == (160.0, 90.0)
+    assert (merged.latency_ms_p50, merged.latency_ms_p90) == (40.0, 60.0)
+    assert merged.last_error == "sol-1d: OSError: reset"
+    assert merged.last_notice == "INVALID OPERATION"
+    healthy = hub_mod.merge_shard_status(
+        {k: v for k, v in shards.items() if k != "sol-1d"}, samples)
+    assert healthy.connected is True and healthy.last_error is None
+    assert hub_mod.merge_shard_status({}, {}).connected is False
 
 
 def test_snapshot_before_running() -> None:
@@ -314,7 +384,7 @@ def test_snapshot_before_running() -> None:
     snap = hub.snapshot()
     assert snap.taken_at == T0 and snap.started_at == T0
     assert (snap.markets, snap.tokens, snap.subscribed, snap.listeners) == (0, 0, 0, 0)
-    assert snap.clob.connected is False
+    assert snap.clob.connected is False and set(snap.clob_shards) == {"btc-5m"}
     assert set(snap.prices) == set(rs.SOURCES)
     assert all(age is None for age in snap.price_ages.values())
 
@@ -323,6 +393,8 @@ def test_default_grid_and_registry() -> None:
     hub = hub_mod.MarketDataHub()
     assert hub.assets == ("btc", "eth", "sol", "xrp", "doge", "bnb")
     assert hub.timeframes == ("5m", "15m", "1h", "1d")
+    assert len(hub._clob_streams) == 24  # one market-channel socket per asset x timeframe
+    assert "btc-5m" in hub._clob_streams and "bnb-1d" in hub._clob_streams
     hub_mod.set_current(hub)
     try:
         assert hub_mod.current() is hub

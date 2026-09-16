@@ -298,6 +298,10 @@ class ClobMarketStream:
         """Unsubscribe and subscribe everything again on the next check (fresh snapshots)."""
         self._resync_requested = True
 
+    def latency_samples(self) -> tuple[int, ...]:
+        """The recent receive-minus-event latencies (ms), for merging several streams."""
+        return copy_deque(self._latency)
+
     def status(self) -> StreamStatus:
         now_s = int(self._time_fn())
         recent = sum(

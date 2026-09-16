@@ -275,6 +275,7 @@ async def test_rate_and_latency_percentiles() -> None:
         st = stream.status()
         assert st.frames_per_s == 3.0  # 30 frames over the last 10 whole seconds
         assert (st.latency_ms_p50, st.latency_ms_p90) == (11.0, 19.0)
+        assert sorted(stream.latency_samples()) == list(range(1, 21))
         clock.t = 1_020.0
         assert stream.status().frames_per_s == 0.0
 

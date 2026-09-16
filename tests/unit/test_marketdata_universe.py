@@ -172,6 +172,7 @@ async def test_refresh_follows_current_and_next_windows_with_one_lookup_each() -
         assert update.tokens == frozenset({current.up_token, current.down_token,
                                            nxt.up_token, nxt.down_token})
         assert update.opened == (current,)
+        assert update.groups == {("btc", "5m"): update.tokens}
         clock["t"] += 2
         again = await universe.refresh()
         assert again.tokens == update.tokens and again.opened == ()
@@ -280,6 +281,13 @@ async def test_lookups_run_at_most_four_at_a_time() -> None:
     assert gamma.max_active == 4
     assert len(update.tokens) == 6 * 4 * 2 * 2
     assert len(update.opened) == 24
+    assert len(update.groups) == 24 and universe.grid == tuple(
+        (a, tf) for a in uv.ASSETS for tf in uv.TIMEFRAMES)
+    assert all(len(tokens) == 4 for tokens in update.groups.values())
+    assert frozenset().union(*update.groups.values()) == update.tokens
+    btc_hour = update.groups[("btc", "1h")]
+    assert universe.market("btc", "1h").up_token in btc_hour
+    assert universe.market("btc", "1h", "next").down_token in btc_hour
 
 
 @pytest.mark.asyncio
@@ -300,6 +308,7 @@ async def test_ended_windows_wait_for_resolution_then_drop() -> None:
         assert universe.mark_resolved(old.down_token) == old
         assert universe.mark_resolved("unknown-token") is None
         assert universe.tokens() == rolled.tokens - {old.up_token, old.down_token}
+        assert universe.groups() == {("btc", "5m"): universe.tokens()}
         dropped = await universe.refresh()
         assert old.up_token not in dropped.tokens and len(dropped.tokens) == 4
         # An unresolved window is let go once the resolution wait is over.

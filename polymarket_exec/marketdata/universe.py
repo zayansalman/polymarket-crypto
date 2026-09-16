@@ -71,6 +71,7 @@ class MarketRef:
 class UniverseUpdate:
     tokens: frozenset[str]  # every token to keep subscribed
     opened: tuple[MarketRef, ...]  # windows that just became an (asset, timeframe)'s current
+    groups: dict[tuple[str, str], frozenset[str]]  # the same tokens by (asset, timeframe)
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,11 @@ class MarketUniverse:
         self._lookup_errors = 0
         self._misses = 0
 
+    @property
+    def grid(self) -> tuple[tuple[str, str], ...]:
+        """The (asset, timeframe) pairs followed (pairs without a slug scheme are skipped)."""
+        return self._grid
+
     def _valid_grid(self) -> tuple[tuple[str, str], ...]:
         grid = []
         probe = datetime(2026, 1, 1, tzinfo=UTC)
@@ -193,14 +199,18 @@ class MarketUniverse:
     def known_tokens(self, slug: str) -> Tokens | None:
         return self._announced.get(slug) or self._found.get(slug)
 
-    def tokens(self, now: float | None = None) -> frozenset[str]:
+    def groups(self, now: float | None = None) -> dict[tuple[str, str], frozenset[str]]:
+        """Tokens to keep subscribed, by (asset, timeframe); a window's two tokens stay together."""
         now = self._time_fn() if now is None else now
-        out: set[str] = set()
+        out: dict[tuple[str, str], set[str]] = {}
         for ref in tuple(self._tracked.values()):
             if self._keep(ref, now):
-                out.add(ref.up_token)
-                out.add(ref.down_token)
-        return frozenset(out)
+                out.setdefault((ref.asset, ref.timeframe), set()).update(
+                    (ref.up_token, ref.down_token))
+        return {key: frozenset(tokens) for key, tokens in out.items()}
+
+    def tokens(self, now: float | None = None) -> frozenset[str]:
+        return frozenset().union(*self.groups(now).values())
 
     def status(self) -> UniverseStatus:
         return UniverseStatus(
@@ -275,7 +285,8 @@ class MarketUniverse:
         }
         self._resolved = {slug for slug in self._resolved if slug in tracked}
         self._found = {slug: tokens for slug, tokens in self._found.items() if slug in tracked}
-        return UniverseUpdate(self.tokens(now), tuple(opened))
+        groups = self.groups(now)
+        return UniverseUpdate(frozenset().union(*groups.values()), tuple(opened), groups)
 
     async def aclose(self) -> None:
         if self._client is not None:

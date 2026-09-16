@@ -329,11 +329,12 @@ def _src(**kw) -> rs.SourceStatus:
 
 def _md(clob: cs.StreamStatus | None = None, prices: dict | None = None,
         ages: dict | None = None, started_at: float = HT - 600, markets: int = 48,
-        tokens: int = 96, gamma_errors: int = 0,
-        gamma_last_error: str | None = None) -> md_hub.MarketDataSnapshot:
+        tokens: int = 96, gamma_errors: int = 0, gamma_last_error: str | None = None,
+        shards: dict | None = None) -> md_hub.MarketDataSnapshot:
     clob = clob or _clob()
     return md_hub.MarketDataSnapshot(
         taken_at=HT, started_at=started_at, clob=clob,
+        clob_shards=shards if shards is not None else {"btc-5m": clob},
         prices=prices or {s: _src() for s in rs.SOURCES},
         price_ages=ages if ages is not None else {s: 1.5 for s in rs.SOURCES},
         markets=markets, tokens=tokens, subscribed=clob.subscribed, gamma_lookups=60,
@@ -406,6 +407,13 @@ def test_books_row_states() -> None:
     assert (no_markets.status, no_markets.role) == (
         "DOWN", "Up/Down books · trades (0 markets)")
     assert "Gamma" in (no_markets.detail or "") and "ConnectError" in (no_markets.detail or "")
+    shards = {"btc-5m": _clob(), "eth-5m": _clob(),
+              "sol-1d": _clob(connected=False, connected_since=None, subscribed=0),
+              "bnb-1d": _clob(connected=False, connected_since=None, subscribed=0, desired=0)}
+    partial = books(clob=_clob(connected=False, last_error="sol-1d: OSError: reset"),
+                    shards=shards)
+    assert (partial.status, partial.level, partial.detail) == (
+        "DOWN", "down", "1 of 3 sockets down; sol-1d: OSError: reset")
 
 
 def test_price_row_states() -> None:

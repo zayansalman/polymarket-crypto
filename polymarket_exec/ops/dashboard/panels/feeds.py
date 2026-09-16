@@ -8,8 +8,8 @@ more row.
 
 Delay is the age of the latest print for the Chainlink WS stream and the RTDS price
 rows, the round-trip time of the latest check for each monitored REST feed, the event
-latency (p50) of the CLOB market WS, and the age of the last successful pull for
-recorder feeds.
+latency (p50, over all of the hub's CLOB market sockets), and the age of the last
+successful pull for recorder feeds.
 """
 from __future__ import annotations
 
@@ -204,6 +204,10 @@ def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
             detail += f" (Gamma lookups failing: {md.gamma_last_error or 'error'})"
     else:
         detail = st.last_error or "not connected (reconnecting)"
+        wanted = [s for s in md.clob_shards.values() if s.desired > 0]
+        down = sum(1 for s in wanted if not s.connected)
+        if 0 < down < len(wanted):  # one socket per asset x timeframe
+            detail = f"{down} of {len(wanted)} sockets down; {detail}"
     return FeedRow(name, role, source, delay, "DOWN", "down", slow, detail[:200])
 
 
