@@ -52,9 +52,9 @@ class _Log:
 
 def _source(key: str, results: list, cadence_s: float = 3600.0, min_retry_s: float | None = None,
             calls: list | None = None) -> mr.MacroSource:
-    async def poll(client: httpx.AsyncClient, now_ms: int) -> int:
+    async def poll(client: httpx.AsyncClient, clock) -> int:
         if calls is not None:
-            calls.append(now_ms)
+            calls.append(clock())
         result = results.pop(0) if len(results) > 1 else results[0]
         if isinstance(result, BaseException):
             raise result
@@ -170,6 +170,53 @@ async def test_sources_poll_on_their_own_cadence() -> None:
     assert (fast.ok, fast.rows, fast.last_ok_at, fast.last_attempt_at) == (True, 3, clock.t, clock.t)
     assert fast.next_attempt_at == clock.t + 3600 and fast.cadence_s == 3600
     assert fast.detail is None and fast.retry_after is False
+
+
+@pytest.mark.asyncio
+async def test_each_source_is_stamped_when_its_answer_arrives(test_db) -> None:
+    """A slow source earlier in the pass, or the request itself, never back-dates a stamp."""
+    clock = _Clock()
+
+    async def slow_failure(client: httpx.AsyncClient, _clock) -> int:
+        clock.t += 30  # e.g. a host that takes its whole connect timeout
+        raise RuntimeError("slow host")
+
+    fixture = _fixture_handler([])
+
+    def two_second_request(request: httpx.Request) -> httpx.Response:
+        clock.t += 2
+        return fixture(request)
+
+    ff = [s for s in mr.default_sources() if s.key == mr.FF_WEEK]
+    rec = mr.MacroRecorder(sources=[mr.MacroSource("a:slow", 6 * 3600.0, slow_failure), *ff],
+                           time_fn=clock)
+    async with _client(two_second_request) as c:
+        await rec.record_once(c, clock.ms)
+    sent, arrived = T0 + 30, T0 + 32
+    slow, st = rec.snapshot().feeds["a:slow"], rec.snapshot().feeds[mr.FF_WEEK]
+    assert (slow.last_attempt_at, slow.next_attempt_at) == (T0, sent + 900)
+    assert (st.ok, st.last_attempt_at, st.last_ok_at, st.next_attempt_at) == (
+        True, sent, arrived, arrived + 3600)
+    rows = await store.events_between(0, 2**62, include_removed=True)
+    assert {r["first_seen_ms"] for r in rows} == {int(arrived * 1000)}
+    claims = [r for r in rows if r["title"] == "Unemployment Claims"][0]
+    key = ("forexfactory", "Unemployment Claims", claims["scheduled_at_ms"])
+    assert await store.consensus_as_of(*key, int(T0 * 1000) + 10_000) is None
+    assert await store.consensus_as_of(*key, int(arrived * 1000) - 1) is None
+    row = await store.consensus_as_of(*key, int(arrived * 1000))
+    assert row is not None and (row["forecast"], row["taken_at_ms"]) == ("209K", arrived * 1000)
+
+
+@pytest.mark.asyncio
+async def test_stamps_never_run_before_the_pass_start(test_db) -> None:
+    clock = _Clock()
+    seen: list[int] = []
+    rec = mr.MacroRecorder(sources=[_source("a:src", [1], calls=seen)], time_fn=clock)
+    async with _client() as c:
+        await rec.record_once(c, clock.ms + 5000)  # the wall clock stepped back since then
+    st = rec.snapshot().feeds["a:src"]
+    assert seen == [clock.ms + 5000]
+    assert (st.last_attempt_at, st.last_ok_at, st.next_attempt_at) == (T0 + 5, T0 + 5, T0 + 3605)
 
 
 @pytest.mark.asyncio

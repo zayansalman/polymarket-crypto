@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from email.utils import parsedate_to_datetime
+from functools import partial
 
 import httpx
 
@@ -54,14 +55,17 @@ CENSUS_SCHEDULE = "census:schedule"
 FED_CALENDAR = "fed:calendar"
 FF_WEEK = "forexfactory:week"
 
-PollFn = Callable[[httpx.AsyncClient, int], Awaitable[int]]
+# Epoch ms now, on the recorder's clock. A poll reads it once its answer is in and stamps
+# what it records with that value, so nothing is dated before it could have been seen.
+Clock = Callable[[], int]
+PollFn = Callable[[httpx.AsyncClient, Clock], Awaitable[int]]
 
 
 @dataclass(frozen=True)
 class MacroSource:
     key: str  # "source:name"
     cadence_s: float
-    poll: PollFn  # records one pull; returns rows recorded
+    poll: PollFn  # (client, clock): records one pull, returns rows recorded
     min_retry_s: float | None = None  # after a failure; default min(cadence_s, 900)
     deadline_s: float = SOURCE_DEADLINE_S  # an attempt still running after this fails
 
@@ -160,19 +164,19 @@ async def _sync(source: str, events: list[mc.MacroEvent], now_ms: int, url: str)
     return len(events)
 
 
-async def poll_bls(client: httpx.AsyncClient, now_ms: int) -> int:
+async def poll_bls(client: httpx.AsyncClient, clock: Clock) -> int:
     resp = await fetch(client, BLS_ICS_URL)
-    return await _sync("bls", mc.parse_bls_ics(resp.text), now_ms, BLS_ICS_URL)
+    return await _sync("bls", mc.parse_bls_ics(resp.text), clock(), BLS_ICS_URL)
 
 
-async def poll_bea(client: httpx.AsyncClient, now_ms: int) -> int:
+async def poll_bea(client: httpx.AsyncClient, clock: Clock) -> int:
     resp = await fetch(client, BEA_ICS_URL)
-    return await _sync("bea", mc.parse_bea_ics(resp.text), now_ms, BEA_ICS_URL)
+    return await _sync("bea", mc.parse_bea_ics(resp.text), clock(), BEA_ICS_URL)
 
 
-async def poll_census(client: httpx.AsyncClient, now_ms: int) -> int:
+async def poll_census(client: httpx.AsyncClient, clock: Clock) -> int:
     resp = await fetch(client, CENSUS_CALENDAR_URL)
-    return await _sync("census", mc.parse_census_calendar(resp.text), now_ms, CENSUS_CALENDAR_URL)
+    return await _sync("census", mc.parse_census_calendar(resp.text), clock(), CENSUS_CALENDAR_URL)
 
 
 def _json(resp: httpx.Response) -> object:
@@ -183,9 +187,9 @@ def _json(resp: httpx.Response) -> object:
             from exc
 
 
-async def poll_fed(client: httpx.AsyncClient, now_ms: int) -> int:
+async def poll_fed(client: httpx.AsyncClient, clock: Clock) -> int:
     resp = await fetch(client, FED_CALENDAR_URL)
-    return await _sync("fed", mc.parse_fed_calendar(_json(resp)), now_ms, FED_CALENDAR_URL)
+    return await _sync("fed", mc.parse_fed_calendar(_json(resp)), clock(), FED_CALENDAR_URL)
 
 
 def _retry_after_s(value: str | None, now_s: float) -> float:
@@ -200,9 +204,10 @@ def _retry_after_s(value: str | None, now_s: float) -> float:
         return 0.0
 
 
-async def poll_forexfactory(client: httpx.AsyncClient, now_ms: int) -> int:
+async def poll_forexfactory(client: httpx.AsyncClient, clock: Clock) -> int:
     """Exactly one request per attempt; a 429 waits max(Retry-After, 5 min)."""
     resp = await client.get(FF_WEEK_URL)
+    now_ms = clock()  # the answer is in: nothing below is dated before it was seen
     if resp.status_code == 429:
         wait = max(_retry_after_s(resp.headers.get("retry-after"), now_ms / 1000), FF_MIN_RETRY_S)
         raise RetryAfter(wait, f"rate limited (HTTP 429 from {_where(FF_WEEK_URL)}); "
@@ -262,43 +267,53 @@ class MacroRecorder:
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(stop_event.wait(), timeout=self.tick_s)
 
+    def _clock_ms(self, floor_ms: int) -> int:
+        """The recorder clock in epoch ms, never earlier than ``floor_ms``."""
+        return max(floor_ms, int(self._time_fn() * 1000))
+
     async def record_once(self, client: httpx.AsyncClient, now_ms: int) -> None:
-        """One pass over the due sources. Never raises; failures are kept per source."""
-        now = now_ms / 1000
+        """One pass over the due sources. Never raises; failures are kept per source.
+
+        ``now_ms`` is the pass start. Each source is checked and stamped on its own clock
+        reading (never earlier than that), so a slow source cannot back-date later ones.
+        """
         for source in self._sources:
+            start_ms = self._clock_ms(now_ms)
             status = self._status.get(source.key)
             if status is not None and status.next_attempt_at is not None \
-                    and now < status.next_attempt_at:
+                    and start_ms / 1000 < status.next_attempt_at:
                 continue
-            await self._attempt(source, client, now_ms)
+            await self._attempt(source, client, start_ms)
 
-    async def _attempt(self, source: MacroSource, client: httpx.AsyncClient, now_ms: int) -> None:
-        now = now_ms / 1000
+    async def _attempt(
+        self, source: MacroSource, client: httpx.AsyncClient, start_ms: int
+    ) -> None:
         previous = self._status.get(source.key) or MacroFeedStatus(
             source.cadence_s, None, None, None, None, None, None
         )
         deadline = asyncio.timeout(source.deadline_s)
         try:
             async with deadline:
-                rows = int(await source.poll(client, now_ms))
+                rows = int(await source.poll(client, partial(self._clock_ms, start_ms)))
         except RetryAfter as exc:
-            self._failed(source, previous, now, _detail(exc), exc.seconds, retry_after=True)
+            self._failed(source, previous, start_ms, _detail(exc), exc.seconds, retry_after=True)
         except Exception as exc:  # noqa: BLE001 — every failure is a feed status
             detail = (f"no complete answer within {source.deadline_s:g}s"
                       if deadline.expired() else _detail(exc))
-            self._failed(source, previous, now, detail, source.retry_s, retry_after=False)
+            self._failed(source, previous, start_ms, detail, source.retry_s, retry_after=False)
         else:
             if previous.ok is False:
                 log.info("macro_recorder.feed_recovered", feed=source.key)
+            done = self._clock_ms(start_ms) / 1000
             self._status[source.key] = MacroFeedStatus(
-                source.cadence_s, True, now, now, now + source.cadence_s, rows, None
+                source.cadence_s, True, done, start_ms / 1000, done + source.cadence_s, rows, None
             )
 
     def _failed(
         self,
         source: MacroSource,
         previous: MacroFeedStatus,
-        now: float,
+        start_ms: int,
         detail: str,
         delay_s: float,
         *,
@@ -306,12 +321,13 @@ class MacroRecorder:
     ) -> None:
         if previous.ok is not False:
             log.warning("macro_recorder.feed_down", feed=source.key, error=detail)
+        done = self._clock_ms(start_ms) / 1000  # a wait (e.g. Retry-After) runs from the answer
         self._status[source.key] = replace(
             previous,
             cadence_s=source.cadence_s,
             ok=False,
-            last_attempt_at=now,
-            next_attempt_at=now + delay_s,
+            last_attempt_at=start_ms / 1000,
+            next_attempt_at=done + delay_s,
             detail=detail,
             retry_after=retry_after,
         )
