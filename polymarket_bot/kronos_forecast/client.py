@@ -34,6 +34,8 @@ CODE_DIR = REPO_ROOT / "third_party" / "kronos_67b630e"
 # Under the loop watchdog's 180 s stall threshold (controller.WATCHDOG_STALL_SECONDS).
 DEFAULT_TIMEOUT_S = 90.0
 UNREADABLE_RESULT = "Kronos worker returned an unreadable result: "
+# Longest error text kept in a result or a log line (Claude, 2026-09-16).
+MAX_ERROR_CHARS = 400
 # One worker at a time: each uses about 1.5 GB of memory and the operator's machine has
 # 8 GB (Claude, 2026-09-16).
 _WORKER_LOCK = asyncio.Lock()
@@ -77,6 +79,10 @@ class ForecastResult:
     error: str | None = None
 
 
+def _failed(error: str) -> ForecastResult:
+    return ForecastResult(ok=False, error=error[:MAX_ERROR_CHARS])
+
+
 def models_dir() -> Path:
     return Path(_config.DATA_DIR) / "kronos_models"
 
@@ -91,7 +97,7 @@ def missing_weights(spec: ModelSpec) -> str | None:
         folder = snapshot_dir(repo, revision)
         if not (folder / "config.json").is_file() or not (folder / "model.safetensors").is_file():
             return (f"Kronos weights for {repo}@{revision[:12]} are not in {folder}; "
-                    "run python tools/fetch_kronos_mini_weights.py")
+                    "run python3 tools/fetch_kronos_mini_weights.py")
     return None
 
 
@@ -133,12 +139,11 @@ async def run_forecast(
 ) -> ForecastResult:
     missing = missing_weights(spec)
     if missing:
-        return ForecastResult(ok=False, error=missing)
+        return _failed(missing)
     # A bare name would be looked up on the worker's PATH (/usr/bin:/bin) and a relative
     # path from the worker's own folder, neither of which is what the operator meant.
     if _config.KRONOS_PYTHON and not Path(_config.KRONOS_PYTHON).is_absolute():
-        return ForecastResult(
-            ok=False, error="KRONOS_PYTHON must be an absolute path to a Python interpreter")
+        return _failed("KRONOS_PYTHON must be an absolute path to a Python interpreter")
     payload = {
         **asdict(request),
         "code_dir": str(CODE_DIR),
@@ -156,7 +161,7 @@ async def run_forecast(
                 start_new_session=True,
             )
         except OSError as exc:
-            return ForecastResult(ok=False, error=f"could not start the Kronos worker: {exc}")
+            return _failed(f"could not start the Kronos worker: {exc}")
         finished = False
         try:
             out, err = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()),
@@ -164,8 +169,7 @@ async def run_forecast(
             finished = True
         except TimeoutError:
             log.warning("kronos_forecast.worker_timeout", timeout_s=timeout_s)
-            return ForecastResult(ok=False,
-                                  error=f"Kronos worker timed out after {timeout_s:g} s")
+            return _failed(f"Kronos worker timed out after {timeout_s:g} s")
         finally:
             if not finished:  # timeout, cancellation or any other exception
                 await _kill_process_group(proc)
@@ -236,13 +240,14 @@ def read_worker_output(out: bytes, err: bytes, returncode: int | None,
         data = None
     reported = _reported_error(data)
     if returncode != 0 or reported:
-        detail = (reported or err.decode("utf-8", "replace").strip()[-400:]
-                  or f"worker exited with code {returncode}")
+        # The end of stderr holds the exception; the worker's own report is cut from its start.
+        detail = (reported or err.decode("utf-8", "replace").strip()[-MAX_ERROR_CHARS:]
+                  or f"worker exited with code {returncode}")[:MAX_ERROR_CHARS]
         log.warning("kronos_forecast.worker_failed", returncode=returncode, error=detail)
-        return ForecastResult(ok=False, error=detail)
+        return _failed(detail)
     result = parse_worker_result(data, paths)
     if result is None:
         error = UNREADABLE_RESULT + repr(last)[:200]
         log.warning("kronos_forecast.worker_unreadable_result", error=error)
-        return ForecastResult(ok=False, error=error)
+        return _failed(error)
     return result

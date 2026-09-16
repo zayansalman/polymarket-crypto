@@ -74,7 +74,8 @@ async def test_missing_weights_are_reported_without_starting_a_process(
 
     monkeypatch.setattr(kc.asyncio, "create_subprocess_exec", boom)
     result = await kc.run_forecast(REQUEST)
-    assert result.ok is False and "fetch_kronos_mini_weights" in result.error
+    assert result.ok is False
+    assert result.error.endswith("; run python3 tools/fetch_kronos_mini_weights.py")
 
 
 @pytest.mark.asyncio
@@ -211,6 +212,45 @@ SLEEPING_WORKER = """
     Path(PID_FILE).write_text(f"{os.getpid()} {helper.pid}")
     time.sleep(20)
 """
+
+
+class _LogRecorder:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def warning(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+
+@pytest.mark.asyncio
+async def test_error_text_is_cut_to_400_characters_in_results_and_logs(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _LogRecorder()
+    monkeypatch.setattr(kc, "log", recorder)
+    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
+        import json
+        print(json.dumps({"ok": False, "error": "E" * 1000}))
+    """))
+    assert await kc.run_forecast(REQUEST) == kc.ForecastResult(ok=False, error="E" * 400)
+
+    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
+        import sys
+        sys.stderr.write("S" * 1000)
+        sys.exit(1)
+    """))
+    assert await kc.run_forecast(REQUEST) == kc.ForecastResult(ok=False, error="S" * 400)
+
+    async def cannot_start(*args, **kwargs):
+        raise OSError("O" * 1000)
+
+    monkeypatch.setattr(kc.asyncio, "create_subprocess_exec", cannot_start)
+    failed_start = await kc.run_forecast(REQUEST)
+    assert failed_start.ok is False and len(failed_start.error) == 400
+    assert failed_start.error.startswith("could not start the Kronos worker: OOO")
+
+    logged = [fields["error"] for _, fields in recorder.events if "error" in fields]
+    assert len(logged) >= 2 and all(len(text) <= 400 for text in logged)
 
 
 @pytest.mark.asyncio
