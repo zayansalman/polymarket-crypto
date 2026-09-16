@@ -1779,7 +1779,9 @@ git commit -m "feat(daily_btc): per-window, per-mode decision record for daily B
   - `class DecisionHandle(Protocol)`:
     - `async def reason(self) -> str | None`
     - `async def set_action(self, action: str, position_id: int | None = None, *, expected_action: str | None = None) -> bool`
-  - Constants, moved from the hourly module and re-exported there under their old names: `SUBMITTING`, `UNCERTAIN_PREFIX`, `UNFINISHED_ATTEMPT`, `PENDING`, `ENTERED`, `MISSED`.
+  - Constants:
+    - `SUBMITTING`, `UNCERTAIN_PREFIX` and `UNFINISHED_ATTEMPT` moved from the hourly module, which re-exports them under their old names.
+    - `PENDING`, `ENTERED` and `MISSED` are new in `strategy_slot_entry`. The hourly module never defined them.
   - `async def open_row_for(strategy_id: str, mode: str) -> dict | None`: the strategy's open row in this mode, or None.
   - `async def _same_window_open_position_id(window: SlotWindow, mode: str) -> int | None` (private): the still-open position of this strategy for this window and mode.
   - `async def insert_row(snapshot, window: SlotWindow, *, side, price, notional, shares, reason, mode) -> int`
