@@ -95,6 +95,55 @@ anchor) and turn it off on the others. A check on 2026-09-16 showed that
 `market_resolved` also reaches a socket that subscribed after the window ended
 (116-126 s after the end).
 
+## Hedged connections for the busiest markets
+
+A single connection to a busy market still stalls for seconds at times, and the stalls
+are independent: three sockets on the same BTC 5m tokens stalled at different moments
+(one at t=75-85 s, p50 up to 4.0 s, while the other two stayed near 101-110 ms). A hub
+holding only btc-5m blocked its event loop for at most ~1-7 ms while that connection's
+latency climbed from 105 ms to 9.7 s, so the delay is in delivery, not processing. An
+Up-only subscription got 97-99% of the frames and bytes of a both-token one, so
+dropping a token saves nothing.
+
+So an asset x timeframe can run N connections (`clob_shard.ClobShard`;
+`MarketDataHub(hedge=...)`, keys `(asset, timeframe)`, `"asset-timeframe"` or an asset).
+The default is two for btc 5m, 15m and 1h and one for everything else (27 connections).
+
+- Every connection keeps its own books; events are never applied across connections.
+- Reads serve the connection furthest along the event stream: its newest server time,
+  then the number of events applied at that millisecond. Both connections receive the
+  same events in the same order, and a trade's sweep sends several top-changing
+  messages in one millisecond, so the timestamp alone is not enough. An exact tie goes
+  to a connection whose smoothed latency is more than 25 ms lower.
+- `TopChanged` and `Trade` are pushed once, by whichever connection delivers first.
+  Nothing behind what was already pushed goes out. Trades are known by (token, time,
+  price, size, side). `MarketResolved` and `WindowOpened` go out once per market.
+- A connection more than 3 s behind the freshest connection of its group is replaced,
+  but only while another connection of the group is up and within 1 s of the front.
+  If all are 10 s behind their own best, one is replaced at a time. Each replacement is
+  logged (`marketdata.clob_recycle`, with the group and the lag). With one connection,
+  the stream's own rule (10 s behind its best) applies as before.
+- Group status: served latency (first deliveries), served staleness (now minus the
+  newest served event's server time), leader switches, stalls avoided (a connection
+  fell >1 s behind while another kept serving), recycles, and each connection's status.
+  The FEEDS delay is the worst group's served latency.
+
+Live, 300 s on the full grid (2026-09-16 18:29 UTC, a busy stretch spanning a 5m and
+15m close):
+
+| Group | Served latency p50/p90/max | Connection #0 | Connection #1 |
+|---|---|---|---|
+| btc-5m | 100 / 290 / 2,090 ms | 110 / 380 / 4,485 ms | 110 / 560 / 3,778 ms |
+| btc-15m | 100 / 220 / 1,211 ms | 110 / 610 / 3,818 ms | 110 / 530 / 3,589 ms |
+| btc-1h | 100 / 190 / 1,650 ms | 100 / 270 / 5,172 ms | 110 / 360 / 5,169 ms |
+| eth-5m (one connection) | 120 / 1,350 / 6,542 ms | 120 / 1,370 / 6,542 ms | — |
+
+There were 9 recycles, 14 stalls avoided and 12 resolutions (each pushed once), and all
+three REST checks agreed with the hub. Total traffic was 2.86 MiB/s (~4,700 frames/s,
+hedged BTC included), at 32% of a core and 85 MiB RSS. The unhedged ETH groups still
+stalled for up to ~7 s; hedging them would add roughly 450 KiB/s at that level of
+activity.
+
 ## Modules
 
 | Module | Role |
@@ -104,12 +153,14 @@ anchor) and turn it off on the others. A check on 2026-09-16 showed that
 | `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s. |
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. |
 | `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. |
-| `hub.py` | `MarketDataHub`: the public API; one `ClobMarketStream` per asset x timeframe, merged into one status. |
+| `clob_shard.py` | `ClobShard`: one asset x timeframe's N connections, per-connection books, the freshest served, events pushed once, lagging connections replaced. |
+| `hub.py` | `MarketDataHub`: the public API; one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status. |
 
 ## API (`polymarket_exec/marketdata/hub.py`)
 
 ```python
 hub = hub_module.current()          # set by the dashboard lifespan
+                                    # (MarketDataHub(hedge={"btc-5m": 2, ...}) to build one)
 hub.top(token_id)                   # TopOfBook | None
 hub.levels(token_id, "bid", 10)     # ((price, size), ...) best first
 hub.market("btc", "5m", "next")     # MarketRef | None
@@ -135,8 +186,9 @@ The universe follows an ended window for 30 s, and until its `market_resolved` a
 ## FEEDS card
 
 Four rows under the feed-monitor rows: "Polymarket books" (CLOB market WS; delay =
-the slowest socket's median event latency, flagged past 2 s and STALE past 5 s with the
-socket named; STALE after 45 s without data; DOWN names the sockets that are down, e.g.
-"1 of 24 sockets down; btc-5m: ..."), and "Chainlink prices",
+the worst group's served latency p50, flagged past 2 s and STALE past 5 s with the group
+named; STALE after 45 s without data; DOWN when a group has no connection up, e.g.
+"1 of 24 asset/timeframe feeds down; btc-5m: ..."; OK notes connections that are
+reconnecting while their markets are still served), and "Chainlink prices",
 "Chainlink 60s TWAP", "Binance prices" (RTDS WS; delay = age of the newest print;
 STALE past 10 s). The full FEEDS redesign is a later change.
