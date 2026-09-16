@@ -185,10 +185,46 @@ async def run_until_stopped(coro: Coroutine[Any, Any, None], stop_event: asyncio
     task.result()
 
 
+async def first_exit(*coros: Coroutine[Any, Any, None]) -> None:
+    """Run ``coros`` together until one ends; cancel the rest and re-raise why it ended."""
+    tasks = [asyncio.ensure_future(coro) for coro in coros]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for task in done:
+        task.result()
+
+
 async def pause(stop_event: asyncio.Event, delay: float) -> None:
     """Sleep ``delay`` seconds, or less if ``stop_event`` is set first."""
     with suppress(asyncio.TimeoutError):
         await asyncio.wait_for(stop_event.wait(), timeout=delay)
+
+
+class Backoff:
+    """Reconnect delays: doubling from ``initial_s`` to ``max_s`` with +/-20% jitter.
+
+    A connection that delivered data starts the sequence over; an HTTP 429 handshake
+    waits at least ``RATE_LIMITED_BACKOFF_S``.
+    """
+
+    def __init__(self, initial_s: float, max_s: float, rng: Callable[[], float]) -> None:
+        self._initial_s = initial_s
+        self._max_s = max_s
+        self._rng = rng
+        self._next_s = initial_s
+
+    def delay(self, *, had_data: bool, rate_limited: bool) -> float:
+        if had_data:
+            self._next_s = self._initial_s
+        if rate_limited:
+            self._next_s = max(self._next_s, RATE_LIMITED_BACKOFF_S)
+        delay = self._next_s * (0.8 + 0.4 * self._rng())
+        self._next_s = min(self._next_s * 2, self._max_s)
+        return delay
 
 
 class ClobMarketStream:
@@ -219,10 +255,8 @@ class ClobMarketStream:
         self._ping_interval_s = ping_interval_s
         self._silence_s = silence_resubscribe_s
         self._max_per_frame = max_tokens_per_frame
-        self._initial_backoff_s = initial_backoff_s
-        self._max_backoff_s = max_backoff_s
+        self._backoff = Backoff(initial_backoff_s, max_backoff_s, rng)
         self._tick_s = tick_s
-        self._rng = rng
         self._pause = pause
         self._desired: frozenset[str] = frozenset()
         self._changed = asyncio.Event()
@@ -292,30 +326,28 @@ class ClobMarketStream:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         """Hold the connection until ``stop_event``; never raises (except cancellation)."""
-        backoff = self._initial_backoff_s
         while not stop_event.is_set():
             if not self._desired:
                 await self._idle(stop_event)
                 continue
             self._session_had_data = False
+            rate_limited = False
             try:
                 await run_until_stopped(self._serve(), stop_event)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — any socket error means reconnect
                 self._last_error = describe_error(exc)
+                rate_limited = is_rate_limited(exc)
                 log.warning("marketdata.clob_disconnected", error=self._last_error)
-                if is_rate_limited(exc):
-                    backoff = max(backoff, RATE_LIMITED_BACKOFF_S)
             finally:
                 self._mark_down()
             if stop_event.is_set():
                 break
-            if self._session_had_data:
-                backoff = self._initial_backoff_s
             self._reconnects += 1
-            await self._pause(stop_event, backoff * (0.8 + 0.4 * self._rng()))
-            backoff = min(backoff * 2, self._max_backoff_s)
+            delay = self._backoff.delay(had_data=self._session_had_data,
+                                        rate_limited=rate_limited)
+            await self._pause(stop_event, delay)
 
     async def _idle(self, stop_event: asyncio.Event) -> None:
         """Nothing to follow: wait for tokens (or stop) without holding a connection."""
@@ -334,17 +366,7 @@ class ClobMarketStream:
         async with self._connect(self.url) as ws:
             self._on_open()
             await self._sync(ws)
-            reader = asyncio.ensure_future(self._read(ws))
-            keeper = asyncio.ensure_future(self._housekeep(ws))
-            try:
-                done, _ = await asyncio.wait({reader, keeper},
-                                             return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                for task in (reader, keeper):
-                    task.cancel()
-                await asyncio.gather(reader, keeper, return_exceptions=True)
-            for task in done:
-                task.result()  # re-raise why the connection ended
+            await first_exit(self._read(ws), self._housekeep(ws))
 
     def _on_open(self) -> None:
         now = self._time_fn()

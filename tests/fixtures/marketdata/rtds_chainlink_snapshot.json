@@ -1,0 +1,34 @@
+{
+ "payload": {
+  "data": [
+   {
+    "timestamp": 1789555530000,
+    "value": 75915.069
+   },
+   {
+    "timestamp": 1789555531000,
+    "value": 75916.29219807265
+   },
+   {
+    "timestamp": 1789555532000,
+    "value": 75916.89655980525
+   },
+   {
+    "timestamp": 1789555586000,
+    "value": 75913.4215426736
+   },
+   {
+    "timestamp": 1789555587000,
+    "value": 75913.47095426329
+   },
+   {
+    "timestamp": 1789555588000,
+    "value": 75913.46795426328
+   }
+  ],
+  "symbol": "btc/usd"
+ },
+ "timestamp": 1789555589268,
+ "topic": "crypto_prices",
+ "type": "subscribe"
+}

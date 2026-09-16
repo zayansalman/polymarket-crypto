@@ -1,0 +1,19 @@
+[
+ {
+  "body": {
+   "message": "leger GetTopics error: rpc error: code = NotFound desc = topic: nonexistent_topic and type: * not found, status: rpc error: code = NotFound desc = topic: nonexistent_topic and type: * not found, message: topic: nonexistent_topic and type: * not found"
+  },
+  "statusCode": 401
+ },
+ {
+  "message": "Invalid request body",
+  "connectionId": "test-connection-id",
+  "requestId": "test-request-id"
+ },
+ {
+  "body": {
+   "message": "RFQ messages are not supported anymore, please visit https://docs.polymarket.com/market-makers/rfq/api-reference to learn more"
+  },
+  "statusCode": 400
+ }
+]

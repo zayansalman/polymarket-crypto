@@ -1,0 +1,13 @@
+{
+ "connection_id": "test-connection-id",
+ "payload": {
+  "full_accuracy_value": "1288962741679312640",
+  "symbol": "xrp/usd",
+  "timestamp": 1789555887000,
+  "value": 1.2889627416793126,
+  "window_s": 30
+ },
+ "timestamp": 1789555888120,
+ "topic": "crypto_prices_twap_thirty",
+ "type": "update"
+}
