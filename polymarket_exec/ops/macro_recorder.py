@@ -341,7 +341,7 @@ class MacroRecorder:
                 continue
             try:
                 status = _status_from_state(source.cadence_s, saved[source.key])
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
             if status.next_attempt_at is not None:
                 cap = cap_from + max(source.cadence_s, MAX_CARRIED_WAIT_S)

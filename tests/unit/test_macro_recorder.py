@@ -487,18 +487,22 @@ async def test_bad_saved_state_is_ignored_and_a_carried_wait_is_capped(test_db) 
     await store.save_feed_state("b:nan", {
         "ok": True, "last_ok_at": float("nan"), "last_attempt_at": T0 - 60,
         "next_attempt_at": T0 + 600, "rows": 3, "detail": None, "retry_after": False})
+    await store.save_feed_state("d:inf", {
+        "ok": True, "last_ok_at": T0 - 60, "last_attempt_at": T0 - 60,
+        "next_attempt_at": T0 + 600, "rows": float("inf"), "detail": None, "retry_after": False})
     await store.save_feed_state("c:far", {
         "ok": False, "last_ok_at": None, "last_attempt_at": T0 - 60,
         "next_attempt_at": T0 + 10 * 365 * 86_400, "rows": None,
         "detail": "rate limited", "retry_after": True})
-    polled: dict[str, list[int]] = {"a": [], "b": [], "c": []}
+    polled: dict[str, list[int]] = {"a": [], "b": [], "c": [], "d": []}
     rec = mr.MacroRecorder(sources=[_source("a:junk", [1], calls=polled["a"]),
                                     _source("b:nan", [1], calls=polled["b"]),
-                                    _source("c:far", [1], calls=polled["c"])],
+                                    _source("c:far", [1], calls=polled["c"]),
+                                    _source("d:inf", [1], calls=polled["d"])],
                            time_fn=clock)
     async with _client() as c:
         await rec.record_once(c, clock.ms)
-    assert {k: len(v) for k, v in polled.items()} == {"a": 1, "b": 1, "c": 0}
+    assert {k: len(v) for k, v in polled.items()} == {"a": 1, "b": 1, "c": 0, "d": 1}
     far = rec.snapshot().feeds["c:far"]
     assert (far.ok, far.retry_after, far.next_attempt_at) == (False, True, T0 + 86_400)
 
