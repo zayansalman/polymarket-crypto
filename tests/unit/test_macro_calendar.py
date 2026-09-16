@@ -213,6 +213,33 @@ def test_ff_week_keeps_usd_rows_and_consensus() -> None:
     assert (statement.impact, statement.forecast, statement.previous) == ("High", None, None)
 
 
+def _ff_row(iso: str, title: str = "CPI m/m") -> mc.MacroEvent:
+    ms = int(datetime.fromisoformat(iso).timestamp()) * 1000
+    return mc.MacroEvent("forexfactory", mc.categorize(title), title, ms)
+
+
+def test_ff_week_window_is_the_eastern_sunday_week_of_the_earliest_row() -> None:
+    events, _ = mc.parse_ff_week(json.loads(_read("ff_thisweek.json")))
+    # Earliest USD row is Wed 2026-09-16: the week runs Sun 09-13 00:00 EDT to Sun 09-20.
+    assert mc.ff_week_window(events) == (_ms(2026, 9, 13, 4, 0), _ms(2026, 9, 20, 4, 0) - 1)
+    # A row on the Sunday itself, and one late on Saturday, belong to the same week.
+    assert mc.ff_week_window([_ff_row("2026-09-19T23:30:00-04:00"),
+                              _ff_row("2026-09-13T17:00:00-04:00")]) == (
+        _ms(2026, 9, 13, 4, 0), _ms(2026, 9, 20, 4, 0) - 1)
+    # DST ends Sun 2026-11-01: that week starts on EDT midnight and ends on EST midnight.
+    assert mc.ff_week_window([_ff_row("2026-11-02T08:30:00-05:00")]) == (
+        _ms(2026, 11, 1, 4, 0), _ms(2026, 11, 8, 5, 0) - 1)
+    # DST starts Sun 2026-03-08: EST midnight to EDT midnight.
+    assert mc.ff_week_window([_ff_row("2026-03-10T08:30:00-04:00")]) == (
+        _ms(2026, 3, 8, 5, 0), _ms(2026, 3, 15, 4, 0) - 1)
+    # A row past the Saturday widens the window to cover it.
+    assert mc.ff_week_window([_ff_row("2026-09-16T08:30:00-04:00"),
+                              _ff_row("2026-09-21T10:00:00-04:00")]) == (
+        _ms(2026, 9, 13, 4, 0), _ms(2026, 9, 21, 14, 0))
+    with pytest.raises(ValueError):
+        mc.ff_week_window([])
+
+
 def test_ff_week_tolerates_junk() -> None:
     assert mc.parse_ff_week({"error": "rate limited"}) == ([], [])
     events, _ = mc.parse_ff_week([

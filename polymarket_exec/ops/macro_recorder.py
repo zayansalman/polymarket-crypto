@@ -204,7 +204,8 @@ async def poll_forexfactory(client: httpx.AsyncClient, now_ms: int) -> int:
     events, consensus = mc.parse_ff_week(_json(resp))
     if not events:
         raise _Unusable("no USD events in the response")
-    await store.sync_events("forexfactory", events, now_ms)
+    # The pull covers its whole week, so a vanished first or last slot is removed too.
+    await store.sync_events("forexfactory", events, now_ms, window=mc.ff_week_window(events))
     await store.record_consensus(consensus, now_ms)
     return len(events)
 

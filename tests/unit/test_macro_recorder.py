@@ -294,6 +294,33 @@ async def test_forexfactory_429_waits_at_least_five_minutes_with_one_request(tes
 
 
 @pytest.mark.asyncio
+async def test_forexfactory_edge_rows_of_the_week_can_be_removed(test_db) -> None:
+    """The week's first slot moves later and its last slot is dropped: both old slots go."""
+    week = json.loads((FIXTURES / "ff_thisweek.json").read_bytes())
+    edited = [dict(r, date="2026-09-16T08:45:00-04:00") if r["title"] == "Retail Sales m/m"
+              else r for r in week
+              if r["title"] not in ("Core Retail Sales m/m", "FOMC Member Bowman Speaks")]
+    clock = _Clock()
+    ff = [s for s in mr.default_sources() if s.key == mr.FF_WEEK]
+    for body in (None, json.dumps(edited).encode()):
+        rec = mr.MacroRecorder(sources=ff, time_fn=clock)
+        handler = _fixture_handler([], ff_body=body,
+                                   ff_headers={"content-type": "application/json"})
+        async with _client(handler) as c:
+            await rec.record_once(c, clock.ms)
+        assert rec.snapshot().feeds[mr.FF_WEEK].ok is True
+        clock.t += 3600
+    rows = await store.events_between(0, 2**62, include_removed=True)
+    status = {(r["title"], r["scheduled_at_ms"]): r["status"] for r in rows}
+    wed_1230, wed_1245 = 1_789_561_800_000, 1_789_562_700_000  # 2026-09-16 12:30Z / 12:45Z
+    assert status[("Core Retail Sales m/m", wed_1230)] == "removed"
+    assert status[("Retail Sales m/m", wed_1230)] == "removed"
+    assert status[("Retail Sales m/m", wed_1245)] == "scheduled"
+    assert status[("FOMC Member Bowman Speaks", 1_789_738_200_000)] == "removed"  # Fri 13:30Z
+    assert status[("Unemployment Claims", 1_789_648_200_000)] == "scheduled"
+
+
+@pytest.mark.asyncio
 async def test_forexfactory_html_body_is_no_data(test_db) -> None:
     clock = _Clock()
     rec = mr.MacroRecorder(sources=[s for s in mr.default_sources() if s.key == mr.FF_WEEK],

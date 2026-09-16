@@ -15,12 +15,19 @@ class SyncResult:
     removed: int  # future slots of this source that vanished from the pull
 
 
-async def sync_events(source: str, events: Sequence[MacroEvent], now_ms: int) -> SyncResult:
+async def sync_events(
+    source: str,
+    events: Sequence[MacroEvent],
+    now_ms: int,
+    window: tuple[int, int] | None = None,
+) -> SyncResult:
     """Upsert one full pull of ``source``'s schedule, then mark vanished future slots removed.
 
     Only rows of ``source`` that are still scheduled, lie in the future, and fall inside
-    this pull's [earliest, latest] time span can be removed — past rows are never touched
-    and a pull covering a shorter window says nothing about slots outside it. One transaction.
+    ``window`` can be removed — past rows are never touched and a pull says nothing about
+    slots outside the span it covers. ``window`` is the inclusive [start, end] ms span the
+    pull is complete for (a source that lists a fixed week passes that week); by default
+    it is the pull's own [earliest, latest] time. One transaction.
     """
     if any(e.source != source for e in events):
         raise ValueError(f"sync_events({source!r}) got events from another source")
@@ -29,6 +36,7 @@ async def sync_events(source: str, events: Sequence[MacroEvent], now_ms: int) ->
         return SyncResult(0, 0)
     recorded_at = _db.utc_now_iso()
     times = [ms for _title, ms in slots]
+    lo, hi = window if window is not None else (min(times), max(times))
     async with _db.connect() as conn:
         await conn.executemany(
             """
@@ -53,7 +61,7 @@ async def sync_events(source: str, events: Sequence[MacroEvent], now_ms: int) ->
             "SELECT id, title, scheduled_at_ms FROM macro_events "
             "WHERE source = ? AND status = 'scheduled' AND scheduled_at_ms > ? "
             "AND scheduled_at_ms BETWEEN ? AND ?",
-            (source, now_ms, min(times), max(times)),
+            (source, now_ms, lo, hi),
         )
         gone = [(recorded_at, r["id"]) for r in await cur.fetchall()
                 if (r["title"], r["scheduled_at_ms"]) not in slots]

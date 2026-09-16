@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import html as _html
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -439,3 +440,21 @@ def parse_ff_week(obj: Any) -> tuple[list[MacroEvent], list[ConsensusRow]]:
             _blank_to_none(row.get("previous")),
         ))
     return events, consensus
+
+
+def ff_week_window(events: Sequence[MacroEvent]) -> tuple[int, int]:
+    """Inclusive [start, end] ms that one ForexFactory week pull is complete for.
+
+    The feed lists a Sunday-to-Saturday week in Eastern time. The week is read from the
+    earliest row rather than the wall clock, so a pull made around the weekly rollover
+    cannot pick the wrong week; a row past that Saturday widens the end to cover it.
+    """
+    if not events:
+        raise ValueError("ff_week_window needs at least one event")
+    times = [e.scheduled_at_ms for e in events]
+    first = datetime.fromtimestamp(min(times) / 1000, tz=EASTERN).date()
+    sunday = first - timedelta(days=(first.weekday() + 1) % 7)
+    after = sunday + timedelta(days=7)  # calendar days: a DST week is 167 or 169 hours
+    start = _eastern_ms(sunday.year, sunday.month, sunday.day, 0, 0)
+    end = _eastern_ms(after.year, after.month, after.day, 0, 0) - 1
+    return start, max(end, max(times))

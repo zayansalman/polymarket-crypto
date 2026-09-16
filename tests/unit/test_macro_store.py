@@ -95,6 +95,32 @@ async def test_reschedule_removes_only_future_in_range_rows_of_that_source(test_
 
 
 @pytest.mark.asyncio
+async def test_sync_window_covers_edge_rows_that_move_out_or_vanish(test_db) -> None:
+    def ff(title: str, at: int) -> MacroEvent:
+        return _ev(title, at, source="forexfactory", category="other")
+
+    week = (NOW - DAY, NOW + 6 * DAY - 1)  # the span each pull is complete for
+    first, middle, last = ff("ADP Weekly", NOW + DAY), ff("Speech", NOW + 2 * DAY), \
+        ff("Late speech", NOW + 4 * DAY)
+    beyond = ff("Next week", NOW + 6 * DAY)  # just past the window
+    await store.sync_events("forexfactory", [first, middle, last, beyond], NOW, window=week)
+    # The first row moves 15 minutes later and the last one is dropped: both lie outside
+    # the new pull's own [earliest, latest] span but inside the window.
+    moved = ff("ADP Weekly", NOW + DAY + 900_000)
+    result = await store.sync_events("forexfactory", [moved, middle], NOW + 60_000, window=week)
+    assert (result.seen, result.removed) == (2, 2)
+    status = {(r["title"], r["scheduled_at_ms"]): r["status"]
+              for r in await _rows("forexfactory")}
+    assert status == {
+        ("ADP Weekly", NOW + DAY): "removed",
+        ("ADP Weekly", NOW + DAY + 900_000): "scheduled",
+        ("Speech", NOW + 2 * DAY): "scheduled",
+        ("Late speech", NOW + 4 * DAY): "removed",
+        ("Next week", NOW + 6 * DAY): "scheduled",  # outside the window: untouched
+    }
+
+
+@pytest.mark.asyncio
 async def test_sync_rejects_events_from_another_source(test_db) -> None:
     with pytest.raises(ValueError):
         await store.sync_events("bls", [_ev("GDP", NOW, source="bea")], NOW)
