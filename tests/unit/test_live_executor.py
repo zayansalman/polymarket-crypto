@@ -29,6 +29,7 @@ from polymarket_exec.execution.live import (
     _round_price_to_tick,
     _round_size_down,
     _row_window_resolved,
+    _window_resolved,
     assert_live_boot_allowed,
     build_live_executor,
 )
@@ -1538,9 +1539,10 @@ def test_hourly_rows_resolve_an_hour_after_their_own_start() -> None:
     row = {"window_slug": HSLUG, "market_timeframe": "1h", "window_start_ts": 1_000_000}
     assert _row_window_resolved(row, now=1_000_000 + 3600 + 59) is False
     assert _row_window_resolved(row, now=1_000_000 + 3600 + 60) is True
-    legacy = {"window_slug": "btc-updown-5m-1000000"}
-    assert _row_window_resolved(legacy, now=1_000_000 + 359) is False
-    assert _row_window_resolved(legacy, now=1_000_000 + 360) is True
+    # A real 5m start: a suffix below 1_000_000_000 no longer counts as a start second.
+    legacy = {"window_slug": "btc-updown-5m-1782332700"}
+    assert _row_window_resolved(legacy, now=1_782_332_700 + 359) is False
+    assert _row_window_resolved(legacy, now=1_782_332_700 + 360) is True
 
 
 # ---------------------------------------------------------------------------
@@ -1737,6 +1739,37 @@ def test_daily_rows_resolve_25_hours_after_their_noon_start() -> None:
     assert _row_window_resolved(row, now=1_000_000 + 25 * 3600 + 60) is True
     # Without the daily branch the slug's trailing "2026" parsed as a start second.
     assert _row_window_resolved(row, now=1_000_000 + 3600) is False
+
+
+# Claude, 2026-09-17, review of the strategy_slot_entry extraction: a slug's suffix counts as
+# a window start only when it is a plausible unix second, and a daily row without its own
+# window start never falls back to its slug, whose trailing year would read as resolved.
+@pytest.mark.parametrize("row", [
+    {"window_slug": DAILY_SLUG, "market_timeframe": "1d", "window_start_ts": None},
+    {"window_slug": DAILY_SLUG, "market_timeframe": "1d"},
+])
+def test_daily_row_without_its_window_start_is_never_resolved(row: dict) -> None:
+    assert _row_window_resolved(row, now=time.time()) is False
+    assert _row_window_resolved(row, now=20_000_000_000) is False
+
+
+@pytest.mark.parametrize("slug", [
+    DAILY_SLUG,  # ends in the year
+    "btc-updown-5m-999999999",  # below 1_000_000_000
+    "btc-updown-5m-10000000001",  # above 10_000_000_000
+])
+def test_slug_suffix_that_is_not_a_plausible_unix_second_is_never_resolved(slug: str) -> None:
+    for now in (time.time(), 20_000_000_000):
+        assert _window_resolved(slug, now=now) is False
+        assert _row_window_resolved({"window_slug": slug, "market_timeframe": None},
+                                    now=now) is False
+
+
+@pytest.mark.parametrize("start", [1_000_000_000, 1_782_332_700, 10_000_000_000])
+def test_slug_suffix_in_the_plausible_range_resolves_after_its_window(start: int) -> None:
+    slug = f"btc-updown-5m-{start}"
+    assert _window_resolved(slug, now=start + 359) is False
+    assert _window_resolved(slug, now=start + 360) is True
 
 
 @pytest.mark.asyncio

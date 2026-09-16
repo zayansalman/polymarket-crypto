@@ -220,18 +220,27 @@ _WINDOW_RESOLVE_GRACE_SECONDS = 60
 _HOURLY_WINDOW_SECONDS = 3600
 # A noon-ET daily window is 23, 24 or 25 hours (daylight-saving days); the longest bounds it.
 _DAILY_WINDOW_MAX_SECONDS = 25 * 3600
+# A slug suffix counts as a window start only inside this range of unix seconds (2001-09-09
+# to 2286-11-20). A daily slug ends in its year ("…-2026"), which would otherwise parse as a
+# start second long past and read as resolved (Claude, 2026-09-17, review of the
+# strategy_slot_entry extraction).
+_SLUG_START_MIN_SECONDS = 1_000_000_000
+_SLUG_START_MAX_SECONDS = 10_000_000_000
 
 
 def _window_resolved(window_slug: str, *, now: float | None = None) -> bool:
     """True when the slug's window has certainly resolved.
 
     Window slugs end in the window's unix start second (…-5m-1782332700); the
-    market resolves ``_WINDOW_SECONDS`` later. Unparseable slugs return False,
-    so an unknown window is treated as possibly-live risk, never discarded.
+    market resolves ``_WINDOW_SECONDS`` later. Unparseable slugs, and slugs whose
+    suffix is not a plausible unix second, return False, so an unknown window is
+    treated as possibly-live risk, never discarded.
     """
     try:
         start = int(str(window_slug).rsplit("-", 1)[-1])
     except (TypeError, ValueError):
+        return False
+    if not _SLUG_START_MIN_SECONDS <= start <= _SLUG_START_MAX_SECONDS:
         return False
     now_s = time.time() if now is None else now
     return now_s >= start + _WINDOW_SECONDS + _WINDOW_RESOLVE_GRACE_SECONDS
@@ -244,7 +253,12 @@ def _row_window_resolved(row: dict[str, Any], *, now: float | None = None) -> bo
         return now_s >= (
             int(row["window_start_ts"]) + _HOURLY_WINDOW_SECONDS + _WINDOW_RESOLVE_GRACE_SECONDS
         )
-    if row.get("market_timeframe") == "1d" and row.get("window_start_ts") is not None:
+    if row.get("market_timeframe") == "1d":
+        if row.get("window_start_ts") is None:
+            # Without its own start a daily row's window is unknown: possibly-live risk,
+            # never read from the slug (Claude, 2026-09-17, review of the
+            # strategy_slot_entry extraction).
+            return False
         # Daily slugs end in the year, not a start second (Claude, 2026-09-16,
         # Tsinghua-Kronos BTC 24h): bound the window by its longest possible length.
         now_s = time.time() if now is None else now
