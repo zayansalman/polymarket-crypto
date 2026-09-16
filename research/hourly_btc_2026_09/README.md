@@ -20,9 +20,13 @@ rebuilt from the Claude Code session transcript by `tools/recover_from_transcrip
 | `literature/alphaxiv_sweep_2026-09-15_*.json` | alphaXiv sweep of 21 papers and its synthesis (Claude, 2026-09-15). |
 | `plan_addendum_book_record_and_candle_audit_2026-09-15.md` | Plan for the book record and candle audit approved by Zayan (operator) on 2026-09-15. |
 | `tools/recover_from_transcript.py` | The recovery script. |
+| `scripts/` | Rerunnable copies (path changes only) and the 2026-09-16 re-download and app-code check. |
+| `outputs_rerun_2026-09-16/` | Rerun outputs; compared in `REPRODUCTION.md`. |
 
-The downloaded data files (CSV) were not recoverable, since they were never printed. The download
-commands are in `session_commands/` (see "Data" below) and can be rerun.
+The downloaded data files (CSV) were not recoverable, since they were never printed. The three
+files the frozen rule was tested on were downloaded again on 2026-09-16 and came out identical in
+row count and byte size; the walk-forward test and the app's own rule code reproduce the original
+numbers exactly (`REPRODUCTION.md`). The other download commands are in `session_commands/`.
 
 ## Who decided what
 
