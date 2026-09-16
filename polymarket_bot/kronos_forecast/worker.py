@@ -43,6 +43,10 @@ REQUIRED_KEYS = ("candles", "horizon", "paths", "temperature", "top_p", "top_k",
                  "max_context", "threads", "code_dir", "model_dir", "tokenizer_dir")
 COLUMNS = ["open", "high", "low", "close", "volume", "amount"]
 HOUR_MS = 3_600_000
+# Operator setup for the worker's interpreter (pyproject.toml extra "kronos").
+SETUP_HINT = ("install the optional 'kronos' extra into that interpreter "
+              "(python3 -m pip install -e '.[kronos]') or set KRONOS_PYTHON to an absolute path "
+              "of an interpreter that has torch, einops and pandas")
 
 
 def validate(request: dict[str, Any]) -> str | None:
@@ -74,13 +78,24 @@ def upside_probability(final_closes: list[float], last_close: float) -> float:
     return sum(1 for value in final_closes if value > last_close) / len(final_closes)
 
 
+def missing_library_error(exc: ImportError) -> str:
+    """What is missing, in which interpreter, and the two ways to fix it."""
+    missing = exc.name or str(exc)[:60]
+    return f"Kronos worker is missing {missing} in {sys.executable}; {SETUP_HINT}"
+
+
 def run(request: dict[str, Any]) -> dict[str, Any]:
     problem = validate(request)
     if problem:
         return {"ok": False, "error": problem}
     sys.path.insert(0, str(request["code_dir"]))
-    import torch
-    from model import Kronos, KronosPredictor, KronosTokenizer
+    try:
+        import torch
+        from model import Kronos, KronosPredictor, KronosTokenizer
+    except BlockedImportError as exc:
+        return {"ok": False, "error": str(exc)}
+    except ImportError as exc:
+        return {"ok": False, "error": missing_library_error(exc)}
 
     started = time.monotonic()
     torch.set_num_threads(int(request["threads"]))

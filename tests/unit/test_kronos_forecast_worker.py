@@ -150,6 +150,17 @@ def test_worker_reports_errors_as_json() -> None:
     assert proc.returncode == 0 and out["ok"] is False and "JSONDecodeError" in out["error"]
 
 
+def test_worker_names_a_missing_library_and_how_to_install_it(tmp_path: Path) -> None:
+    code = _code_dir(tmp_path, "import kronos_test_missing_library\n")
+    proc, out = _run_worker(json.dumps(_request(code_dir=str(code))))
+    assert proc.returncode == 0 and out["ok"] is False
+    assert out["error"] == (
+        f"Kronos worker is missing kronos_test_missing_library in {sys.executable}; "
+        "install the optional 'kronos' extra into that interpreter "
+        "(python3 -m pip install -e '.[kronos]') or set KRONOS_PYTHON to an absolute path of an "
+        "interpreter that has torch, einops and pandas")
+
+
 def test_worker_process_refuses_to_import_app_modules(tmp_path: Path) -> None:
     pytest.importorskip("pandas")
     imported = tmp_path / "app_config_was_imported"
