@@ -15,6 +15,7 @@ import config as _config
 import db as _db
 from polymarket_bot import paper
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategy_slot_entry as slot_entry
 from polymarket_bot.hourly import engine, ledger
 from polymarket_bot.hourly import market as hm
 from polymarket_exec.execution.gate import build_gate_from_config
@@ -648,7 +649,7 @@ async def test_deleted_row_whose_uncertain_record_was_never_written_is_not_poste
 
 @pytest.mark.asyncio
 async def test_paper_attempt_that_raised_is_not_retried_and_ends_uncertain(test_db, monkeypatch):
-    real_insert = engine._insert_row
+    real_insert = slot_entry.insert_row
     calls = {"n": 0}
 
     async def insert_row(*args, **kwargs):
@@ -657,7 +658,7 @@ async def test_paper_attempt_that_raised_is_not_retried_and_ends_uncertain(test_
             raise RuntimeError("database is locked")
         return await real_insert(*args, **kwargs)
 
-    monkeypatch.setattr(engine, "_insert_row", insert_row)
+    monkeypatch.setattr(slot_entry, "insert_row", insert_row)
     with pytest.raises(RuntimeError):
         await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 35, _Venue())

@@ -1749,6 +1749,25 @@ git commit -m "feat(daily_btc): per-window, per-mode decision record for daily B
 
 **Why:** the hourly engine's entry state machine is not hourly-specific: one order attempt per window, the SUBMITTING/UNCERTAIN records, and linking a still-open same-window position after a restart. The daily engine must behave identically. The hourly session agreed on 2026-09-16 that this branch does the move after its merge lands.
 
+**Adapted to the merged hourly code (Claude, 2026-09-16, while building this task):**
+- **Check order.** `advance` keeps the merged order, which differs from the order first planned here:
+  - The still-open same-window link runs first, for PENDING and for SUBMITTING, with `expected_action` set to the current action. In live it applies only while `executor.slot_executor(strategy_id).tracks_position` is true.
+  - SUBMITTING then notifies the operator and records the unfinished attempt.
+- **Kill switch.** Held entries record nothing: the decision stays PENDING until the deadline records MISSED. A shared test pins this.
+- **Same-window lookup.** The merged hourly code has its own query for this, `_same_hour_open_position_id`. It moved as `_same_window_open_position_id(window, mode)`: open rows of this strategy, timeframe, window start and mode. `open_row_for` returns the row, as planned, and is only the slot-held check in `enter`.
+- **`advance` takes `mode`.** The merged `open_entries` takes it from the tick and uses it for the same-window lookup.
+- **`SlotWindow` has no `window_slug`.** The moved code reads the slug from the snapshot, as the table below requires, so that field was never read.
+- **Notices.** The two operator texts said "No retry this hour" and now say "No retry for this market", because the daily engine sends them too. Comments say "window" instead of "hour". Log events are `strategy_slot_entry.*` and carry `timeframe`.
+- **Hourly adapter.** The merged `ledger.set_action` returns None, so `_HourlyDecision.set_action` awaits it and returns True. No `_slot` helper and no `_enter` wrapper were needed: no hourly test uses them.
+- **Hourly tests.** One patch target was redirected, with no expectation changed: `test_paper_attempt_that_raised_is_not_retried_and_ends_uncertain` patches `slot_entry.insert_row` instead of `engine._insert_row`. No test patched `engine.notify`.
+- **Shared tests.** They add cases for the merged behaviour:
+  - the SUBMITTING link;
+  - the live `tracks_position` check;
+  - a slot held by an earlier window or another timeframe;
+  - the kill switch;
+  - finished actions left alone;
+  - a live entry through the slot.
+
 **Files:**
 - Create: `polymarket_bot/strategy_slot_entry.py`
 - Modify: `polymarket_bot/hourly/engine.py` (thin adapter; behaviour unchanged)
@@ -1756,15 +1775,16 @@ git commit -m "feat(daily_btc): per-window, per-mode decision record for daily B
 
 **Interfaces:**
 - Produces:
-  - `@dataclass(frozen=True) SlotWindow(strategy_id: str, timeframe: str, window_start_ts: int, window_slug: str)`
+  - `@dataclass(frozen=True) SlotWindow(strategy_id: str, timeframe: str, window_start_ts: int)`
   - `class DecisionHandle(Protocol)`:
     - `async def reason(self) -> str | None`
     - `async def set_action(self, action: str, position_id: int | None = None, *, expected_action: str | None = None) -> bool`
   - Constants, moved from the hourly module and re-exported there under their old names: `SUBMITTING`, `UNCERTAIN_PREFIX`, `UNFINISHED_ATTEMPT`, `PENDING`, `ENTERED`, `MISSED`.
   - `async def open_row_for(strategy_id: str, mode: str) -> dict | None`: the strategy's open row in this mode, or None.
+  - `async def _same_window_open_position_id(window: SlotWindow, mode: str) -> int | None` (private): the still-open position of this strategy for this window and mode.
   - `async def insert_row(snapshot, window: SlotWindow, *, side, price, notional, shares, reason, mode) -> int`
   - `async def enter(snapshot, window: SlotWindow, side: str, decision: DecisionHandle) -> None`
-  - `async def advance(snapshot, window: SlotWindow, *, action: str, side: str | None, now: int, deadline_s: int, allow_entries: bool, decision: DecisionHandle) -> None`
+  - `async def advance(snapshot, window: SlotWindow, *, action: str, side: str | None, now: int, deadline_s: int, allow_entries: bool, mode: str, decision: DecisionHandle) -> None`
 
 - [ ] **Step 1: Read the merged hourly entry code**
 
@@ -1779,11 +1799,11 @@ Note the exact current bodies of `_open_row_for`, `_insert_row`, `_enter` and th
 - [ ] **Step 2: Write the failing shared-module test** — `tests/unit/test_strategy_slot_entry.py`
 
 ```python
-"""Shared strategy-slot entry: works for any timeframe with any decision store (paper here)."""
+"""Shared strategy-slot entry: the hourly entry steps work for a daily window and any decision record."""
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -1791,25 +1811,32 @@ import pytest_asyncio
 import db as _db
 from polymarket_bot import paper
 from polymarket_bot import strategy_slot_entry as entry
+from polymarket_exec.execution.live import LiveOrderResult
 
-START = 1_789_574_400  # 2026-09-16 16:00 UTC
+START = 1_789_574_400  # 2026-09-16 16:00 UTC: noon ET, the start of the Sep 17 daily window
+SID = "tsinghua_kronos_btc_24h"
+SLUG = "bitcoin-up-or-down-on-september-17-2026"
+WINDOW = entry.SlotWindow(SID, "1d", START)
+UNFINISHED = "UNCERTAIN:entry attempt did not finish"
 
 
 class _Decision:
+    """A decision record that keeps every action write as (action, position_id, expected_action)."""
+
     def __init__(self) -> None:
-        self.actions: list[tuple[str, int | None]] = []
+        self.actions: list[tuple[str, int | None, str | None]] = []
 
     async def reason(self) -> str | None:
         return "enter Up: test"
 
     async def set_action(self, action, position_id=None, *, expected_action=None) -> bool:
-        self.actions.append((action, position_id))
+        self.actions.append((action, position_id, expected_action))
         return True
 
 
 def _snapshot() -> paper.PaperSnapshot:
     return paper.PaperSnapshot(
-        created_at="2026-09-16T16:00:10+00:00", window_slug="bitcoin-up-or-down-on-september-17-2026",
+        created_at="2026-09-16T16:00:10+00:00", window_slug=SLUG,
         market_question="q", remaining_seconds=86_000, spot_price=100.0, reference_price=100.0,
         sigma_per_second=0.0, market_up_price=0.52, market_down_price=0.49, fair_up_prob=0.5,
         edge=0.0, signal_side=None, confidence=0.0, notional_usd=0.0, reason="",
@@ -1829,44 +1856,139 @@ async def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return _db
 
 
+def _live_account(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock]:
+    slot = MagicMock()
+    slot.tracks_position = False
+    slot.resync_flat = AsyncMock(return_value=False)
+    slot.submit_entry = AsyncMock(return_value=LiveOrderResult(
+        ok=True, status="SUBMITTED", order_id="0xE", price=0.52, size=5.0, notional_usd=2.6))
+    account = MagicMock()
+    account.slot_executor = MagicMock(return_value=slot)
+    monkeypatch.setattr(paper, "_live_executor", account)
+    return account, slot
+
+
+async def _advance(action: str, *, now: int, decision: _Decision, mode: str = "paper",
+                   allow_entries: bool = True) -> None:
+    await entry.advance(_snapshot(), WINDOW, action=action, side="Up", now=now, deadline_s=300,
+                        allow_entries=allow_entries, mode=mode, decision=decision)
+
+
+async def _insert_row(*, mode: str = "paper", timeframe: str = "1d", start: int = START) -> int:
+    return await entry.insert_row(_snapshot(), entry.SlotWindow(SID, timeframe, start),
+                                  side="Up", price=0.52, notional=2.6, shares=5.0, reason="r",
+                                  mode=mode)
+
+
 @pytest.mark.asyncio
 async def test_paper_entry_for_a_daily_window_records_the_attempt_then_entered(test_db) -> None:
-    window = entry.SlotWindow("tsinghua_kronos_btc_24h", "1d", START, _snapshot().window_slug)
     decision = _Decision()
-    await entry.advance(_snapshot(), window, action=entry.PENDING, side="Up", now=START + 10,
-                        deadline_s=300, allow_entries=True, decision=decision)
-    assert [a for a, _ in decision.actions] == [entry.SUBMITTING, entry.ENTERED]
-    row = await entry.open_row_for("tsinghua_kronos_btc_24h", "paper")
-    assert (row["market_timeframe"], row["window_start_ts"], row["side"], row["entry_price"]) == (
-        "1d", START, "Up", 0.52)
+    await _advance(entry.PENDING, now=START + 10, decision=decision)
+    row = await entry.open_row_for(SID, "paper")
+    assert decision.actions == [(entry.SUBMITTING, None, None),
+                                (entry.ENTERED, row["position_id"], None)]
+    assert (row["market_timeframe"], row["window_start_ts"], row["window_slug"], row["side"],
+            row["entry_price"], row["shares"], row["entry_reason"]) == (
+        "1d", START, SLUG, "Up", 0.52, 5.0, "enter Up: test")
 
 
 @pytest.mark.asyncio
 async def test_past_deadline_is_missed_and_submitting_never_retries(test_db) -> None:
-    window = entry.SlotWindow("tsinghua_kronos_btc_24h", "1d", START, "slug")
     late = _Decision()
-    await entry.advance(_snapshot(), window, action=entry.PENDING, side="Up", now=START + 301,
-                        deadline_s=300, allow_entries=True, decision=late)
-    assert late.actions == [(entry.MISSED, None)]
+    await _advance(entry.PENDING, now=START + 301, decision=late)
+    assert late.actions == [(entry.MISSED, None, None)]
     stuck = _Decision()
-    await entry.advance(_snapshot(), window, action=entry.SUBMITTING, side="Up", now=START + 20,
-                        deadline_s=300, allow_entries=True, decision=stuck)
-    assert stuck.actions == [(entry.UNFINISHED_ATTEMPT, None)]
-    assert await entry.open_row_for("tsinghua_kronos_btc_24h", "paper") is None
+    await _advance(entry.SUBMITTING, now=START + 20, decision=stuck)
+    assert stuck.actions == [(UNFINISHED, None, entry.SUBMITTING)]
+    assert entry.UNFINISHED_ATTEMPT == UNFINISHED
+    entry.notify.assert_awaited_once()
+    assert entry.notify.await_args.args[0] == "entry_attempt_unfinished"
+    assert await entry.open_row_for(SID, "paper") is None
 
 
 @pytest.mark.asyncio
-async def test_still_open_same_window_position_is_linked_not_missed(test_db) -> None:
-    window = entry.SlotWindow("tsinghua_kronos_btc_24h", "1d", START, "slug")
-    position_id = await entry.insert_row(_snapshot(), window, side="Up", price=0.52, notional=2.6,
-                                         shares=5.0, reason="r", mode="paper")
+@pytest.mark.parametrize("action", ["PENDING", "SUBMITTING"])
+async def test_still_open_same_window_position_is_linked_not_missed(test_db, action) -> None:
+    position_id = await _insert_row()
     decision = _Decision()
-    await entry.advance(_snapshot(), window, action=entry.PENDING, side="Up", now=START + 400,
-                        deadline_s=300, allow_entries=True, decision=decision)
-    assert decision.actions == [(entry.ENTERED, position_id)]
+    await _advance(action, now=START + 400, decision=decision)
+    assert decision.actions == [(entry.ENTERED, position_id, action)]
+    entry.notify.assert_not_awaited()
+
+
+# Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: live links the
+# window only while the strategy's slot tracks the entry.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tracks", [True, False])
+async def test_live_link_needs_the_strategy_slot_to_track_the_entry(
+    test_db, monkeypatch, tracks
+) -> None:
+    account, slot = _live_account(monkeypatch)
+    slot.tracks_position = tracks
+    position_id = await _insert_row(mode="live")
+    decision = _Decision()
+    await _advance(entry.SUBMITTING, now=START + 20, decision=decision, mode="live")
+    account.slot_executor.assert_called_with(SID)
+    if tracks:
+        assert decision.actions == [(entry.ENTERED, position_id, entry.SUBMITTING)]
+    else:
+        assert decision.actions == [(UNFINISHED, None, entry.SUBMITTING)]
+    slot.submit_entry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("timeframe", "start"), [("1d", START - 86_400), ("1h", START)])
+async def test_open_row_of_another_window_holds_the_slot_and_records_nothing(
+    test_db, timeframe, start
+) -> None:
+    await _insert_row(timeframe=timeframe, start=start)
+    decision = _Decision()
+    await _advance(entry.PENDING, now=START + 10, decision=decision)
+    assert decision.actions == []
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM paper_positions")
+        assert (await cur.fetchone())["n"] == 1
+
+
+# Same record as the hourly kill-switch tests: entries held leave the window PENDING, and
+# the deadline then records MISSED.
+@pytest.mark.asyncio
+async def test_entries_held_leave_the_window_pending_until_the_deadline(test_db) -> None:
+    held = _Decision()
+    await _advance(entry.PENDING, now=START + 10, decision=held, allow_entries=False)
+    assert held.actions == []
+    await _advance(entry.PENDING, now=START + 301, decision=held, allow_entries=False)
+    assert held.actions == [(entry.MISSED, None, None)]
+    assert await entry.open_row_for(SID, "paper") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", [
+    "NO_SIGNAL", "UNAVAILABLE", "MISSED", "ENTERED", "BLOCKED:x", "UNCERTAIN:x"])
+async def test_finished_actions_are_left_alone(test_db, action) -> None:
+    decision = _Decision()
+    await _advance(action, now=START + 10, decision=decision)
+    assert decision.actions == []
+    assert await entry.open_row_for(SID, "paper") is None
+
+
+@pytest.mark.asyncio
+async def test_live_entry_for_a_daily_window_goes_through_the_strategy_slot(
+    test_db, monkeypatch
+) -> None:
+    _, slot = _live_account(monkeypatch)
+    decision = _Decision()
+    await _advance(entry.PENDING, now=START + 10, decision=decision, mode="live")
+    slot.resync_flat.assert_awaited_once()
+    slot.submit_entry.assert_awaited_once_with(
+        token_id="U", side_price=0.52, notional_usd=pytest.approx(2.6), window_slug=SLUG)
+    row = await entry.open_row_for(SID, "live")
+    assert (row["market_timeframe"], row["window_start_ts"], row["mode"]) == ("1d", START, "live")
+    assert decision.actions == [(entry.SUBMITTING, None, None),
+                                (entry.ENTERED, row["position_id"], None)]
 ```
 
-If the merged hourly code records the kill switch differently when `allow_entries=False`, add one more test here asserting that same record for a `1d` window, copying the matching hourly test's expectation.
+The merged hourly code records nothing while entries are held: the decision stays PENDING until the deadline records MISSED. `test_entries_held_leave_the_window_pending_until_the_deadline` pins the same record for a `1d` window.
 
 - [ ] **Step 3: Run to verify it fails**
 
@@ -1880,14 +2002,19 @@ Module header and the new types:
 ```python
 """Shared entry step for strategy position slots (hourly and daily BTC strategies), paper and live.
 
-Moved unchanged from polymarket_bot/hourly/engine.py (Claude, 2026-09-16, agreed with the
-hourly session) so every strategy engine uses one implementation. Behaviour sources:
+Moved from polymarket_bot/hourly/engine.py (Claude, 2026-09-16, agreed with the hourly
+session) so every strategy engine uses one implementation. The bodies are the hourly ones;
+only the window and the decision record are now arguments. Behaviour sources:
 - one open position per strategy: Zayan (operator), 2026-09-14;
-- one order attempt per window, SUBMITTING / UNCERTAIN records and the untraced-post notice:
-  Claude, 2026-09-15, branch-review findings hourly-ambiguous-post-error-retried and
+- one order attempt per window, the SUBMITTING / UNCERTAIN records and the untraced-post
+  notice: Claude, 2026-09-15, branch-review findings hourly-ambiguous-post-error-retried and
   hourly-reentry-after-untraced-post;
-- a still-open same-window position is linked as ENTERED: Claude, 2026-09-15/16,
-  branch-review finding crash-after-entry-marks-missed.
+- a still-open same-window position is linked as ENTERED, in live only while the strategy's
+  slot tracks the entry: Claude, 2026-09-15, branch-review finding
+  crash-after-entry-marks-missed; open rows only, in both modes: review by Claude session
+  polymarket-crypto-95, 2026-09-16;
+- sizing on a thin top-of-book ask: Claude, 2026-09-15, branch-review finding
+  thin-top-sizing-paper-vs-live.
 """
 from __future__ import annotations
 
@@ -1904,16 +2031,30 @@ if TYPE_CHECKING:
 
 log = get_logger("strategy_slot_entry")
 
+# Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
+# decision-record actions for an entry attempt. SUBMITTING is written before any order
+# goes out; UNCERTAIN ends a window whose order may have reached the venue.
+SUBMITTING = "SUBMITTING"
+UNCERTAIN_PREFIX = "UNCERTAIN:"
+UNFINISHED_ATTEMPT = f"{UNCERTAIN_PREFIX}entry attempt did not finish"
+# The other decision-record actions this step reads or writes (same words in every ledger).
+PENDING = "PENDING"
+ENTERED = "ENTERED"
+MISSED = "MISSED"
+
 
 @dataclass(frozen=True)
 class SlotWindow:
+    """The market window a strategy's entry is for, as paper_positions records it."""
+
     strategy_id: str
-    timeframe: str
-    window_start_ts: int
-    window_slug: str
+    timeframe: str  # paper_positions.market_timeframe, e.g. "1h" or "1d"
+    window_start_ts: int  # paper_positions.window_start_ts: the window's start, UTC seconds
 
 
 class DecisionHandle(Protocol):
+    """One strategy's decision record for one window and mode (each engine adapts its ledger)."""
+
     async def reason(self) -> str | None: ...
 
     async def set_action(
@@ -1926,30 +2067,41 @@ Then move, keeping each body verbatim apart from the substitutions in this table
 | From `polymarket_bot/hourly/engine.py` (or `ledger.py`) | To `strategy_slot_entry.py` | Substitutions |
 |---|---|---|
 | The `SUBMITTING`, `UNCERTAIN_PREFIX`, `UNFINISHED_ATTEMPT` constants, plus `PENDING = "PENDING"`, `ENTERED = "ENTERED"`, `MISSED = "MISSED"` | same names | none |
-| `_open_row_for(strategy_id, mode)` | `open_row_for(strategy_id, mode) -> dict \| None` | return the row dict (`SELECT *` … `LIMIT 1`) instead of a bool; callers test `is not None` |
+| `_open_row_for(strategy_id, mode)` | `open_row_for(strategy_id, mode) -> dict \| None` | return the row dict (`SELECT *` … `ORDER BY position_id DESC LIMIT 1`) instead of a bool; callers test `is not None` |
+| `_same_hour_open_position_id(strategy_id, start, mode)` | `_same_window_open_position_id(window, mode)` | `strategy_id` → `window.strategy_id`; `TIMEFRAME` → `window.timeframe`; `start` → `window.window_start_ts`; "hour" → "window" in the docstring |
 | `_insert_row(snapshot, *, strategy_id, side, price, notional, shares, start, reason, mode)` | `insert_row(snapshot, window, *, side, price, notional, shares, reason, mode)` | `strategy_id` → `window.strategy_id`; `start` → `window.window_start_ts`; the hourly `TIMEFRAME` constant → `window.timeframe` |
-| `_enter(snapshot, strategy_id, side, start)` | `enter(snapshot, window, side, decision)` | Every `ledger.get_decision(...)` read of the reason → `await decision.reason()`. Every `ledger.set_action(<key>, strategy_id, ACTION, <pos>, mode=..., expected_action=...)` → `await decision.set_action(ACTION, <pos>, expected_action=...)`. `snapshot.window_slug` stays. Log event prefixes `hourly_engine.` → `strategy_slot_entry.`, with `timeframe=window.timeframe` added to each log call. The notify texts stay word for word. |
-| The per-strategy body of `open_entries` (everything inside `for sid, knob in STRATEGIES:` after the knob check and the row read) | `advance(snapshot, window, *, action, side, now, deadline_s, allow_entries, decision)` | `row["action"]` → `action`; `row["decision_side"]` → `side`; `start` → `window.window_start_ts`; `deadline` → `deadline_s`; `continue` → `return`; `_enter(...)` → `enter(snapshot, window, side, decision)`; the same-hour check compares `held["window_start_ts"] == window.window_start_ts and held["market_timeframe"] == window.timeframe and held["state"] == "open"` |
+| `_enter(snapshot, strategy_id, side, start)` | `enter(snapshot, window, side, decision)` | Every `ledger.get_decision(...)` read of the reason → `await decision.reason()`. Every `ledger.set_action(<key>, strategy_id, ACTION, <pos>, mode=..., expected_action=...)` → `await decision.set_action(ACTION, <pos>, expected_action=...)`. `snapshot.window_slug` stays. Log event prefixes `hourly_engine.` → `strategy_slot_entry.`, with `timeframe=window.timeframe` added to each log call. The notify texts stay word for word, except "No retry this hour" → "No retry for this market". A local `strategy_id = window.strategy_id` keeps the rest of the body unchanged. |
+| The per-strategy body of `open_entries` (everything inside `for sid, knob in STRATEGIES:` after the knob check and the row read) | `advance(snapshot, window, *, action, side, now, deadline_s, allow_entries, mode, decision)` | `row["action"]` → `action`; `row["decision_side"]` → `side`; `sid` → `window.strategy_id`; `start` → `window.window_start_ts`; `deadline` → `deadline_s`; `continue` → `return`; `_same_hour_open_position_id(sid, start, mode)` → `_same_window_open_position_id(window, mode)`; `_enter(...)` → `enter(snapshot, window, str(side), decision)`; the ledger writes → `decision.set_action(...)`; "No retry this hour" → "No retry for this market"; `P._live_executor` is read inside `advance` |
 
 `advance` must keep this order, which is the hourly order after the merged fixes:
-1. `SUBMITTING`: notify the operator, then close out as `UNFINISHED_ATTEMPT` (expected `SUBMITTING`).
-2. If the action is not `PENDING`: return.
-3. A still-open same-window row for this strategy and mode: `ENTERED` with its position id (expected `PENDING`).
+1. `PENDING` or `SUBMITTING`, and `_same_window_open_position_id` finds this window's open row. If the run is paper, or the live slot's `tracks_position` is true, record `ENTERED` with its position id (expected: the current action) and return.
+2. `SUBMITTING`: notify the operator, then close out as `UNFINISHED_ATTEMPT` (expected `SUBMITTING`).
+3. If the action is not `PENDING`: return.
 4. Past the deadline: `MISSED`.
-5. Entries held (kill switch): whatever the merged hourly code records.
+5. Entries held (kill switch): record nothing; the decision stays `PENDING`.
 6. Otherwise: `enter`.
 
 - [ ] **Step 5: Turn the hourly engine into a thin adapter**
 
-In `polymarket_bot/hourly/engine.py`, delete the moved functions and constants, then add:
+In `polymarket_bot/hourly/engine.py`, delete the moved functions and constants. `journal_live_order`, `EntryRequest` and `DEFAULT_MIN_ORDER_SIZE` are no longer imported there. Then add the import and the old names:
 
 ```python
 from polymarket_bot import strategy_slot_entry as slot_entry
-from polymarket_bot.strategy_slot_entry import SUBMITTING, UNCERTAIN_PREFIX, UNFINISHED_ATTEMPT  # noqa: F401 - old import path
 
+# The entry-attempt actions moved to strategy_slot_entry (Claude, 2026-09-16); this module
+# keeps its old names for them.
+from polymarket_bot.strategy_slot_entry import (  # noqa: F401 - old import path
+    SUBMITTING,
+    UNCERTAIN_PREFIX,
+    UNFINISHED_ATTEMPT,
+)
+```
 
+Replace `open_entries` with the decision adapter and the loop that calls `advance`. The knob check and the `row is None` skip stay:
+
+```python
 class _HourlyDecision:
-    """The hourly ledger row for one (hour, strategy, mode) as a slot_entry.DecisionHandle."""
+    """The hourly decision record for one (hour, strategy, mode) as a slot_entry.DecisionHandle."""
 
     def __init__(self, start: int, strategy_id: str, mode: str) -> None:
         self.start, self.strategy_id, self.mode = start, strategy_id, mode
@@ -1958,30 +2110,38 @@ class _HourlyDecision:
         row = await ledger.get_decision(self.start, self.strategy_id, mode=self.mode)
         return (row or {}).get("decision_reason")
 
-    async def set_action(self, action, position_id=None, *, expected_action=None) -> bool:
-        return await ledger.set_action(self.start, self.strategy_id, action, position_id,
-                                       mode=self.mode, expected_action=expected_action)
+    async def set_action(
+        self, action: str, position_id: int | None = None, *, expected_action: str | None = None
+    ) -> bool:
+        # ledger.set_action returns None; the write either happened or raised.
+        await ledger.set_action(self.start, self.strategy_id, action, position_id,
+                                mode=self.mode, expected_action=expected_action)
+        return True
 
 
-def _slot(snapshot: PaperSnapshot, strategy_id: str, start: int) -> slot_entry.SlotWindow:
-    return slot_entry.SlotWindow(strategy_id, TIMEFRAME, start, snapshot.window_slug)
-```
-
-If the merged `ledger.set_action` returns None instead of a bool, return `True` after awaiting it. The adapter is the only place allowed to differ from the table above.
-
-- Replace the body of `open_entries`' loop with the knob check, the row read, and then:
-
-```python
+async def open_entries(
+    snapshot: PaperSnapshot, now: int, *, allow_entries: bool, mode: str
+) -> None:
+    start = market.hour_start(now)
+    deadline = _knobs.cached("hourly_entry_deadline_seconds")
+    for sid, knob in STRATEGIES:
+        if not _knobs.cached(knob):
+            continue
+        # Only this mode's row (Claude, 2026-09-15, branch-review finding
+        # decision-row-shared-across-modes).
+        row = await ledger.get_decision(start, sid, mode=mode)
+        if row is None:
+            continue
         await slot_entry.advance(
-            snapshot, _slot(snapshot, sid, start), action=row["action"],
+            snapshot, slot_entry.SlotWindow(sid, TIMEFRAME, start), action=row["action"],
             side=row["decision_side"], now=now, deadline_s=deadline,
-            allow_entries=allow_entries, decision=_HourlyDecision(start, sid, mode),
+            allow_entries=allow_entries, mode=mode, decision=_HourlyDecision(start, sid, mode),
         )
 ```
 
-  Keep the existing `row is None` skip before it.
-- Keep `_enter` as a one-line wrapper only if hourly tests import it: `await slot_entry.enter(snapshot, _slot(snapshot, strategy_id, start), side, _HourlyDecision(start, strategy_id, mode))`.
-- Point hourly tests that monkeypatch `engine.notify` at `slot_entry.notify` only where needed, and say so in the commit message.
+- The merged `ledger.set_action` returns None, so the adapter returns `True` after awaiting it. The adapter is the only place allowed to differ from the table above.
+- No hourly test imports `_enter`, so it is not kept as a wrapper.
+- Point hourly tests at the moved code only where they patch it, and say so in the commit message. Only `engine._insert_row` needed this; it became `slot_entry.insert_row`.
 
 - [ ] **Step 6: Run the shared test and every hourly test**
 
@@ -1993,7 +2153,7 @@ Expected: PASS, with no hourly test expectation changed. If an hourly assertion 
 ```bash
 PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit -q -p no:cacheprovider 2>&1 | tail -3
 python3 -m ruff check polymarket_exec/ polymarket_bot/ tests/ tools/
-git add polymarket_bot/strategy_slot_entry.py polymarket_bot/hourly/engine.py tests/unit/test_strategy_slot_entry.py
+git add polymarket_bot/strategy_slot_entry.py polymarket_bot/hourly/engine.py tests/unit/test_strategy_slot_entry.py tests/unit/test_hourly_engine.py
 git commit -m "refactor(strategies): move the hourly entry state machine to strategy_slot_entry for reuse"
 ```
 
@@ -2134,6 +2294,8 @@ git commit -m "feat(live): daily BTC rows resolve after their noon-ET window; 50
 **Updated while building Tasks 4–6 (Claude, 2026-09-16).** The code below already uses what those tasks built:
 - The daily ledger takes `mode=` as a keyword, as the hourly ledger does.
 - The planned `_finalize_past_windows` (current mode only, open rows only) is gone. `settle_due` starts with `ledger.finalize_ended_windows(...)`, the hourly `finalize_ended_hours` rules, and sends one operator notice when an earlier window's attempt did not finish. `open_entries` no longer finalizes.
+- `strategy_slot_entry.SlotWindow` has three fields (strategy, timeframe, window start). `advance` takes `mode=`.
+- Entry notices now come from `strategy_slot_entry.notify`. The fixture's `engine.notify` mock sees only this engine's own notices (forecast unavailable, unfinished attempts of earlier windows). Entry notices go to the test database.
 
 **Files:**
 - Create: `polymarket_bot/daily_btc/engine.py`
@@ -2648,9 +2810,9 @@ async def open_entries(
         if row is None:
             continue
         await slot_entry.advance(
-            snapshot, slot_entry.SlotWindow(sid, TIMEFRAME, m.window.reference_ts, m.slug),
+            snapshot, slot_entry.SlotWindow(sid, TIMEFRAME, m.window.reference_ts),
             action=str(row["action"]), side=row["decision_side"], now=now, deadline_s=deadline,
-            allow_entries=allow_entries,
+            allow_entries=allow_entries, mode=mode,
             decision=_DailyDecision(m.window.reference_ts, sid, mode),
         )
 
