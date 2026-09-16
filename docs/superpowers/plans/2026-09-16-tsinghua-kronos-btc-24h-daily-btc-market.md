@@ -2239,7 +2239,7 @@ The third test pins today's safe behaviour for an unresolved window with unknowa
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_live_executor.py -q -p no:cacheprovider -k "daily or tie"`
-Expected: FAIL. The first test gets `True` for the "+1 h" case. The tie test fails with `TypeError: ... unexpected keyword argument 'payout'`. The boot test fails because the row is closed as stale-resolved.
+Expected: FAIL. The first test gets `True` at every checked time: the slug's trailing "2026" parses as a start second, so it fails at its first assertion. The tie test fails with `TypeError: ... unexpected keyword argument 'payout'`. The boot test fails with `DID NOT RAISE` because the row is closed as stale-resolved. (Checked 2026-09-16 while building this task; the tests and the change below went in as written. The only additions are docstring lines for the daily branch and for `payout`.)
 
 - [ ] **Step 3: Implement**
 

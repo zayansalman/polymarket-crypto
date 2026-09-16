@@ -1724,3 +1724,64 @@ async def test_boot_closes_a_row_whose_exits_already_sold_every_share(
     assert row["realized_pnl_usd"] == pytest.approx(-0.1)  # kept, never re-booked
     assert account.gate.live_pnl == 0.0
     assert account.slot_executor(SPOT_PUSH_ID).entry_block_reason(3.0) is None
+
+
+# ---------------------------------------------------------------------------
+# Daily BTC rows (Tsinghua-Kronos BTC 24h; Claude, 2026-09-16): a noon-ET window lasts up
+# to 25 hours, its slug ends in the year, and an exact tie pays 0.50 a share.
+# ---------------------------------------------------------------------------
+
+DAILY_SLUG = "bitcoin-up-or-down-on-september-17-2026"
+
+
+def test_daily_rows_resolve_25_hours_after_their_noon_start() -> None:
+    row = {"window_slug": DAILY_SLUG, "market_timeframe": "1d", "window_start_ts": 1_000_000}
+    assert _row_window_resolved(row, now=1_000_000 + 25 * 3600 + 59) is False
+    assert _row_window_resolved(row, now=1_000_000 + 25 * 3600 + 60) is True
+    # Without the daily branch the slug's trailing "2026" parsed as a start second.
+    assert _row_window_resolved(row, now=1_000_000 + 3600) is False
+
+
+@pytest.mark.asyncio
+async def test_settlement_tie_pays_half_net_of_the_entry_fee(journal_db, tmp_path: Path) -> None:
+    executor = await _taker_entry_executor(tmp_path)
+
+    result = await executor.record_settlement(False, DAILY_SLUG, payout=0.5)
+
+    expected = 5.09 * (0.5 - 0.51) - _FEE_1768
+    assert result.ok and result.status == "SETTLED" and result.price == 0.5
+    assert result.notional_usd == pytest.approx(expected, abs=1e-4)
+    assert executor.daily_realized_pnl == pytest.approx(expected, abs=1e-4)
+    settle = [r for r in await _journal_rows(journal_db) if r["intent"] == "SETTLEMENT"][-1]
+    assert settle["price"] == 0.5 and settle["error"] is None
+    assert '"payout_per_share": 0.5' in settle["details_json"]
+
+
+@pytest.mark.asyncio
+async def test_boot_keeps_an_unresolved_daily_row_whose_order_was_pruned(
+    journal_db, tmp_path: Path
+) -> None:
+    start = int(time.time()) - 3600  # the daily window opened an hour ago
+    async with journal_db.connect() as conn:
+        cur = await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, mode, strategy_id, market_timeframe, window_start_ts)"
+            " VALUES ('2026-09-16T16:00:10+00:00', ?, 'Up', 'open', 0.51, 2.6, 5.09, 'live',"
+            " 'tsinghua_kronos_btc_24h', '1d', ?)",
+            (DAILY_SLUG, start),
+        )
+        position_id = int(cur.lastrowid)
+        await conn.commit()
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=DAILY_SLUG,
+        token_id=UP_TOKEN, price=0.51, size=5.09, clob_order_id="0xPRUNED",
+        details={"response": {"status": "live"}}, strategy_id="tsinghua_kronos_btc_24h",
+    )
+    client = _mock_client()
+    client.get_order.return_value = None
+    with pytest.raises(LiveBootRefused, match="has not resolved yet"):
+        await _executor(client, tmp_path).start()
+    async with journal_db.connect() as conn:
+        cur = await conn.execute("SELECT state FROM paper_positions WHERE position_id = ?",
+                                 (position_id,))
+        assert (await cur.fetchone())["state"] == "open"

@@ -218,6 +218,8 @@ def _placement_crossed_shares(response: dict[str, Any], side: str) -> float:
 _WINDOW_SECONDS = 300  # 5-minute up/down markets
 _WINDOW_RESOLVE_GRACE_SECONDS = 60
 _HOURLY_WINDOW_SECONDS = 3600
+# A noon-ET daily window is 23, 24 or 25 hours (daylight-saving days); the longest bounds it.
+_DAILY_WINDOW_MAX_SECONDS = 25 * 3600
 
 
 def _window_resolved(window_slug: str, *, now: float | None = None) -> bool:
@@ -236,11 +238,19 @@ def _window_resolved(window_slug: str, *, now: float | None = None) -> bool:
 
 
 def _row_window_resolved(row: dict[str, Any], *, now: float | None = None) -> bool:
-    """``_window_resolved`` for a ledger row: hourly rows carry their own window start."""
+    """``_window_resolved`` for a ledger row: hourly and daily rows carry their own window start."""
     if row.get("market_timeframe") == "1h" and row.get("window_start_ts") is not None:
         now_s = time.time() if now is None else now
         return now_s >= (
             int(row["window_start_ts"]) + _HOURLY_WINDOW_SECONDS + _WINDOW_RESOLVE_GRACE_SECONDS
+        )
+    if row.get("market_timeframe") == "1d" and row.get("window_start_ts") is not None:
+        # Daily slugs end in the year, not a start second (Claude, 2026-09-16,
+        # Tsinghua-Kronos BTC 24h): bound the window by its longest possible length.
+        now_s = time.time() if now is None else now
+        return now_s >= (
+            int(row["window_start_ts"]) + _DAILY_WINDOW_MAX_SECONDS
+            + _WINDOW_RESOLVE_GRACE_SECONDS
         )
     return _window_resolved(row["window_slug"], now=now)
 
@@ -814,13 +824,17 @@ class LiveExecutor:
         """Feed realized PnL into the shared daily-loss-halt tracker."""
         await self.gate.record_realized_pnl(pnl_usd, is_live=True)
 
-    async def record_settlement(self, won: bool, window_slug: str) -> LiveOrderResult:
+    async def record_settlement(
+        self, won: bool, window_slug: str, *, payout: float | None = None
+    ) -> LiveOrderResult:
         """Register a resolution outcome for the held position without selling.
 
         Settle-style positions ride to resolution: winning tokens redeem at
         $1.00 (redemption is an operator action — see the runbook), losing
         tokens expire worthless. PnL feeds the daily-loss halt exactly like
         an exit fill, and the position slot frees for the next window.
+        ``payout`` is the per-share redemption value; it defaults to 1.0 or
+        0.0 from ``won``, and a daily BTC market's exact tie passes 0.5.
         """
         if not self._position_open:
             return LiveOrderResult(
@@ -835,7 +849,8 @@ class LiveExecutor:
         matched = await self._matched_entry_size(assume_filled_on_error=False)
         held = _round_size_down(max(0.0, matched - self._entry_sold_size))
         entry_price = self._entry_price or 0.0
-        payout = 1.0 if won else 0.0
+        # Daily BTC markets pay 0.50 per share on an exact tie (market rules, 2026-09-16).
+        payout = (1.0 if won else 0.0) if payout is None else payout
         # Realize net of the entry taker fee (#133): the venue charged it in
         # USDC at entry, so a lost taker position costs exactly the cash paid
         # and a won one redeems at $1/share minus that entry fee.
@@ -852,13 +867,14 @@ class LiveExecutor:
             price=payout,
             size=held,
             notional_usd=pnl,
-            error=None if won else "resolved against position; tokens worthless",
-            details={"entry_taker_fee_usd": fee},
+            error=None if payout > 0 else "resolved against position; tokens worthless",
+            details={"entry_taker_fee_usd": fee, "payout_per_share": payout},
         )
         log.info(
             "live_executor.settled",
             window_slug=window_slug,
             won=won,
+            payout=payout,
             held=held,
             pnl=pnl,
         )
