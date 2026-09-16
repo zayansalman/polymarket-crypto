@@ -32,6 +32,7 @@ TEMPERATURE = 1.0
 TOP_P = 0.95
 TOP_K = 0
 MAX_CONTEXT = 512
+NOT_A_PROBABILITY = "forecast probability was not a number between 0 and 1"
 __all__ = ["INPUT_CANDLES", "STRATEGY_ID", "DISPLAY_NAME", "Decision", "request_for", "decide"]
 
 
@@ -54,6 +55,11 @@ def request_for(candles: list[Candle], reference_ts: int) -> ForecastRequest:
 
 def _price(value: float | None) -> str:
     return f"{value:.2f}" if value is not None else "none"
+
+
+def _is_probability(value: object) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and 0.0 <= value <= 1.0)
 
 
 def decide(
@@ -83,7 +89,10 @@ def decide(
     if not result.ok or result.upside_prob is None:
         signal["error"] = result.error
         return Decision(None, f"unavailable: {result.error}", signal, available=False)
-    p = result.upside_prob
+    if not _is_probability(result.upside_prob):
+        signal["error"] = NOT_A_PROBABILITY
+        return Decision(None, f"unavailable: {NOT_A_PROBABILITY}", signal, available=False)
+    p = float(result.upside_prob)
     se = math.sqrt(p * (1 - p) / PATHS)
     up_edge = p - up_ask if up_ask is not None and up_ask > 0 else None
     down_edge = (1 - p) - down_ask if down_ask is not None and down_ask > 0 else None

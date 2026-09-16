@@ -60,6 +60,16 @@ def test_missing_asks_and_unavailable_forecasts() -> None:
     assert failed.reason == "unavailable: timed out"
 
 
+@pytest.mark.parametrize("p", [math.nan, math.inf, 1.5, -0.2, True],
+                         ids=["nan", "infinite", "above_one", "below_zero", "a_bool"])
+def test_a_probability_that_is_not_a_number_between_0_and_1_is_unavailable(p: float) -> None:
+    d = rule.decide(_result(p), candles=CANDLES, reference_ts=REF, up_ask=0.5, down_ask=0.5,
+                    edge_threshold=0.05)
+    assert (d.side, d.available) == (None, False)
+    assert d.reason == "unavailable: forecast probability was not a number between 0 and 1"
+    assert "p_up" not in d.signal
+
+
 def test_a_published_record_side_is_none_at_exactly_half() -> None:
     d = rule.decide(_result(0.5), candles=CANDLES, reference_ts=REF, up_ask=0.5, down_ask=0.5,
                     edge_threshold=0.05)
