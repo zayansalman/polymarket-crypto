@@ -116,6 +116,28 @@ def test_a_probability_that_is_not_a_number_between_0_and_1_is_unavailable(p: fl
     assert "p_up" not in d.signal
 
 
+def test_the_record_keeps_the_input_close_and_window_length_when_the_forecast_fails() -> None:
+    failed = rule.decide(ForecastResult(ok=False, error="timed out"), candles=CANDLES,
+                         reference_ts=REF, up_ask=0.5, down_ask=0.5, edge_threshold=0.05,
+                         window_hours=23.0)
+    assert failed.signal["input_close"] == failed.signal["last_close"] == 482.0
+    assert failed.signal["window_hours"] == 23.0
+    assert (failed.signal["worker_seconds"], failed.signal["torch_version"]) == (None, None)
+
+
+def test_the_record_takes_the_close_from_the_input_and_run_details_from_the_worker() -> None:
+    result = ForecastResult(ok=True, upside_prob=0.6, last_close=999.0,
+                            final_closes=(483.0, 481.0), seconds=8.8, torch_version="2.10.0")
+    d = rule.decide(result, candles=CANDLES, reference_ts=REF, up_ask=0.52, down_ask=0.49,
+                    edge_threshold=0.05, window_hours=24.0)
+    assert d.signal["input_close"] == d.signal["last_close"] == 482.0  # not the worker's 999
+    assert (d.signal["worker_seconds"], d.signal["torch_version"], d.signal["window_hours"]) == (
+        8.8, "2.10.0", 24.0)
+    unset = rule.decide(result, candles=CANDLES, reference_ts=REF, up_ask=0.52, down_ask=0.49,
+                        edge_threshold=0.05)
+    assert unset.signal["window_hours"] is None
+
+
 def test_a_published_record_side_is_none_at_exactly_half() -> None:
     d = rule.decide(_result(0.5), candles=CANDLES, reference_ts=REF, up_ask=0.5, down_ask=0.5,
                     edge_threshold=0.05)

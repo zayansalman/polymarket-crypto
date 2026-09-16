@@ -84,6 +84,7 @@ def decide(
     up_ask: float | None,
     down_ask: float | None,
     edge_threshold: float,
+    window_hours: float | None = None,
 ) -> Decision:
     """The bet for one window from one forecast.
 
@@ -92,8 +93,14 @@ def decide(
     is 0.04999999999999993 unrounded). An ask that is missing, zero or negative gives no edge.
     The larger edge is bought if it is at least ``edge_threshold``; equal edges go to Up
     (Claude, 2026-09-16).
+
+    ``window_hours`` is the market window's length, recorded because it is 23 or 25 hours on
+    daylight-saving days while the forecast always covers 24.
     """
     spec = KRONOS_MINI_WITH_TOKENIZER_2K
+    # The close of the last input candle: the price at the window start that P(up) is
+    # measured against. Recorded whether or not the forecast ran.
+    input_close = candles[-1].close if candles else None
     signal: dict[str, Any] = {
         "strategy": DISPLAY_NAME,
         "model": f"{spec.model_repo}@{spec.model_revision}",
@@ -105,6 +112,9 @@ def decide(
         "input_candles": len(candles),
         "input_first_open_ms": candles[0].open_time_ms if candles else None,
         "input_last_open_ms": candles[-1].open_time_ms if candles else None,
+        "input_close": input_close, "last_close": input_close,
+        "window_hours": window_hours,
+        "worker_seconds": result.seconds, "torch_version": result.torch_version,
         "up_ask": up_ask, "down_ask": down_ask, "edge_threshold": edge_threshold,
         "up_edge": None, "down_edge": None,
     }
@@ -119,8 +129,7 @@ def decide(
     up_edge = _edge(p, up_ask)
     down_edge = _edge(1 - p, down_ask)
     signal.update({
-        "p_up": p, "sampling_se": se, "last_close": result.last_close,
-        "final_closes": list(result.final_closes), "worker_seconds": result.seconds,
+        "p_up": p, "sampling_se": se, "final_closes": list(result.final_closes),
         "up_edge": up_edge, "down_edge": down_edge,
         # The side the Kronos team's published record was scored on (P above/below 50%).
         "published_record_side": "Up" if p > 0.5 else ("Down" if p < 0.5 else None),
