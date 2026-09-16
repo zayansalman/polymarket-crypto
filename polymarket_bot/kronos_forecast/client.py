@@ -1,8 +1,10 @@
 """Run one Kronos forecast in an isolated worker process and return the parsed result.
 
-The worker (worker.py) starts as ``python -I worker.py`` with an explicit minimal
-environment, so it never sees the app's environment (which holds the wallet key). It
-reads pinned weights from a local folder with the Hugging Face hub offline. Only one
+The worker (worker.py) starts as ``python -I -B worker.py`` with an explicit minimal
+environment, so it never sees the app's environment (which holds the wallet key). ``-I``
+ignores every PYTHON* variable, so ``-B`` is what stops it writing bytecode. It runs in an
+empty folder of its own and reads pinned weights from a local folder with the Hugging Face
+hub offline. Only one
 worker runs at a time, and if a call times out, is cancelled or fails, the worker is
 killed together with every process it started. Pinned sources:
 docs/strategies/tsinghua-kronos-btc-24h.md.
@@ -93,8 +95,19 @@ def missing_weights(spec: ModelSpec) -> str | None:
     return None
 
 
+def worker_home() -> Path:
+    return Path(_config.DATA_DIR) / "kronos_worker_home"
+
+
+def worker_run_dir() -> Path:
+    """The worker's working folder: empty, and used for nothing else."""
+    folder = worker_home() / "run"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def worker_env() -> dict[str, str]:
-    home = Path(_config.DATA_DIR) / "kronos_worker_home"
+    home = worker_home()
     home.mkdir(parents=True, exist_ok=True)
     return {
         "PATH": "/usr/bin:/bin",
@@ -132,9 +145,9 @@ async def run_forecast(
             # A new session makes the worker the leader of its own process group, so
             # everything it starts can be killed with it.
             proc = await asyncio.create_subprocess_exec(
-                worker_python(), "-I", str(WORKER_SCRIPT),
+                worker_python(), "-I", "-B", str(WORKER_SCRIPT),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, env=worker_env(), cwd=str(models_dir()),
+                stderr=asyncio.subprocess.PIPE, env=worker_env(), cwd=str(worker_run_dir()),
                 start_new_session=True,
             )
         except OSError as exc:

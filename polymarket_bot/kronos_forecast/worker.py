@@ -1,6 +1,6 @@
 """Kronos forecast worker: one Kronos forecast per process, JSON in on stdin, JSON out on stdout.
 
-Started by client.py as ``python -I worker.py`` with a minimal environment. It imports
+Started by client.py as ``python -I -B worker.py`` with a minimal environment. It imports
 nothing from the app. The recipe follows github.com/shiyu-coder/Kronos-demo
 update_predictions.py (commit eba16695), run with the MIT Kronos code vendored in
 third_party/kronos_67b630e: ``predict_batch`` over ``paths`` identical copies of the input

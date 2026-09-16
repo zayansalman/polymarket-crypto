@@ -91,6 +91,13 @@ async def test_success_line_is_parsed_from_an_isolated_worker_that_cannot_see_th
         if sys.flags.isolated != 1:
             print("the worker was not started with -I", file=sys.stderr)
             sys.exit(3)
+        if sys.flags.dont_write_bytecode != 1:
+            print("the worker was not started with -B", file=sys.stderr)
+            sys.exit(4)
+        run_dir = os.path.realpath(os.path.join(os.environ["HOME"], "run"))
+        if os.path.realpath(os.getcwd()) != run_dir or os.listdir(run_dir):
+            print(f"the worker runs in {os.getcwd()}, not the empty {run_dir}", file=sys.stderr)
+            sys.exit(5)
         print("torch warning line")
         print(json.dumps({"ok": True, "upside_prob": 0.5, "last_close": 100.0,
                           "final_closes": [101.0, 99.0], "seconds": 0.5}))

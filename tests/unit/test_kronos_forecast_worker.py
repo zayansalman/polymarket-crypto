@@ -104,7 +104,7 @@ def test_worker_process_runs_the_recipe_with_fake_torch_and_model(tmp_path: Path
     (code / "torch.py").write_text(FAKE_TORCH)
     (code / "model" / "__init__.py").write_text(FAKE_MODEL)
     req = _request(code_dir=str(code), threads=3, seed=497_000)
-    proc = subprocess.run([sys.executable, "-I", str(WORKER)], input=json.dumps(req),
+    proc = subprocess.run([sys.executable, "-I", "-B", str(WORKER)], input=json.dumps(req),
                           capture_output=True, text=True, timeout=60,
                           env={"PATH": "/usr/bin:/bin", "PYTHON_DOTENV_DISABLED": "1"})
     out = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -117,7 +117,7 @@ def test_worker_process_runs_the_recipe_with_fake_torch_and_model(tmp_path: Path
 
 
 def test_worker_reports_errors_as_json(tmp_path: Path) -> None:
-    proc = subprocess.run([sys.executable, "-I", str(WORKER)], input="not json",
+    proc = subprocess.run([sys.executable, "-I", "-B", str(WORKER)], input="not json",
                           capture_output=True, text=True, timeout=30,
                           env={"PATH": "/usr/bin:/bin"})
     out = json.loads(proc.stdout.strip().splitlines()[-1])
