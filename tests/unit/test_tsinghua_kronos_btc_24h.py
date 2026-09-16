@@ -75,6 +75,27 @@ def test_zero_or_negative_asks_are_ignored() -> None:
     assert up_only.side == "Up" and up_only.signal["down_edge"] is None
 
 
+@pytest.mark.parametrize("result", [
+    ForecastResult(ok=False), ForecastResult(ok=False, error=""),
+    ForecastResult(ok=True, upside_prob=None),
+], ids=["failed_without_an_error", "failed_with_a_blank_error", "ok_without_a_probability"])
+def test_an_unavailable_reason_never_says_none(result: ForecastResult) -> None:
+    d = rule.decide(result, candles=CANDLES, reference_ts=REF, up_ask=0.5, down_ask=0.5,
+                    edge_threshold=0.05)
+    assert (d.side, d.available) == (None, False)
+    assert d.reason == "unavailable: the forecast returned no probability"
+
+
+@pytest.mark.parametrize(("up_ask", "down_ask"), [(None, None), (0.0, None), (None, -0.1),
+                                                  (0.0, 0.0)])
+def test_no_usable_ask_on_either_side_says_there_are_no_prices(
+    up_ask: float | None, down_ask: float | None
+) -> None:
+    d = _decide(0.9, up_ask=up_ask, down_ask=down_ask)
+    assert (d.side, d.available) == (None, True)
+    assert d.reason == "no bet: no order book prices for this window"
+
+
 def test_missing_asks_and_unavailable_forecasts() -> None:
     no_book = rule.decide(_result(0.9), candles=CANDLES, reference_ts=REF, up_ask=None,
                           down_ask=None, edge_threshold=0.05)

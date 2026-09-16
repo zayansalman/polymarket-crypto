@@ -33,6 +33,8 @@ TOP_P = 0.95
 TOP_K = 0
 MAX_CONTEXT = 512
 NOT_A_PROBABILITY = "forecast probability was not a number between 0 and 1"
+NO_PROBABILITY = "the forecast returned no probability"
+NO_PRICES = "no bet: no order book prices for this window"
 __all__ = ["INPUT_CANDLES", "STRATEGY_ID", "DISPLAY_NAME", "Decision", "request_for", "decide"]
 
 
@@ -60,6 +62,11 @@ def _price(value: float | None) -> str:
 def _is_probability(value: object) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value) and 0.0 <= value <= 1.0)
+
+
+def _unavailable(signal: dict[str, Any], error: str) -> Decision:
+    signal["error"] = error
+    return Decision(None, f"unavailable: {error}", signal, available=False)
 
 
 def _edge(probability: float, ask: float | None) -> float | None:
@@ -101,12 +108,12 @@ def decide(
         "up_ask": up_ask, "down_ask": down_ask, "edge_threshold": edge_threshold,
         "up_edge": None, "down_edge": None,
     }
-    if not result.ok or result.upside_prob is None:
-        signal["error"] = result.error
-        return Decision(None, f"unavailable: {result.error}", signal, available=False)
+    if not result.ok:
+        return _unavailable(signal, (result.error or "").strip() or NO_PROBABILITY)
+    if result.upside_prob is None:
+        return _unavailable(signal, NO_PROBABILITY)
     if not _is_probability(result.upside_prob):
-        signal["error"] = NOT_A_PROBABILITY
-        return Decision(None, f"unavailable: {NOT_A_PROBABILITY}", signal, available=False)
+        return _unavailable(signal, NOT_A_PROBABILITY)
     p = float(result.upside_prob)
     se = math.sqrt(p * (1 - p) / PATHS)
     up_edge = _edge(p, up_ask)
@@ -118,6 +125,8 @@ def decide(
         # The side the Kronos team's published record was scored on (P above/below 50%).
         "published_record_side": "Up" if p > 0.5 else ("Down" if p < 0.5 else None),
     })
+    if up_edge is None and down_edge is None:
+        return Decision(None, NO_PRICES, signal, available=True)
     best: tuple[str, float] | None = None
     if up_edge is not None and up_edge >= edge_threshold:
         best = ("Up", up_edge)
