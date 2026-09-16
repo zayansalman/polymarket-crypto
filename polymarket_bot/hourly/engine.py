@@ -16,7 +16,7 @@ from db import journal_live_order, notify
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as spot_taker_push_rule
-from polymarket_bot.hourly import ledger, market
+from polymarket_bot.hourly import book_record, ledger, market
 from polymarket_bot.hourly.market import HOUR_S, HourMarket
 from polymarket_exec.execution.gate import EntryRequest
 from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
@@ -52,6 +52,7 @@ _open_cache: dict[int, float] = {}
 def reset_caches() -> None:
     _market_cache.clear()
     _open_cache.clear()
+    book_record.reset_caches()
 
 
 async def _market_for(client: httpx.AsyncClient, start_ts: int) -> HourMarket:
@@ -504,6 +505,10 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     # decision-row-shared-across-modes). Strategies never see it; it only picks the row.
     mode = "live" if P._live_executor is not None else "paper"
     snapshot = await build_snapshot(client, now)
+    # Book record before any entry, so it never includes our own order (observation only;
+    # approved by Zayan (operator), 2026-09-15). _market_for is cached: no extra Gamma call.
+    await book_record.maybe_record(
+        client, snapshot=snapshot, market=await _market_for(client, start), now=now)
     await settle_due(client, snapshot, now)
     rows = await decide_hour(client, snapshot, now, mode=mode)
     await open_entries(snapshot, now, allow_entries=allow_entries, mode=mode)

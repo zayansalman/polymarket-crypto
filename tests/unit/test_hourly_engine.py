@@ -1057,3 +1057,15 @@ async def test_attempt_left_submitting_in_an_ended_hour_is_uncertain_and_the_ope
             "SELECT COUNT(*) AS n FROM notification_feed "
             "WHERE event_type = 'entry_attempt_unfinished'")
         assert (await cur.fetchone())["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tick_records_the_opening_book_once_per_offset(test_db, monkeypatch):
+    """Book record wired into the tick (approved by Zayan (operator), 2026-09-15)."""
+    await _tick(monkeypatch, H + 2, _Venue())
+    await _tick(monkeypatch, H + 5, _Venue())
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT window_start_ts, offset_s, up_best_ask, down_best_ask FROM hourly_book_snapshots")
+        rows = [tuple(r) for r in await cur.fetchall()]
+    assert rows == [(H, 0, 0.52, 0.52)]

@@ -216,6 +216,41 @@ DROP INDEX IF EXISTS idx_hourly_context_window_strategy;
 DROP INDEX IF EXISTS idx_hourly_context_start_strategy;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_context_start_strategy_mode
   ON hourly_strategy_context(window_start_ts, strategy_id, mode);
+
+-- Hourly BTC book 0/10/30/60/120 s after H:00 with a spot-based fair value, every hour the
+-- hourly loop runs, bet or no bet: does the opening price already lean against the previous
+-- hour? Observation only (polymarket_bot/hourly/book_record.py; approved by Zayan
+-- (operator), 2026-09-15). Keyed by the UTC hour start, not the ET slug.
+CREATE TABLE IF NOT EXISTS hourly_book_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  window_slug TEXT NOT NULL,
+  window_start_ts INTEGER NOT NULL,
+  offset_s INTEGER NOT NULL,
+  elapsed_s INTEGER NOT NULL,
+  fetched_at_ms INTEGER NOT NULL,
+  up_best_bid REAL,
+  up_best_ask REAL,
+  down_best_bid REAL,
+  down_best_ask REAL,
+  up_bids_json TEXT,
+  up_asks_json TEXT,
+  down_bids_json TEXT,
+  down_asks_json TEXT,
+  up_book_ts_ms INTEGER,
+  down_book_ts_ms INTEGER,
+  mirror_gap_ask REAL,
+  mirror_gap_bid REAL,
+  spot REAL,
+  hour_open REAL,
+  sigma_1h REAL,
+  seconds_left INTEGER,
+  fair_up REAL,
+  prev_hour_return REAL,
+  prev_hour_vol_units REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_start_offset
+  ON hourly_book_snapshots(window_start_ts, offset_s);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
