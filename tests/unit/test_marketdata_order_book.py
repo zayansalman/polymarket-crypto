@@ -155,3 +155,18 @@ def test_empty_book() -> None:
 def test_crossed_matches_the_paper_book_top(bid, ask) -> None:
     ours = TopOfBook("tok", bid, ask, None, None, None, None, None, None)
     assert ours.crossed is BookTop(best_bid=bid, best_ask=ask).crossed
+
+
+def test_freshness_counts_events_at_the_newest_server_time() -> None:
+    book = OrderBook("tok")
+    assert book.freshness == (-1, 0)
+    book.reset([(0.5, 1.0)], [(0.6, 1.0)], ts_ms=100)
+    assert book.freshness == (100, 1)
+    book.apply("BUY", 0.5, 2.0, ts_ms=100)  # several events can share one millisecond
+    book.apply("BUY", 0.5, 3.0, ts_ms=99)  # an older stamp moves nothing
+    assert book.freshness == (100, 2)
+    book.record_trade(0.6, 1.0, "BUY", ts_ms=101)
+    assert book.freshness == (101, 1)
+    book.set_tick_size(0.001)
+    book.apply("SELL", 0.7, 1.0)  # no stamp
+    assert book.freshness == (101, 1)

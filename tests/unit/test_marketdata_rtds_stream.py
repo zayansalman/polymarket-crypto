@@ -121,6 +121,7 @@ def test_updates_are_deduped_and_pushed_once() -> None:
     assert [p.obs_ms for p in stream.history(rs.BINANCE, "btc")] == [1_000_000]
     assert len(pushed) == 1 and pushed[0] == stream.latest(rs.BINANCE, "btc")
     assert stream.status()[rs.BINANCE].updates == 1
+    assert stream.bytes_total == 2 * len(frame)
 
 
 def test_snapshots_merge_into_history_without_duplicates() -> None:

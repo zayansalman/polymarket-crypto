@@ -58,7 +58,7 @@ def _items(levels: dict[float, float]) -> list[Level]:
 class OrderBook:
     __slots__ = (
         "token_id", "bids", "asks", "tick_size", "last_trade_price", "last_trade",
-        "server_ts_ms", "received_ms", "_best_bid", "_best_ask",
+        "server_ts_ms", "events_at_ts", "received_ms", "_best_bid", "_best_ask",
     )
 
     def __init__(self, token_id: str) -> None:
@@ -69,6 +69,7 @@ class OrderBook:
         self.last_trade_price: float | None = None
         self.last_trade: LastTrade | None = None
         self.server_ts_ms: int | None = None
+        self.events_at_ts = 0  # events applied with exactly ``server_ts_ms``
         self.received_ms: int | None = None
         self._best_bid: float | None = None
         self._best_ask: float | None = None
@@ -146,6 +147,13 @@ class OrderBook:
         self.tick_size = tick_size
         return True
 
+    @property
+    def freshness(self) -> tuple[int, int]:
+        """(newest server time, events applied at that millisecond): how far along the
+        event stream this book is. Connections receive the same events in the same
+        order, so this orders their books even when several events share a millisecond."""
+        return (-1 if self.server_ts_ms is None else self.server_ts_ms, self.events_at_ts)
+
     def top(self) -> TopOfBook:
         bid, ask = self._best_bid, self._best_ask
         return TopOfBook(
@@ -172,7 +180,11 @@ class OrderBook:
 
     def _stamp(self, ts_ms: int | None, received_ms: int | None) -> None:
         # Server stamps step back across event types; keep the newest of each.
-        if ts_ms is not None and (self.server_ts_ms is None or ts_ms > self.server_ts_ms):
-            self.server_ts_ms = ts_ms
+        if ts_ms is not None:
+            if self.server_ts_ms is None or ts_ms > self.server_ts_ms:
+                self.server_ts_ms = ts_ms
+                self.events_at_ts = 1
+            elif ts_ms == self.server_ts_ms:
+                self.events_at_ts += 1
         if received_ms is not None and (self.received_ms is None or received_ms > self.received_ms):
             self.received_ms = received_ms

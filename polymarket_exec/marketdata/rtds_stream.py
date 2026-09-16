@@ -332,11 +332,17 @@ class RtdsPriceStream:
         self._reconnects = 0
         self._acks = 0
         self._other = 0
+        self._bytes_total = 0
         self._last_error: str | None = None
 
     @property
     def acks(self) -> int:
         return self._acks
+
+    @property
+    def bytes_total(self) -> int:
+        """Characters received (the frames are ASCII JSON)."""
+        return self._bytes_total
 
     def latest(self, source: str, asset: str) -> PricePoint | None:
         return self._latest.get((source, asset))
@@ -380,6 +386,7 @@ class RtdsPriceStream:
     def handle_frame(self, text: str | bytes) -> None:
         """Apply one received frame (synchronous; also used by tests and replays)."""
         now = self._time_fn()
+        self._bytes_total += len(text)
         frame = parse_rtds_frame(text, int(now * 1000), self._assets)
         if frame.kind == UPDATE:
             self._quiet_since = now

@@ -93,6 +93,8 @@ class StreamStatus:
     handler_errors: int
     last_error: str | None  # why the last connection ended (kept after reconnecting)
     last_notice: str | None  # INVALID OPERATION / INVALID MESSAGE text from the server
+    bytes_total: int = 0  # characters of every frame received (the feed is ASCII JSON)
+    latency_ms_max: float | None = None  # over the same recent events as the percentiles
 
 
 class StreamSilent(Exception):
@@ -101,6 +103,10 @@ class StreamSilent(Exception):
 
 class StreamLagging(Exception):
     """The connection is far behind the market: it is replaced to drop the backlog."""
+
+
+class StreamRecycled(Exception):
+    """A supervisor asked for a new connection (``request_reconnect``)."""
 
 
 def _default_connect(url: str) -> Any:
@@ -276,6 +282,8 @@ class ClobMarketStream:
         self._desired: frozenset[str] = frozenset()
         self._changed = asyncio.Event()
         self._resync_requested = False
+        self._reconnect_reason: str | None = None
+        self.session = 0  # connections opened so far
         # Current connection.
         self._connected = False
         self._connected_since: float | None = None
@@ -290,6 +298,7 @@ class ClobMarketStream:
         self._last_frame_at: float | None = None
         self._last_pong_at: float | None = None
         self._frames_total = 0
+        self._bytes_total = 0
         self._buckets: deque[list[int]] = deque(maxlen=RATE_WINDOW_S + 2)
         self._latency: deque[int] = deque(maxlen=LATENCY_SAMPLES)
         self._reconnects = 0
@@ -310,9 +319,24 @@ class ClobMarketStream:
             self._desired = desired
             self._changed.set()
 
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
     def request_resync(self) -> None:
         """Unsubscribe and subscribe everything again on the next check (fresh snapshots)."""
         self._resync_requested = True
+
+    def request_reconnect(self, reason: str) -> None:
+        """Replace the connection on the next check (``reason`` becomes ``last_error``)."""
+        self._reconnect_reason = reason
+
+    def behind_best_ms(self) -> float | None:
+        """Median latency of the last 64 events minus the best on this connection."""
+        if len(self._latency) < LAG_WINDOW or self._best_latency_ms is None:
+            return None
+        recent = sorted(itertools.islice(reversed(self._latency), LAG_WINDOW))
+        return float(recent[LAG_WINDOW // 2] - self._best_latency_ms)
 
     def latency_samples(self) -> tuple[int, ...]:
         """The recent receive-minus-event latencies (ms), for merging several streams."""
@@ -342,6 +366,8 @@ class ClobMarketStream:
             handler_errors=self._handler_errors,
             last_error=self._last_error,
             last_notice=self._last_notice,
+            bytes_total=self._bytes_total,
+            latency_ms_max=float(samples[-1]) if samples else None,
         )
 
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -399,6 +425,8 @@ class ClobMarketStream:
         self._last_ping_at = now
         self._latency.clear()  # latency is judged per connection
         self._best_latency_ms = None
+        self._reconnect_reason = None  # this connection is the new one
+        self.session += 1
         log.info("marketdata.clob_connected", tokens=len(self._desired))
 
     def _mark_down(self) -> None:
@@ -445,6 +473,9 @@ class ClobMarketStream:
             if now - self._last_ping_at >= self._ping_interval_s:
                 self._last_ping_at = now
                 await ws.send("PING")
+            if self._reconnect_reason is not None:
+                reason, self._reconnect_reason = self._reconnect_reason, None
+                raise StreamRecycled(reason)
             if self._resync_requested:
                 self._resync_requested = False
                 await self._resync(ws, now, "requested")
@@ -462,10 +493,9 @@ class ClobMarketStream:
                 await self._resync(ws, now, f"no data for {silent_for:.0f}s")
         elif now - self._resync_at >= self._silence_s:
             raise StreamSilent(f"no data for {silent_for:.0f}s, even after a resubscribe")
-        if silent_for < LAG_FRESH_S and len(self._latency) >= LAG_WINDOW:
-            recent = sorted(itertools.islice(reversed(self._latency), LAG_WINDOW))
-            behind_ms = recent[LAG_WINDOW // 2] - (self._best_latency_ms or 0)
-            if behind_ms > self._max_lag_ms:
+        if self._max_lag_ms and silent_for < LAG_FRESH_S:
+            behind_ms = self.behind_best_ms()
+            if behind_ms is not None and behind_ms > self._max_lag_ms:
                 raise StreamLagging(f"{behind_ms / 1000:.0f}s behind this connection's best")
 
     async def _read(self, ws: Any) -> None:
@@ -476,6 +506,7 @@ class ClobMarketStream:
     def _on_frame(self, frame: str | bytes) -> None:
         now = self._time_fn()
         received_ms = int(now * 1000)
+        self._bytes_total += len(frame)
         data = False
         sample: int | None = None
         for event in parse_frame(frame):

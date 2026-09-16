@@ -274,8 +274,10 @@ async def test_rate_and_latency_percentiles() -> None:
         clock.t = 1_002.5
         st = stream.status()
         assert st.frames_per_s == 3.0  # 30 frames over the last 10 whole seconds
-        assert (st.latency_ms_p50, st.latency_ms_p90) == (11.0, 19.0)
+        assert (st.latency_ms_p50, st.latency_ms_p90, st.latency_ms_max) == (11.0, 19.0, 20.0)
         assert sorted(stream.latency_samples()) == list(range(1, 21))
+        sent_bytes = sum(len(_trade(1_000_000 - d)) for d in range(1, 21)) + 10 * len(snapshot)
+        assert st.bytes_total == sent_bytes
         clock.t = 1_020.0
         assert stream.status().frames_per_s == 0.0
 
@@ -391,6 +393,42 @@ async def test_a_steady_clock_offset_is_not_lag() -> None:
         st = stream.status()
     assert len(conn.made) == 1 and st.reconnects == 0
     assert st.latency_ms_p50 == 30_000.0
+
+
+@pytest.mark.asyncio
+async def test_a_requested_reconnect_replaces_the_connection() -> None:
+    first, second = FakeWs(), FakeWs()
+    conn = Connector([first, second])
+    stream = _stream(conn)
+    stream.set_tokens({"a"})
+    async with running(stream):
+        await until(lambda: first.sent)
+        session = stream.session
+        stream.request_reconnect("recycled: 3.5s behind the freshest connection")
+        await until(lambda: second.sent)
+        st = stream.status()
+        assert stream.session == session + 1 and st.reconnects == 1
+        assert st.last_error == "StreamRecycled: recycled: 3.5s behind the freshest connection"
+        await asyncio.sleep(0.02)
+        assert len(conn.made) == 2  # the request is used up by one reconnect
+    assert first.exited is True
+
+
+@pytest.mark.asyncio
+async def test_the_own_lag_rule_can_be_turned_off() -> None:
+    clock = Clock(1_000.0)
+    conn = Connector()
+    stream = _stream(conn, clock, max_lag_s=0)
+    stream.set_tokens({"a"})
+    async with running(stream):
+        await until(lambda: conn.made and conn.made[0].sent)
+        assert stream.behind_best_ms() is None  # not enough events yet
+        for latency in [100] * 64 + [12_000] * 64:
+            conn.made[0].push(_trade(1_000_000 - latency))
+        await until(lambda: stream.status().frames_total == 128)
+        await asyncio.sleep(0.05)
+        assert len(conn.made) == 1 and stream.status().reconnects == 0
+        assert stream.behind_best_ms() == 11_900
 
 
 @pytest.mark.asyncio
@@ -519,6 +557,8 @@ def test_default_connection_options(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_status_before_running() -> None:
-    st = cs.ClobMarketStream(lambda ev, ms: None).status()
+    stream = cs.ClobMarketStream(lambda ev, ms: None)
+    st = stream.status()
     assert (st.connected, st.frames_total, st.subscribed, st.reconnects) == (False, 0, 0, 0)
     assert st.latency_ms_p50 is None and st.frames_per_s == 0.0 and st.last_error is None
+    assert (st.bytes_total, st.latency_ms_max, stream.session) == (0, None, 0)
