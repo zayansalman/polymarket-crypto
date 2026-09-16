@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import config as _config
 from logging_setup import get_logger
@@ -25,6 +27,7 @@ KRONOS_CODE_COMMIT = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
 CODE_DIR = REPO_ROOT / "third_party" / "kronos_67b630e"
 # Under the loop watchdog's 180 s stall threshold (controller.WATCHDOG_STALL_SECONDS).
 DEFAULT_TIMEOUT_S = 90.0
+UNREADABLE_RESULT = "Kronos worker returned an unreadable result: "
 
 
 @dataclass(frozen=True)
@@ -133,20 +136,67 @@ async def run_forecast(
         await proc.wait()
         log.warning("kronos_forecast.worker_timeout", timeout_s=timeout_s)
         return ForecastResult(ok=False, error=f"Kronos worker timed out after {timeout_s:g} s")
-    lines = out.decode("utf-8", "replace").strip().splitlines()
-    try:
-        data = json.loads(lines[-1]) if lines else {}
-    except json.JSONDecodeError:
-        data = {}
-    if proc.returncode != 0 or not data.get("ok"):
-        detail = (data.get("error") or err.decode("utf-8", "replace").strip()[-400:]
-                  or f"worker exited with code {proc.returncode}")
-        log.warning("kronos_forecast.worker_failed", returncode=proc.returncode, error=detail)
-        return ForecastResult(ok=False, error=str(detail))
+    return read_worker_output(out, err, proc.returncode, request.paths)
+
+
+def _finite_number(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def parse_worker_result(data: Any, paths: int) -> ForecastResult | None:
+    """The worker's success line as a result, or None unless every field is present and valid.
+
+    Accepted only: ``ok`` exactly true, ``upside_prob`` a finite number in [0, 1],
+    ``final_closes`` a list of ``paths`` finite numbers, ``last_close`` and ``seconds``
+    finite numbers.
+    """
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        return None
+    prob, closes = data.get("upside_prob"), data.get("final_closes")
+    if not (_finite_number(prob) and 0.0 <= prob <= 1.0):
+        return None
+    if not (isinstance(closes, list) and len(closes) == paths
+            and all(_finite_number(v) for v in closes)):
+        return None
+    if not (_finite_number(data.get("last_close")) and _finite_number(data.get("seconds"))):
+        return None
     return ForecastResult(
         ok=True,
-        upside_prob=float(data["upside_prob"]),
+        upside_prob=float(prob),
         last_close=float(data["last_close"]),
-        final_closes=tuple(float(v) for v in data["final_closes"]),
+        final_closes=tuple(float(v) for v in closes),
         seconds=float(data["seconds"]),
     )
+
+
+def _reported_error(data: Any) -> str | None:
+    """The worker's own failure report, ``{"ok": false, "error": "<text>"}``."""
+    if isinstance(data, dict) and data.get("ok") is False:
+        error = data.get("error")
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+    return None
+
+
+def read_worker_output(out: bytes, err: bytes, returncode: int | None,
+                       paths: int) -> ForecastResult:
+    """The result from the worker's last stdout line, its stderr and its exit code."""
+    lines = out.decode("utf-8", "replace").strip().splitlines()
+    last = lines[-1] if lines else ""
+    try:
+        data: Any = json.loads(last)
+    except (ValueError, RecursionError):  # ValueError covers json.JSONDecodeError
+        data = None
+    reported = _reported_error(data)
+    if returncode != 0 or reported:
+        detail = (reported or err.decode("utf-8", "replace").strip()[-400:]
+                  or f"worker exited with code {returncode}")
+        log.warning("kronos_forecast.worker_failed", returncode=returncode, error=detail)
+        return ForecastResult(ok=False, error=detail)
+    result = parse_worker_result(data, paths)
+    if result is None:
+        error = UNREADABLE_RESULT + repr(last)[:200]
+        log.warning("kronos_forecast.worker_unreadable_result", error=error)
+        return ForecastResult(ok=False, error=error)
+    return result

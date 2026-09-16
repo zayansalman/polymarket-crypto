@@ -1,6 +1,7 @@
 """Kronos forecast client: minimal worker environment, weights check, timeout, error handling."""
 from __future__ import annotations
 
+import json
 import os
 import textwrap
 import time
@@ -96,6 +97,53 @@ async def test_success_line_is_parsed_from_an_isolated_worker_that_cannot_see_th
     result = await kc.run_forecast(REQUEST)
     assert result == kc.ForecastResult(ok=True, upside_prob=0.5, last_close=100.0,
                                        final_closes=(101.0, 99.0), seconds=0.5)
+
+
+GOOD_RESULT = {"ok": True, "upside_prob": 0.5, "last_close": 100.0,
+               "final_closes": [101.0, 99.0], "seconds": 0.5}
+
+
+def _result_line(**changes: object) -> str:
+    return json.dumps({**GOOD_RESULT, **changes})
+
+
+# Last stdout lines that must never pass as a forecast (REQUEST asks for 2 paths).
+UNREADABLE_LINES = {
+    "a_list": "[1,2]",
+    "null": "null",
+    "a_string": '"done"',
+    "no_output": "",
+    "only_ok": '{"ok": true}',
+    "ok_false_without_an_error": '{"ok": false}',
+    "ok_is_the_string_false": _result_line(ok="false"),
+    "ok_is_one": _result_line(ok=1),
+    "null_probability": _result_line(upside_prob=None),
+    "null_seconds": _result_line(seconds=None),
+    "nan_probability": _result_line(upside_prob=float("nan")),
+    "probability_above_one": _result_line(upside_prob=1.5),
+    "probability_below_zero": _result_line(upside_prob=-0.2),
+    "true_as_probability": _result_line(upside_prob=True),
+    "text_last_close": _result_line(last_close="100.0"),
+    "infinite_final_close": _result_line(final_closes=[101.0, float("inf")]),
+    "too_few_final_closes": _result_line(final_closes=[101.0]),
+    "too_many_final_closes": _result_line(final_closes=[101.0, 99.0, 98.0]),
+    "long_line": '{"ok": true, "padding": "' + "x" * 500 + '"}',
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("line", list(UNREADABLE_LINES.values()), ids=list(UNREADABLE_LINES))
+async def test_an_unreadable_last_line_is_a_failure(
+    models: Path, monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
+        import sys
+        sys.stdin.read()
+        print(LINE)
+    """, LINE=line))
+    result = await kc.run_forecast(REQUEST)
+    assert result == kc.ForecastResult(
+        ok=False, error="Kronos worker returned an unreadable result: " + repr(line)[:200])
 
 
 @pytest.mark.asyncio
