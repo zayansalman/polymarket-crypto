@@ -6,10 +6,10 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 29 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 30 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 12 | Structured JSON logging with structlog. Module + trade_id context. |
+| `db.py` | WIRED | 18 | SQLite storage for the local Polymarket crypto trading lab. |
+| `logging_setup.py` | WIRED | 14 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -22,11 +22,13 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
-| `polymarket_bot/hourly/__init__.py` | pkg | 3 | Hourly BTC Up/Down strategies (sources: docs/strategies/hourly-btc-strategies.md). |
-| `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` | WIRED | 2 | Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low. |
+| `polymarket_bot/hourly/__init__.py` | pkg | 5 | Hourly BTC Up/Down strategies (sources: docs/strategies/hourly-btc-strategies.md). |
+| `polymarket_bot/hourly/book_record.py` | WIRED | 1 | Hourly BTC book record: the Polymarket book 0, 10, 30, 60 and 120 s after the hour opens. |
+| `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` | WIRED | 3 | Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low. |
+| `polymarket_bot/hourly/candle_audit.py` | WIRED | 1 | Candle audit: check the Binance candles each hourly decision used against Binance's archive. |
 | `polymarket_bot/hourly/engine.py` | WIRED | 1 | Hourly BTC engine: one decision per hour per strategy, per-strategy entries, Binance settlement. |
 | `polymarket_bot/hourly/ledger.py` | WIRED | 1 | Hourly decision record: one row per (UTC hour start, strategy, mode), actions, settlement. |
-| `polymarket_bot/hourly/market.py` | WIRED | 4 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
+| `polymarket_bot/hourly/market.py` | WIRED | 6 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
 | `polymarket_bot/market_selection.py` | WIRED | 5 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
 | `polymarket_bot/pairarb/feed.py` | WIRED | 1 | Fill feed for the copier — one interface, two transports (#182). |

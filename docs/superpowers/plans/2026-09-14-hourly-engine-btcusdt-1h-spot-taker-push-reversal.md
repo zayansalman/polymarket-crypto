@@ -27,8 +27,8 @@
 
 **Roadmap (separate plans; each runs in both modes):**
 - PR 2: Kronos worker + Kronos BTCUSDT 1h fine-tune (Hugging Face lc2004): next-hour Up chance vs Polymarket price.
-- PR 3: order style choice (pay the ask / resting post-only at the bid, cancelled at the deadline).
-- PR 4: per-strategy results panel and venue-flow factors (after #234 merges).
+- PR 3: order style choice (pay the ask / resting post-only at the bid, cancelled at the deadline). Must meet the order-style requirements in `docs/strategies/hourly-btc-strategies.md` (both-ways record, strict paper fill rule, book-age refresh, fee/rebate as charged, optional limit-price cap; alphaXiv sweep, approved by Zayan (operator), 2026-09-15).
+- PR 4: per-strategy results panel and venue-flow factors (after #234 merges). Must show 95% ranges, break-even lines from prices paid, hit rate minus average all-in price, same-hour baselines (always Up; always the side above 50¢) and a count of every filter/factor ever tried beside any factor split — observation only, never a gate (approved by Zayan (operator), 2026-09-15).
 
 ## Global Constraints
 
