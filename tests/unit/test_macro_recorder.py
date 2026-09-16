@@ -76,6 +76,7 @@ def test_default_sources_and_client() -> None:
     assert sources[mr.FED_CALENDAR].cadence_s == 3600
     assert sources[mr.FF_WEEK].cadence_s == 3600
     assert sources[mr.FF_WEEK].retry_s >= 300
+    assert {s.deadline_s for s in sources.values()} == {120.0}
     assert mr.MacroSource("x:y", 600.0, sources[mr.FF_WEEK].poll).retry_s == 600.0
     assert mr.MacroSource("x:y", 86_400.0, sources[mr.FF_WEEK].poll).retry_s == 900.0
     client = mr._default_client()
@@ -221,6 +222,35 @@ async def test_retry_after_pushes_the_next_attempt_out() -> None:
         clock.t += 1
         await rec.record_once(client, clock.ms)
     assert len(calls) == 2 and rec.snapshot().feeds["a:src"].retry_after is False
+
+
+@pytest.mark.asyncio
+async def test_a_source_past_its_deadline_fails_and_the_pass_moves_on(test_db) -> None:
+    clock = _Clock()
+    later: list[int] = []
+
+    async def hangs(client: httpx.AsyncClient, _now) -> int:
+        await asyncio.sleep(30)  # e.g. a host dripping bytes just inside the read timeout
+        return 1
+
+    async def own_timeout(client: httpx.AsyncClient, _now) -> int:
+        raise TimeoutError("upstream busy")
+
+    rec = mr.MacroRecorder(
+        sources=[mr.MacroSource("a:hangs", 3600.0, hangs, deadline_s=0.05),
+                 mr.MacroSource("b:own", 3600.0, own_timeout, deadline_s=5.0),
+                 _source("c:next", [2], calls=later)],
+        time_fn=clock,
+    )
+    async with _client() as c:
+        await asyncio.wait_for(rec.record_once(c, clock.ms), timeout=5)
+    feeds = rec.snapshot().feeds
+    hung = feeds["a:hangs"]
+    assert (hung.ok, hung.detail, hung.retry_after) == (
+        False, "no complete answer within 0.05s", False)
+    assert hung.next_attempt_at == T0 + 900
+    assert (feeds["b:own"].ok, feeds["b:own"].detail) == (False, "TimeoutError: upstream busy")
+    assert len(later) == 1 and feeds["c:next"].ok is True
 
 
 @pytest.mark.asyncio

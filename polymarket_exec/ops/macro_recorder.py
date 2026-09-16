@@ -41,6 +41,10 @@ HTTP_TIMEOUT_S = 20.0
 
 DEFAULT_TICK_S = 60.0
 MAX_RETRY_S = 900.0
+# One attempt (requests, parsing, DB writes) must finish within this. The client timeout
+# bounds each read, not the whole request, so a host sending a byte every few seconds
+# could otherwise hold the pass and starve every source after it.
+SOURCE_DEADLINE_S = 120.0
 # ForexFactory's feed rate-limits hard; never try it again sooner than this.
 FF_MIN_RETRY_S = 300.0
 
@@ -59,6 +63,7 @@ class MacroSource:
     cadence_s: float
     poll: PollFn  # records one pull; returns rows recorded
     min_retry_s: float | None = None  # after a failure; default min(cadence_s, 900)
+    deadline_s: float = SOURCE_DEADLINE_S  # an attempt still running after this fails
 
     @property
     def retry_s(self) -> float:
@@ -272,12 +277,16 @@ class MacroRecorder:
         previous = self._status.get(source.key) or MacroFeedStatus(
             source.cadence_s, None, None, None, None, None, None
         )
+        deadline = asyncio.timeout(source.deadline_s)
         try:
-            rows = int(await source.poll(client, now_ms))
+            async with deadline:
+                rows = int(await source.poll(client, now_ms))
         except RetryAfter as exc:
             self._failed(source, previous, now, _detail(exc), exc.seconds, retry_after=True)
         except Exception as exc:  # noqa: BLE001 — every failure is a feed status
-            self._failed(source, previous, now, _detail(exc), source.retry_s, retry_after=False)
+            detail = (f"no complete answer within {source.deadline_s:g}s"
+                      if deadline.expired() else _detail(exc))
+            self._failed(source, previous, now, detail, source.retry_s, retry_after=False)
         else:
             if previous.ok is False:
                 log.info("macro_recorder.feed_recovered", feed=source.key)
