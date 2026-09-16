@@ -1,0 +1,2 @@
+overlap rows 536 {'open': 0.0, 'high': 0.0, 'low': 0.0, 'close': 0.0, 'volume': 0.0, 'amount': 0.0}
+rows 25440 2023-10-19 14:00:00 -> 2026-09-13 13:00:00 | gaps 0 | up rate 0.5063

@@ -1,0 +1,6 @@
+candles=8456 2025-09-26 06:00:00 -> 2026-09-13 13:00:00 | eligible OOS hours=7920 | sampled=500 | already done=0
+       2 /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/backtest_results.jsonl
+   00:26   1184 /bin/zsh -c source /Users/zayankhan/.claude/shell-snapshots/snap
+   00:26 909632 /Library/Frameworks/Python.framework/Versions/3.14/Resources/Pyt
+   00:26    800 /bin/zsh -c source /Users/zayankhan/.claude/shell-snapshots/snap
+total = 5120.00M  used = 3691.44M  free = 1428.56M  (encrypted)

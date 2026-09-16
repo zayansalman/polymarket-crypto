@@ -1,0 +1,151 @@
+{
+ "source": "alphaXiv sweep run by Claude, 2026-09-15 (workflow wf_5491db99-77e); approved items by Zayan (operator), 2026-09-15",
+ "synthesis": {
+  "implement_now": [
+   {
+    "rank": 1,
+    "one_liner": "Save the Polymarket quote at the top of every hour, whether or not we bet, alongside hour H-1's move and both strategies' calls.",
+    "why": "This is the only direct way to learn whether the reversal is already in the price. It collects about 720 hours a month instead of about 20 bets. At a 57.3% hit rate, Mean Reversion stops making money paying the ask once the side it buys costs about 55.6c including the fee (our calculation). Across Polymarket the time-averaged median spread near 50c was about 2c (400 bps of mid), not 1c (2604.24366 Table 1). At 2c the taker break-even is about 52.75%, not 52.25%. The total trading cost of a taker bet is about 450 bps of the token price, compared with 1.5-7.5 bps on BTC perps, so a leaning price can persist without being arbitraged away (2108.09750 p.14, p.27-28). Use the quote at that exact second, never the last trade carried forward (2606.19517 Sec 2.4).",
+    "strategy": "both",
+    "effort": "small",
+    "change": "Every hour at t = 0, 10, 30, 60 and 120 s, store: the Up best bid and ask; size at the top 3 price levels; seconds since the last book update; Down prices derived as 1 minus Up (log any mismatch as a feed glitch, never as a signal; 2608.00666 saw 20 mismatches in 308M messages); the Binance spot move since the hour open; and a spot-based fair value. Fair value: P_fair_up = Phi( ln(S_now/Open) / (sigma_1h*sqrt(tau)) - sigma_1h*sqrt(tau)/2 ), where Phi is the standard normal cumulative distribution, tau is hours left, and sigma_1h is trailing hourly volatility (2606.19517 eq 3.3). In the same row, store hour H-1's direction and its size in volatility units, whether Mean Reversion fired and on which side, and Kronos P(up) and its side."
+   },
+   {
+    "rank": 2,
+    "one_liner": "Before the order-style switch ships, log every signal both ways (pay the ask vs resting bid) and use a strict paper fill rule for resting bids.",
+    "why": "Resting buy orders fill mostly when the price is moving against them, so a 50% break-even overstates their advantage. In one study, price drifted -0.45 tick on average after a resting fill. About a third of orders never filled, and those were mostly the ones where price moved the good way (2407.16527 Table 2, p.7). A paper rule that filled on any opposite order gave 85% fills against 60% live. A rule of always filling when price trades through, and only sometimes otherwise, gave 65% and tracked live P&L (2407.16527 Table 5). Across four futures contracts, 66-89% of simple resting fills were adverse (2409.12721 Table 2). A 1-SD BTC move over 30 s shifts fair Up value by about 3.7c (our calculation from the 2606.19517 formula). Our arithmetic at 57.3%: paying the ask earns about 5.05c per signal. A bid 1c lower earns at most 7.8c, and it earns less than paying the ask if under about 65% of signals fill, even with no adverse selection.",
+    "strategy": "execution (both strategies)",
+    "effort": "medium",
+    "change": "For each signal, record two things. (a) The taker counterfactual: ask at decision time, fee, outcome. (b) The resting attempt: limit price, size already queued ahead at that price, size on the other side, fill second, fill price, fill type (traded through vs filled at our price), Binance move since open and fair value at fill, our token's mid 30 s and 120 s after the fill, and the outcome whether filled or not. Paper fill rule: fill for sure only if the best ask drops to our price or below, or a trade prints below it. Fill at exactly our price only after volume traded there since posting exceeds the queue ahead plus our size. Never fill on a touch. Track the lowest ask and trade between book polls so brief dips count (2409.12721 p.4). If the book is more than a few seconds old at send, refresh it first and log its age. Store the fee and any maker rebate as actually charged per fill instead of hard-coding 0.07*p*(1-p); 2606.31675 reports several fee changes and maker rebates. Report resting results per signal, with unfilled signals shown."
+   },
+   {
+    "rank": 3,
+    "one_liner": "Each night, check that the candles the live bot used match Binance's published archive.",
+    "why": "A bar is only safe to use from its close time plus 1 ms. Reading an unfinished bar and forward-filling gaps are the usual leaks, and a one-bar timing slip turned all 23 runs with positive predictive skill into losers after costs (2608.25348 p.3, p.8 Sec 5.5). Mean Reversion's cut-offs (flow push 1.20, closing location 0.80) are sharp. A slightly different taker-buy volume on a just-closed candle can flip whether a bet fires.",
+    "strategy": "mean_reversion",
+    "effort": "small",
+    "change": "At each decision, save the exact H-1 spot and perp candle rows used (open, high, low, close, volume, taker buy volume, close time) and when they were fetched. Nightly, download the same candles from data.binance.vision and count hours where the flow push, perp flow push or closing location differ enough to flip the bet. Assert close time + 1 ms <= decision time. Leave gaps in the 168h z-score window as gaps."
+   },
+   {
+    "rank": 4,
+    "one_liner": "Make the per-strategy results panel show sampling error, the price actually paid, and how many things were tried.",
+    "why": "The held-out result is 57.3% on 220 bets, with a 95% range of about 50.8-63.8%. That clears the 50% resting line (z about 2.2) but not the 52.25% taker line (z about 1.5) (our calculation; checklist from 2606.00071 Sec 7). At about 60 bets a quarter the standard error is about 6.4 points, so even with a true 57.3% rate about 1 quarter in 5 lands below 52.25%. With about 240 bets a year and 10 recorded factors, the chance that at least one factor shows a 10-point split purely by chance is about 70% (our calculation; 2608.25348 keeps a log of every candidate tried). 2606.00060's filtered strategies looked strong but were mostly plain BTC exposure (volatility 63.73% vs buy-and-hold 63.83%), so naive baselines belong beside every strategy.",
+    "strategy": "infrastructure",
+    "effort": "small",
+    "change": "Per strategy and quarter, show: bets; hit rate with a 95% binomial interval; break-even lines at 52.25% and 50%, or the ones implied by prices actually paid; hit rate minus average all-in price paid; and a rolling 90-day hit rate. Show baselines on the same hours: always Up, and always the side priced above 50c. Keep an append-only list of every filter and factor ever tried, including the 9+ that failed, and show that count next to any factor split. This is for observation only, not a gate."
+   },
+   {
+    "rank": 5,
+    "one_liner": "Start saving raw liquidation events and timestamped open interest now, because none of it can be backfilled later.",
+    "why": "Binance's historical intraday liquidation archive has been discontinued, so the planned liquidation factor can only be judged from our own recording (2607.27070 p.3). Liquidations are very concentrated: daily Gini 0.677, and 10 Oct 2025 had $1.05B against about $130M the day before. Reported liquidations can be missing from exchange totals. In Jul-Sep 2023, 41.1% of Binance BTCUSDT perp hours had open-interest changes that reported volume could not explain (2310.14973 Tables 4-5).",
+    "strategy": "infrastructure",
+    "effort": "small",
+    "change": "Store each liquidation event from Binance and Kraken futures with exchange time, receipt time, side, size and price. Also keep an hourly bucket: none, normal, or top 1% of hours. Never read an hour with no liquidations recorded as truly zero. Store open interest from Binance and Kraken with both exchange and receipt timestamps."
+   }
+  ],
+  "test_first": [
+   {
+    "one_liner": "Measure from archived order books whether the opening price already leans against the last hour.",
+    "strategy": "mean_reversion (Kronos as a split)",
+    "effort": "medium",
+    "data": "pmxt Polymarket Orderbook Archive v2 for the hourly BTC Up/Down markets, minutes 00-02 of each hour, April-September 2026. That is about 3,600 hours, including about 100 Mean Reversion signal hours. Join Binance BTCUSDT 1h candles for H-1 features. First confirm every hour is covered. If it is not, fall back to price-history mids with an imputed ask: mid + 0.5c when the mid is on a half cent, mid + 1c when it is on a whole cent (2608.00666 Sec 4.4).",
+    "split": "No tuning. Report month by month to check stability, and check the last 6 weeks separately.",
+    "method": "(a) Mean of (Up mid at H:00:00 - 0.50) signed against H-1's direction, in cents, over all hours and over signal hours. (b) Over all hours, a logistic regression of the Up outcome on log-odds of the opening Up price plus the sign of H-1 (2602.19520 eq 1 with one extra term); a negative sign coefficient combined with a mid that leans against H-1 means the reversal is partly in the price. (c) On signal hours, the average all-in cost of the side bought, ask + 0.07*p*(1-p); edge = 57.3% minus that cost. (d) Using the same archive plus Binance 1s data, regress 1-second changes in the Up mid on the previous 0-10 s of changes in spot fair value over the first 120 s, to see how fast Polymarket follows Binance.",
+    "success_threshold": "Lean on signal hours under 1c: not priced in, and the roughly 5-point taker edge holds. 2-5c: partly priced in, the taker edge shrinks to about 0-3 points, and resting orders matter more. About 5c or more (bet-side ask at or above about 55.6c): the taker edge is gone at 57.3%. Quote-to-quote variation is small, so about 100 signal hours pin down average price paid to a fraction of a cent. The hit rate itself still comes from the 840-bet backtest."
+   },
+   {
+    "one_liner": "Estimate how much worse resting-bid fills are, using past signals and Binance 1-second data.",
+    "strategy": "execution (both)",
+    "effort": "medium",
+    "data": "Binance BTCUSDT spot 1s candles (data.binance.vision) for the first 120 s of every past signal hour: 620 walk-forward and 220 held-out Mean Reversion bets, plus Kronos bets from the 500-hour backtest. Stage 2 covers the roughly 100 April-September 2026 signal hours, using the pmxt book replay plus on-chain fills on Polymarket's V2 exchange, which show who crossed the spread.",
+    "split": "Walk-forward and held-out reported separately. Stage 2 is used only to calibrate the stage-1 proxy.",
+    "method": "Convert BTC's move since the open into the fair-value change of the bet-side token, using the digital formula with trailing hourly volatility. Mark a bet 'would fill' if that fair value drops at least 1c below its entry-time value within 120 s; that is about 1.4 bp of BTC at 0.55% hourly volatility. Compare win rates for would-fill, would-miss and all bets. Also price a cancel rule: cancel the unfilled bid if spot moves against the bet by the equivalent of 2c, assuming 1-2 s cancel delay (2108.09750 Sec 6.1). In stage 2, check the proxy against actual trade-throughs of the best bid.",
+    "success_threshold": "Resting beats paying the ask only if fill share x (would-fill win rate - 49.5c) > (overall win rate - 52.25c), which is about 5.05c at 57.3%. For example, an 80% fill share needs a would-fill win rate of at least 55.8%, and a 65% fill share needs no loss of win rate at all. If the would-fill win rate falls to about 50-51%, resting loses money despite zero fees."
+   },
+   {
+    "one_liner": "Check how much of 57.3% the threshold search alone could produce, and whether each condition helps across market regimes.",
+    "strategy": "mean_reversion",
+    "effort": "medium",
+    "data": "The same Binance hourly spot and perp history that produced the 620/220 results.",
+    "split": "Three non-overlapping regime windows (2022 bear, 2023 range, 2024-25 bull), plus the existing held-out period.",
+    "method": "Shuffle hourly Up/Down outcomes in 24-hour blocks, which keeps volatility clustering. Rerun the exact grid search and walk-forward that picked 1.20 / 1.24 / 0.80, at least 200 times, and record the best walk-forward accuracy each time (2608.25348 Sec 3.5). Separately, rerun with each condition's 'off' setting allowed as a candidate (no perp condition, no closing-location condition) and report per regime (2606.00071 Sec 7). Confirm whether the walk-forward re-chose thresholds in each window.",
+    "success_threshold": "57.3% sits above the 95th percentile of the shuffled best accuracies. A condition earns its place if removing it lowers accuracy in at least 2 of 3 regimes. Use this to set expectations for paper results, not as a gate."
+   },
+   {
+    "one_liner": "Check whether Mean Reversion signals depend on the last seconds of hour H-1.",
+    "strategy": "mean_reversion",
+    "effort": "medium",
+    "data": "Binance spot 1s candles (which include taker buy volume) and perp aggregate trades for H-1 of every past signal hour and near-miss hour.",
+    "split": "All 840 signals pooled, with walk-forward and held-out also shown separately.",
+    "method": "Recompute closing location and spot/perp flow push from H-1 data cut 10 s and 60 s before the close. Label each signal robust (passes both ways) or last-seconds-only, and compare hit rates. The closing-location rule (above 0.80) requires a close near the hour's extreme, which is the part most exposed to final prints. On 5m closes, which include every top of the hour, the final 10 s carried about 50% more net order flow and a 15% larger move, and about 10-25% of it reversed within 10 s (2606.31675 Tables 2, 3, 5).",
+    "success_threshold": "At least 90% of signals robust means no concern. Flag if last-seconds-only signals exceed 10%. With about 84 such bets, a hit-rate gap is readable only if it exceeds about 10 points."
+   },
+   {
+    "one_liner": "Measure how much of Kronos's bet selection is sampling error, and whether Kronos adds anything beyond the Polymarket price.",
+    "strategy": "kronos",
+    "effort": "small",
+    "data": "The 500 unseen backtest hours, plus the Polymarket opening mids for April-September 2026 hours from test 1.",
+    "split": "Same unseen hours. Walk-forward 2,160-hour train / 360-hour test for the simple benchmark (2608.21888 App B.1).",
+    "method": "(a) Rerun with 500 paths instead of 50 and count bets that cross the 0.05 line or change side. With 50 paths the standard error of P near 0.5 is about 7.1 points, more than the 5-point threshold; with 500 it is about 2.2. (b) Hit rate by size of |P - price|. (c) Compare Kronos P, the Polymarket opening mid, and 2608.21888's 3-parameter reversal model on Brier score (mean squared error of the probability) and log loss. Use a Diebold-Mariano test, which checks whether one forecast's errors are reliably smaller. In that paper only the 3-parameter model beat the base rate on BTC 1h (log loss 0.6918 vs 0.6931; trees 0.6933, neural net 0.7005).",
+    "success_threshold": "The 0.05 rule selects on real information only if the hit rate rises with edge size and Kronos's Brier score beats the Polymarket mid at p < 0.05. Also report how many current bets flip at 500 paths. If the earlier 'Monte Carlo randomness' filter test already covered Kronos path noise, part (a) repeats it."
+   }
+  ],
+  "risks": [
+   {
+    "risk": "The reversal may already be in the opening price, so paying the ask earns less than 57.3% - 52.25%.",
+    "evidence": "A plain bet against every prior 1h candle has a small but real edge (1h AUC 0.521, where 0.5 means no skill; frozen holdout gap shrank from +0.031 to +0.020 in six months), and the authors disclose trading a 15m variant (2608.21888). Taker cost near 50c is about 450 bps of token price, a band wide enough for a lean to persist (2108.09750). Time-averaged spreads near 50c were about 2c (2604.24366). Mean Reversion's taker edge is gone once the bet side costs about 55.6c all-in (our calculation).",
+    "mitigation": "Implement item 1 and run test 1. On the panel, show each strategy's hit rate minus average all-in price paid, and flag (observation only) when the 30-day average all-in cost on Mean Reversion signal hours goes above about 55c."
+   },
+   {
+    "risk": "Price moves inside the 120 s entry window: resting bids fill mainly on adverse moves, and late taker entries pay for moves that already happened.",
+    "evidence": "Busiest second of the hour: BTC perps had 1.27x the trades and 1.27x the absolute move in the first 10 s of quarter-hour minutes, largest at the top of the hour (2607.09426 Table A.2). Resting fills were far more likely after adverse 5 s returns, with an average post-fill loss of 0.8 bp on the BTC perp (2502.18625 Fig 11, p.20). 1/3 of orders never filled, and those were mostly the favorable ones (2407.16527). A 1-SD BTC move in the first 2 minutes shifts fair Up value by about 7.4c, more than the 5c Kronos threshold (our calculation from 2606.19517).",
+    "mitigation": "Implement item 2 and run test 2 before choosing order style. Log the second of the hour for every order. An operator setting could cap the limit price at the strategy's measured break-even (about 55.6c for Mean Reversion) so a swept ask is never paid; 2605.11640 saw 20 markets with book mid swings above 10c in one week. Treat this as an execution limit, not a verdict on the strategy."
+   },
+   {
+    "risk": "Our hour settles on a single Binance candle close, at the same moment 5m and 15m Polymarket contracts settle.",
+    "evidence": "After the 5m contract launched, final-10 s Binance net flow before closes was 50% higher and partly reversed within 10 s. Near-even cycles had 3.9x the flow and about 25% reversal. Wallets flagged as manipulators (by profit) made +$8.22M gross (2606.31675 Tables 2-5, 10). The 1h contract was not studied. The 15m contract was mostly unaffected (flow +0.068 vs +0.406, no reversal), and the theory says a longer horizon reduces exposure. Assuming a 1h standard deviation near 50 bp, roughly 3-4% of hours close within 2 bp of the open (our estimate).",
+    "mitigation": "For every settled hour, record |close - open| in bp, final-10 s net taker flow, and a push ratio (final-10 s |net flow| divided by the hour's median per 10 s). Report the share of P&L from bets decided by 2 bp or less in top-decile push hours. If it is material, add a recorded near-strike flag rather than a new filter. Test 4 covers the effect on the Mean Reversion trigger."
+   },
+   {
+    "risk": "The upcoming context-factor record and results panel produce false findings.",
+    "evidence": "With about 240 bets a year and 10 factors, there is about a 70% chance that at least one shows a 10-point split by luck (our calculation). Even fully audited candidates passed selection 6.25% of the time on shuffled data (2608.25348 Table 3). Open interest was inconsistent with volume in 41.1% of Binance BTC perp hours in Jul-Sep 2023 (2310.14973), and recorded liquidations are a lower bound. The effect decays: about 2.4 pts/yr here, and about a third of the gap was lost in a six-month holdout in 2608.21888.",
+    "mitigation": "Use panel item 4 (intervals, trial count, baselines) and raw storage item 5. Nightly reconciliation (item 3) keeps inputs honest. Write down which factor comparisons will be looked at before the data arrives, and treat any split under about 10 points as unreadable until each side has several hundred bets."
+   }
+  ],
+  "skip": [
+   "2607.17991 optimal market making: theory for two-sided quoting with inventory, uncalibrated, no fees or tick; we place one directional bet per hour. A fill-rate-vs-distance curve can be fit later from our own ledger.",
+   "2605.11640 non-retail fills: one week, 77.9% sports, no hourly crypto breakdown. Its one usable point, that only our own order log shows fill lifecycles, is already in implement item 2.",
+   "2608.00666 multi-outcome arbitrage: does not apply to a single two-outcome market. The mirrored-book check is folded into item 1; the mid-to-ask imputation is only a fallback in test 1.",
+   "2607.09426 minute-59 return and first-10 s imbalance factors: repeats the failed last-15-minute flow filter. The BTC 10 s forecast earns 0.375 bp against a 5 bp fee, and top-of-hour openings added noise.",
+   "Funding-settlement-hour flag, 00/08/16 UTC (2608.21888 App F): repeats the funding and 08 UTC nulls; AUC 0.531 vs 0.537 at 15m.",
+   "Rerunning the OI-falling result with lagged OI (2608.25348): forensic only, on a filter that already failed on ETH/SOL/XRP. Storing timestamped OI (item 5) is enough.",
+   "OI-vs-volume consistency flag (2310.14973): 2023 data, gives only a lower bound, and almost never fires at 5-minute polling.",
+   "Taker-flow variance cascade tag (2607.27070): 7 cascades, about two a year. At about 200 bets per tercile only gaps near 10 points are visible, and it is the same kind of regime slicing that already failed.",
+   "Liquidation-share and flow-size buckets for Mean Reversion (2606.00071, 2108.09750, 2608.21888 Sec 6): already covered by the planned liquidation factor. At about 20 bets a month the buckets stay unreadable for many months, and they partly overlap the failed OI filter.",
+   "Variance-ratio regime factor and multi-horizon volatility benchmark (2402.11930): Reuters composite data ending May 2022, likely overlaps the Qlib-style factors that failed; a side question for Kronos move size.",
+   "Logistic recalibration of Kronos (2602.19520) and choosing Kronos checkpoints by accuracy (2606.00060 App E): at 49-50% direction the recalibrated probability collapses toward 0.5, and test 5 answers the same question more cheaply.",
+   "Cost-aware forecast-size filter (2606.00060): built for a continuous perp position paying bp costs, and its results do not rise steadily with the threshold (lambda 0.5 to 5 gives 35.75% to 65.40% with no order).",
+   "Favorite-vs-underdog split (2609.12878): the near-50c result pools all categories and flips with weighting. No separate build is needed, since price paid is already recorded in items 1-2.",
+   "Flow dose-response by imbalance quintile at 1h (2608.21888 Sec 5.1): would only re-check an existing gate, and re-scaling thresholds on 840 bets risks refitting. Revisit if test 3 shows the thresholds are fragile.",
+   "Flat-hour label check (2608.21888 Sec 2): ties already resolve Up, and exact ties on a 1h BTCUSDT candle at a 0.01 tick are very rare. A one-line assert in the backtest is enough.",
+   "Option-implied gap of 5-11 points (2606.19517): 2023 long-dated low-probability contracts, where the drivers are strongest. Only the fair-value formula carries over.",
+   "Kalshi NBA partial price response of 0.64 (2606.07811): salient sports news on thin books. Use the method in test 1, not the magnitude.",
+   "Polymarket flow factor from book changes (2604.24366): not planned. Book-change direction matched the true aggressor only 59.2% of the time; if ever built, use trade or on-chain side.",
+   "Cross-coin lagged returns (2606.00071, Guo et al.): repeats the failed ETH-moved-same-way filter."
+  ],
+  "completeness_gaps": [
+   "No paper studied the hourly BTC Up/Down market itself. 2606.31675 explicitly leaves out the 1h contract, and 2604.24366 has no split by market type, so every spread, depth and adverse-selection number comes from other contracts or venues.",
+   "Whether the opening price leans against the last hour is still unmeasured anywhere. Only our own data (item 1, test 1) can answer it.",
+   "The two papers describe the pmxt archive differently. 2608.00666 says full depth snapshots plus updates from April 2026, used on sampled hours; 2605.11640 says v2 carries only market-level best bid/ask. Check which is right, and that every hourly BTC market is present, before test 1.",
+   "Maker rebates: 2606.31675 says makers on fee-enabled crypto markets can receive rebates funded by taker fees. The size, and whether hourly BTC qualifies, were not checked; a rebate would push the resting break-even below 50%. Check Polymarket's current fee documentation.",
+   "Binance's futures liquidation stream is described in Binance's docs as a snapshot of at most one liquidation per symbol per second. That would make hourly totals an undercount by design; confirm in the current docs, since none of these papers verified it.",
+   "Queue position: it is unknown whether Polymarket's feed exposes individual orders. If it does not, paper fills at our exact price stay estimates until calibrated against live 5-share resting orders; 2108.09750 found maker backtests on snapshot data unworkable and tested live instead.",
+   "Trade-message aggressor side was not validated in 2604.24366. Spot-check it against on-chain fills before relying on it, and use the V2 exchange contract for any on-chain replay after the April 2026 cutover.",
+   "Confirm whether the 620-bet walk-forward re-chose thresholds in each window. If it did, pooling all 840 bets at 57.3% gives z about 3.0 against the 52.25% taker line; if not, only the 220 held-out bets count (z about 1.5).",
+   "The 1h evidence in 2608.21888 is thin: the flow, depth, funding and session results are all at 15m. Read App C and Sec 5.1 in full for any 1h numbers before test 3 or any threshold rethink.",
+   "Confirm the exact resolution rule text: that Polymarket reads the Binance BTCUSDT 1h candle close, and what happens during a Binance outage or a late candle. The 85% Binance-Chainlink agreement in 2606.31675 applies only to the 5m and 15m contracts.",
+   "The spread on the hourly BTC book at H:00:00 is unmeasured. 2604.24366's 2c median is time-averaged across all markets, and our 2026-09-14 finding that thin non-BTC books reopen wide may or may not hold for BTC.",
+   "The adverse-selection magnitude on Polymarket is unknown. 2407.16527 and 2409.12721 use single-day simulator fills, and 2502.18625's profitable maker result rests on a 3.5-day test with thresholds scanned on that same test. All four agree on the direction of the effect."
+  ]
+ }
+}

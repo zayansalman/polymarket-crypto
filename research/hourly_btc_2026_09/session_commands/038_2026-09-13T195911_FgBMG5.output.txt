@@ -1,0 +1,36 @@
+discovery n=17532 2023-10-19 00:00:00 -> 2025-10-18 13:00:00 | validation n=7924 2025-10-18 14:00:00 -> 2026-09-13 18:00:00
+cutoffs (discovery): fz quintiles [-0.2   0.29  0.71  1.2 ] | |z| top quintile >= 1.28 | move size top quintile >= 1.55x
+
+=== discovery: reversal bet, all hours 52.6% [51.9%,53.4%] n=17532 (100% of hours)
+  1) dose-response by flow-in-move-direction quintile (1 = move fought by flow, 5 = move pushed by flow)
+     Q1: 49.1% [47.4%,50.7%] n= 3507 ( 20% of hours)
+     Q2: 52.0% [50.3%,53.6%] n= 3506 ( 20% of hours)
+     Q3: 52.5% [50.9%,54.2%] n= 3506 ( 20% of hours)
+     Q4: 53.4% [51.7%,55.0%] n= 3506 ( 20% of hours)
+     Q5: 56.1% [54.5%,57.8%] n= 3507 ( 20% of hours)
+
+=== validation: reversal bet, all hours 52.3% [51.2%,53.4%] n= 7924 (100% of hours)
+  1) dose-response by flow-in-move-direction quintile (1 = move fought by flow, 5 = move pushed by flow)
+     Q1: 51.6% [49.2%,53.9%] n= 1761 ( 22% of hours)
+     Q2: 51.1% [48.7%,53.6%] n= 1633 ( 21% of hours)
+     Q3: 52.8% [50.3%,55.3%] n= 1502 ( 19% of hours)
+     Q4: 52.7% [50.2%,55.2%] n= 1489 ( 19% of hours)
+     Q5: 53.5% [51.0%,56.0%] n= 1539 ( 19% of hours)
+
+=== discovery
+  H1 flow-driven move -> bet reversal        56.1% [54.5%,57.8%] n= 3507 ( 20% of hours) p=0.0000 vs 52.6%
+     ...all other hours                      51.7% [50.9%,52.6%] n=14025 ( 80% of hours)
+  H2 flow-driven BIG move -> bet reversal    58.8% [55.9%,61.6%] n= 1142 (  7% of hours) p=0.0000 vs 52.6%
+  H3 strong flow alone -> bet against flow   55.6% [54.0%,57.3%] n= 3507 ( 20% of hours) p=0.0000 vs 50.0%
+  H4 move fought by flow -> bet reversal     49.1% [47.4%,50.7%] n= 3507 ( 20% of hours) p=0.0000 vs 52.6%
+
+=== validation
+  H1 flow-driven move -> bet reversal        53.5% [51.0%,56.0%] n= 1539 ( 19% of hours)
+     ...all other hours                      52.0% [50.8%,53.2%] n= 6385 ( 81% of hours)
+  H2 flow-driven BIG move -> bet reversal    53.5% [49.1%,57.9%] n=  493 (  6% of hours)
+  H3 strong flow alone -> bet against flow   53.8% [51.3%,56.2%] n= 1584 ( 20% of hours)
+  H4 move fought by flow -> bet reversal     51.6% [49.2%,53.9%] n= 1761 ( 22% of hours)
+
+FDR (q=0.10) in discovery: {'H1': True, 'H2': True, 'H3': True, 'H4': True}
+reference: taker break-even ~52.25% at 50c; maker 50%
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

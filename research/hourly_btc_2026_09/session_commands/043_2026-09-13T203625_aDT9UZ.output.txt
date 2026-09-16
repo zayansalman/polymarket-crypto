@@ -1,0 +1,40 @@
+rows 25176 | discovery 17252 | validation 7924
+all-hours reversal: discovery 52.6% [51.8%,53.3%] n=17252 | validation 52.3% [51.2%,53.4%] n=7924
+
+== univariate (discovery | validation)
+  perp fz Q1: 51.3% [49.7%,53.0%] n=3451 | 52.1% [49.8%,54.4%] n=1758
+  perp fz Q2: 50.8% [49.1%,52.4%] n=3450 | 52.7% [50.1%,55.2%] n=1508
+  perp fz Q3: 52.8% [51.1%,54.4%] n=3450 | 52.9% [50.4%,55.3%] n=1557
+  perp fz Q4: 54.7% [53.1%,56.4%] n=3450 | 51.0% [48.5%,53.5%] n=1574
+  perp fz Q5: 53.1% [51.5%,54.8%] n=3451 | 53.0% [50.5%,55.5%] n=1527
+  confluence spot&perp top quintile   : 57.3% [54.7%,60.0%] n=1343 | 51.8% [47.4%,56.2%] n=498
+  spot-only push                      : 55.1% [53.0%,57.2%] n=2108 | 54.4% [51.3%,57.4%] n=1041
+  perp-only push                      : 50.5% [48.3%,52.6%] n=2108 | 53.5% [50.5%,56.6%] n=1029
+  crowded funding (fund top quintile) : 52.5% [50.9%,54.2%] n=3451 | 53.4% [51.1%,55.7%] n=1822
+
+== threshold from inner discovery: did NOT reach 60% in-sample; best t=0.57 hit 53.3% n=345 | using t=0.57
+   inner-fit coefficients (standardized): {'const': 0.133, 's_fz': -0.013, 'p_fz': 0.071, 'div': -0.095, 'basis': -0.002, 'fund': -0.009, 'eth_same': 0.01, 'us_open': -0.006, 'exp08': 0.004, 'weekend': 0.027, 'size': 0.068}
+   full-discovery coefficients: {'const': 0.102, 's_fz': -0.009, 'p_fz': 0.062, 'div': -0.089, 'basis': 0.005, 'fund': -0.011, 'eth_same': 0.016, 'us_open': 0.003, 'exp08': 0.014, 'weekend': 0.025, 'size': 0.059}
+
+== Scheme A static: bets 450 of 7924 hours (5.7%) | hit 52.4% [47.8%,57.0%] | P(luck | 50%)=0.1611 | P(luck | 52.3%)=0.4946
+   2025-H2: 52.8% [43.4%,62.1%] n=106
+   2026-H1: 51.4% [45.2%,57.7%] n=243
+   2026-H2: 54.5% [44.8%,63.8%] n=101
+   sensitivity t=0.55: 52.7% [50.2%,55.2%] n=1491
+   sensitivity t=0.58: 52.4% [45.6%,59.1%] n=208
+   sensitivity t=0.6: 50.0% [32.6%,67.4%] n=28
+   sensitivity t=0.62:  0.0% [0.0%,79.3%] n=1
+   sensitivity t=0.65: n=0
+   60% goal bar met: False
+
+== Scheme B rolling monthly refit: bets 308 of 7924 hours (3.9%) | hit 50.3% [44.8%,55.9%] | P(luck | 50%)=0.4773 | P(luck | 52.3%)=0.7738
+   2025-H2: 51.5% [41.8%,61.1%] n=99
+   2026-H1: 47.6% [40.1%,55.2%] n=166
+   2026-H2: 58.1% [43.3%,71.6%] n=43
+   sensitivity t=0.55: 53.1% [50.3%,55.8%] n=1236
+   sensitivity t=0.58: 53.6% [44.9%,62.1%] n=125
+   sensitivity t=0.6: 40.0% [16.8%,68.7%] n=10
+   sensitivity t=0.62: n=0
+   sensitivity t=0.65: n=0
+   60% goal bar met: False
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

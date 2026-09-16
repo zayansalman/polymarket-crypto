@@ -1,0 +1,44 @@
+cutoffs from discovery: fz>1.20 |z|>1.28 eth_fz>1.21
+
+==== DISCOVERY 2023-25 | SIG all 56.1% [54.5%,57.8%] n=3500  | ALT all 55.6% [53.9%,57.2%] n=3500  | P(up) 50.9% | move 0.335%
+  funding hour (H or H-1 at 00/08/16 UTC)        on  | SIG 56.8% [53.4%,60.1%] n=845   | ALT 57.2% [53.9%,60.5%] n=849   | P(up) 51.5% | move 0.342%
+  funding hour (H or H-1 at 00/08/16 UTC)        off | SIG 55.9% [54.0%,57.8%] n=2655  | ALT 55.1% [53.2%,57.0%] n=2651  | P(up) 50.8% | move 0.333%
+  options expiry hour (08 UTC)                   on  | SIG 54.3% [47.1%,61.3%] n=186   | ALT 54.0% [46.9%,60.9%] n=189   | P(up) 54.1% | move 0.288%
+  options expiry hour (08 UTC)                   off | SIG 56.2% [54.5%,57.9%] n=3314  | ALT 55.7% [54.0%,57.4%] n=3311  | P(up) 50.8% | move 0.337%
+    monthly expiry (last Fri 08 UTC)             on  | SIG 83.3% [43.6%,97.0%] n=6     | ALT 62.5% [30.6%,86.3%] n=8     | P(up) 70.8% | move 0.250%
+    monthly expiry (last Fri 08 UTC)             off | SIG 56.1% [54.4%,57.7%] n=3494  | ALT 55.6% [53.9%,57.2%] n=3492  | P(up) 50.9% | move 0.335%
+  US open hour (contains 09:30 NY)               on  | SIG 58.8% [49.8%,67.3%] n=119   | ALT 53.0% [44.0%,61.8%] n=117   | P(up) 46.7% | move 0.492%
+  US open hour (contains 09:30 NY)               off | SIG 56.0% [54.3%,57.7%] n=3381  | ALT 55.7% [54.0%,57.4%] n=3383  | P(up) 51.1% | move 0.328%
+  US regular session (09:30-16:00 NY, weekdays)  on  | SIG 55.1% [50.4%,59.7%] n=439   | ALT 53.2% [48.3%,58.0%] n=406   | P(up) 50.9% | move 0.507%
+  US regular session (09:30-16:00 NY, weekdays)  off | SIG 56.3% [54.5%,58.0%] n=3061  | ALT 55.9% [54.2%,57.7%] n=3094  | P(up) 51.0% | move 0.290%
+  weekend (UTC)                                  on  | SIG 60.2% [57.4%,62.9%] n=1241  | ALT 58.6% [55.9%,61.2%] n=1277  | P(up) 50.9% | move 0.225%
+  weekend (UTC)                                  off | SIG 53.9% [51.8%,55.9%] n=2259  | ALT 53.9% [51.8%,56.0%] n=2223  | P(up) 51.0% | move 0.379%
+  big/liquidation-like H-1                       on  | SIG 51.3% [44.2%,58.4%] n=189   | ALT 49.1% [41.6%,56.6%] n=167   | P(up) 52.3% | move 0.606%
+  big/liquidation-like H-1                       off | SIG 56.4% [54.7%,58.1%] n=3311  | ALT 55.9% [54.2%,57.6%] n=3333  | P(up) 50.9% | move 0.321%
+  ETH also flow-pushed same way                  on  | SIG 58.0% [54.8%,61.1%] n=928   | ALT 57.9% [54.6%,61.2%] n=877   | P(up) 51.7% | move 0.317%
+  ETH also flow-pushed same way                  off | SIG 55.4% [53.5%,57.4%] n=2572  | ALT 54.8% [52.9%,56.7%] n=2623  | P(up) 50.8% | move 0.339%
+
+==== VALIDATION 2025-26 | SIG all 53.5% [51.0%,56.0%] n=1539  | ALT all 53.8% [51.3%,56.2%] n=1584  | P(up) 49.9% | move 0.309%
+  funding hour (H or H-1 at 00/08/16 UTC)        on  | SIG 51.6% [46.6%,56.5%] n=386   | ALT 51.5% [46.6%,56.4%] n=392   | P(up) 49.8% | move 0.320%
+  funding hour (H or H-1 at 00/08/16 UTC)        off | SIG 54.2% [51.3%,57.1%] n=1153  | ALT 54.5% [51.7%,57.3%] n=1192  | P(up) 50.0% | move 0.305%
+  options expiry hour (08 UTC)                   on  | SIG 48.1% [37.3%,59.0%] n=77    | ALT 46.4% [36.2%,57.0%] n=84    | P(up) 50.0% | move 0.295%
+  options expiry hour (08 UTC)                   off | SIG 53.8% [51.3%,56.4%] n=1462  | ALT 54.2% [51.7%,56.7%] n=1500  | P(up) 49.9% | move 0.309%
+    monthly expiry (last Fri 08 UTC)             on  | SIG 60.0% [23.1%,88.2%] n=5     | ALT 60.0% [23.1%,88.2%] n=5     | P(up) 54.5% | move 0.394%
+    monthly expiry (last Fri 08 UTC)             off | SIG 53.5% [51.0%,56.0%] n=1534  | ALT 53.8% [51.3%,56.2%] n=1579  | P(up) 49.9% | move 0.309%
+  US open hour (contains 09:30 NY)               on  | SIG 56.9% [45.4%,67.7%] n=72    | ALT 48.6% [37.4%,59.9%] n=72    | P(up) 47.0% | move 0.473%
+  US open hour (contains 09:30 NY)               off | SIG 53.4% [50.8%,55.9%] n=1467  | ALT 54.0% [51.5%,56.5%] n=1512  | P(up) 50.1% | move 0.302%
+  US regular session (09:30-16:00 NY, weekdays)  on  | SIG 57.8% [51.4%,64.0%] n=230   | ALT 54.8% [48.2%,61.2%] n=219   | P(up) 49.1% | move 0.461%
+  US regular session (09:30-16:00 NY, weekdays)  off | SIG 52.8% [50.1%,55.5%] n=1309  | ALT 53.6% [51.0%,56.3%] n=1365  | P(up) 50.2% | move 0.269%
+  weekend (UTC)                                  on  | SIG 54.0% [49.8%,58.1%] n=548   | ALT 53.1% [49.0%,57.1%] n=586   | P(up) 50.3% | move 0.202%
+  weekend (UTC)                                  off | SIG 53.3% [50.2%,56.4%] n=991   | ALT 54.2% [51.1%,57.3%] n=998   | P(up) 49.8% | move 0.352%
+  big/liquidation-like H-1                       on  | SIG 62.3% [49.7%,73.4%] n=61    | ALT 62.5% [49.4%,74.0%] n=56    | P(up) 51.7% | move 0.573%
+  big/liquidation-like H-1                       off | SIG 53.2% [50.6%,55.7%] n=1478  | ALT 53.5% [51.0%,56.0%] n=1528  | P(up) 49.9% | move 0.296%
+  ETH also flow-pushed same way                  on  | SIG 51.1% [46.0%,56.2%] n=362   | ALT 52.8% [47.6%,57.8%] n=362   | P(up) 50.4% | move 0.272%
+  ETH also flow-pushed same way                  off | SIG 54.3% [51.4%,57.1%] n=1177  | ALT 54.1% [51.3%,56.9%] n=1222  | P(up) 49.9% | move 0.316%
+
+ETH lead-lag (all hours): P(BTC up at H | ETH H-1 up / down)
+  discovery: ETH up 48.6% [47.6%,49.7%] n=8942  | ETH down 53.4% [52.3%,54.4%] n=8549 
+  discovery: BTC & ETH H-1 same direction -> reversal 53.1% [52.3%,53.9%] n=13982 | different -> reversal 50.7% [49.0%,52.3%] n=3518 
+  validation: ETH up 47.8% [46.2%,49.4%] n=3944  | ETH down 52.1% [50.5%,53.7%] n=3973 
+  validation: BTC & ETH H-1 same direction -> reversal 52.7% [51.5%,53.9%] n=6684  | different -> reversal 50.4% [47.6%,53.2%] n=1240
+Shell cwd was reset to /Users/zayankhan/projects/polymarket-crypto

@@ -1,0 +1,1 @@
+B=/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test; /usr/bin/time -l python3 "$B/bench.py" --device cpu --n 1 --repeats 1 2> "$B/time_smoke.txt" | grep RESULT; grep -E "real|maximum resident|peak memory footprint" "$B/time_smoke.txt"; grep -v -E "^\s+[0-9]+\s" "$B/time_smoke.txt" | tail -5

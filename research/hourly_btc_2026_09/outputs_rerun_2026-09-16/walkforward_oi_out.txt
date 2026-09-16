@@ -1,0 +1,17 @@
+OOS months 2024-04..2026-08 | all-hours reversal 52.2% [51.6%,52.9%] n=21190
+R1 Tier A                               | OOS 57.3% [53.3%,61.1%] n=620    | val 58.2% [51.5%,64.6%] n=213    | FDR True | 60% bar False
+     years 2024:59%/172 2025:55%/275 2026:58%/173
+R2 Strict A90                           | OOS 62.9% [55.5%,69.7%] n=175    | val 57.5% [46.1%,68.2%] n=73     | FDR True | 60% bar False
+     years 2024:66%/47 2025:66%/74 2026:56%/54
+R3 Strict A95                           | OOS 59.5% [48.1%,69.9%] n=74     | val 57.9% [42.2%,72.1%] n=38     | FDR False | 60% bar False
+     years 2024:67%/18 2025:64%/28 2026:50%/28
+R4 A & OI rose (H-1, delayed)           | OOS 54.1% [48.6%,59.6%] n=314    | val 54.5% [44.8%,64.0%] n=99     | FDR False | 60% bar False
+     years 2024:59%/101 2025:50%/135 2026:55%/78
+R5 A & OI fell (H-1, delayed)           | OOS 60.5% [54.9%,65.8%] n=306    | val 61.4% [52.2%,69.8%] n=114    | FDR True | 60% bar False
+     years 2024:59%/71 2025:61%/140 2026:61%/95
+R6 A & OI rose (H-2)                    | OOS 60.2% [54.8%,65.4%] n=322    | val 57.8% [48.1%,67.0%] n=102    | FDR True | 60% bar False
+     years 2024:65%/98 2025:57%/139 2026:60%/85
+R7 A & OI fell (H-2)                    | OOS 54.0% [48.4%,59.6%] n=298    | val 58.6% [49.3%,67.3%] n=111    | FDR False | 60% bar False
+     years 2024:51%/74 2025:54%/136 2026:57%/88
+R8 Flow push & OI fell (H-1, delayed)   | OOS 55.3% [53.1%,57.4%] n=2102   | val 52.4% [48.9%,55.9%] n=767    | FDR True | 60% bar False
+     years 2024:59%/670 2025:55%/825 2026:51%/607

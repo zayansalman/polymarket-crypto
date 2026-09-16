@@ -1,0 +1,7 @@
+candles=8456 2025-09-26 06:00:00 -> 2026-09-13 13:00:00 | eligible OOS hours=7920 | sampled=2 | already done=0
+Loading weights from local directory
+Loading weights from local directory
+1/2 done | 1.8s/hour | ~0 min left
+FINISHED
+{'target_open_time': 1770343200000, 'target_ts': '2026-02-06 02:00:00', 'real_open': 65714.96, 'real_close': 64990.1, 'up': 0, 'prev_up': 1, 'p_up_vs_real_open': 0.8, 'p_up_within_path': 0.5, 'pred_close_median': 66197.332, 'pred_open_median': 66542.148, 'pred_close_p10_p90': [65484.302734375, 70787.64375], 'context_std_close': 7316.649, 'rec_close_mae': 253.201, 'rec_close_bias': 192.963, 'rec_move_mae': 177.061, 'rec_move_bias': -3.811, 'real_move_mae': 310.628, 'paths': 10, 'top_p': 1.0, 'forecast_s': 1.74}
+{'target_open_time': 1788746400000, 'target_ts': '2026-09-07 02:00:00', 'real_open': 79926.14, 'real_close': 79874.24, 'up': 0, 'prev_up': 0, 'p_up_vs_real_open': 0.4, 'p_up_within_path': 0.7, 'pred_close_median': 79793.305, 'pred_open_median': 79705.742, 'pred_close_p10_p90': [79594.0734375, 80195.5296875], 'context_std_close': 5247.193, 'rec_close_mae': 117.586, 'rec_close_bias': 3.617, 'rec_move_mae': 125.391, 'rec_move_bias': 7.869, 'real_move_mae': 222.686, 'paths': 10, 'top_p': 1.0, 'forecast_s': 1.6}

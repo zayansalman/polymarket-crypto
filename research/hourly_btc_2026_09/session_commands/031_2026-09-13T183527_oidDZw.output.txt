@@ -1,0 +1,14 @@
+lightgbm MISSING
+sklearn MISSING
+xgboost MISSING
+qlib MISSING
+statsmodels MISSING
+scipy 1.17.1
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/README.md
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/finetune/train_predictor.py
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/finetune/config.py
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/finetune/qlib_data_preprocess.py
+/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/Kronos-upstream/finetune/qlib_test.py
+timestamp,open,high,low,close,volume,amount
+2023-10-19 14:00:00,28482.1,28750.57,28444.64,28680.45,3017.42212,86267965.6206865
+total = 3072.00M  used = 1943.88M  free = 1128.12M  (encrypted)

@@ -1,0 +1,1 @@
+sleep 45; cat /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/tasks/bvo109t3i.output; wc -l /private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test/backtest_results.jsonl 2>/dev/null; sysctl -n vm.swapusage
