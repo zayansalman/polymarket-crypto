@@ -1,0 +1,7 @@
+noon-ET anchors (era mini): n=291 decided=276 hit=0.522 [0.463,0.581] up-rate=0.495
+  p in [0,0.2): n= 32 mean_p=0.09 actual_up=0.38
+  p in [0.2,0.4): n= 46 mean_p=0.28 actual_up=0.50
+  p in [0.4,0.5): n= 43 mean_p=0.44 actual_up=0.49
+  p in [0.5,0.6): n= 38 mean_p=0.53 actual_up=0.53
+  p in [0.6,0.8): n= 89 mean_p=0.67 actual_up=0.56
+  p in [0.8,1.01): n= 43 mean_p=0.90 actual_up=0.42
