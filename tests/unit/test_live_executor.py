@@ -1527,3 +1527,186 @@ def test_hourly_rows_resolve_an_hour_after_their_own_start() -> None:
     legacy = {"window_slug": "btc-updown-5m-1000000"}
     assert _row_window_resolved(legacy, now=1_000_000 + 359) is False
     assert _row_window_resolved(legacy, now=1_000_000 + 360) is True
+
+
+# ---------------------------------------------------------------------------
+# Claude, 2026-09-15, branch-review finding reconcile-resets-sold-size-double-books:
+# adoption restores the shares a previous session already sold (its PnL is already
+# in the reloaded gate and the row), so a later exit or settlement uses only the
+# shares still held and never books the sold ones twice.
+# ---------------------------------------------------------------------------
+
+SPOT_PUSH_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+KRONOS_ID = "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"
+
+
+def _orders_client(orders: dict[str, object]) -> MagicMock:
+    """A mock client whose get_order answers per order id (an Exception raises)."""
+    client = _mock_client()
+
+    def get_order(oid: str) -> object:
+        answer = orders[oid]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    client.get_order.side_effect = get_order
+    return client
+
+
+@pytest.mark.asyncio
+async def test_boot_restores_sold_shares_on_the_legacy_slot_so_the_exit_sells_the_rest(
+    journal_db, tmp_path: Path
+) -> None:
+    slug = _unresolved_slug()
+    await _seed_open_position(journal_db, window_slug=slug)
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=slug,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xOLD",
+    )
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=slug,
+        token_id=UP_TOKEN, price=0.55, size=5.26, clob_order_id="0xSELL1",
+        details={"response": {"status": "live"}},
+    )
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="UNFILLED", window_slug=slug,
+        token_id=UP_TOKEN, price=0.55, size=2.0, clob_order_id="0xSELL1",
+    )
+    orders: dict[str, object] = {
+        "0xOLD": {"size_matched": "5.26", "price": "0.57"},
+        "0xSELL1": {"size_matched": "2", "price": "0.55"},
+        "0xSELL2": {"size_matched": "3.26", "price": "0.55"},
+    }
+    client = _orders_client(orders)
+    executor = _executor(client, tmp_path)
+
+    await executor.start()
+    pnl_at_boot = executor.gate.live_pnl
+
+    client.create_and_post_order.return_value = {"success": True, "orderID": "0xSELL2"}
+    result = await executor.submit_exit(side_price=0.55, window_slug=slug)
+    assert result.ok
+    assert client.create_and_post_order.call_args.args[0].size == pytest.approx(3.26)
+    assert executor.gate.live_pnl == pytest.approx(pnl_at_boot + 3.26 * (0.55 - 0.57))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("evidence", "sold"),
+    [("venue", 2.0), ("unfilled_row", 2.0), ("placement_match", 2.0), ("none", 0.0)],
+)
+async def test_boot_restores_sold_shares_on_a_strategy_slot_from_venue_then_journal(
+    journal_db, tmp_path: Path, evidence: str, sold: float
+) -> None:
+    await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xE",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    placement = (
+        {"status": "matched", "makingAmount": "2", "takingAmount": "1.1"}
+        if evidence == "placement_match" else {"status": "live"}
+    )
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.55, size=5.26, clob_order_id="0xS",
+        details={"response": placement}, strategy_id=SPOT_PUSH_ID,
+    )
+    if evidence == "unfilled_row":
+        await journal_db.journal_live_order(
+            intent="EXIT", side="SELL", status="UNFILLED", window_slug=HSLUG,
+            token_id=UP_TOKEN, price=0.55, size=2.0, clob_order_id="0xS",
+            strategy_id=SPOT_PUSH_ID,
+        )
+    exit_answer: object = (
+        {"size_matched": "2", "price": "0.55"} if evidence == "venue"
+        else RuntimeError("order lookup down") if evidence == "placement_match"
+        else None
+    )
+    client = _orders_client({"0xE": {"size_matched": "5.26", "price": "0.57"},
+                             "0xS": exit_answer})
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    slot = account.slot_executor(SPOT_PUSH_ID)
+    # Never the SELL's requested size: only venue or journal evidence of a fill counts.
+    assert slot._entry_sold_size == pytest.approx(sold)
+    settled = await slot.record_settlement(True, HSLUG)
+    assert settled.size == pytest.approx(5.26 - sold)
+
+
+@pytest.mark.asyncio
+async def test_boot_counts_only_this_positions_exits_in_this_slot(
+    journal_db, tmp_path: Path
+) -> None:
+    await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    # An exit of an earlier position in the same hour, journalled before the entry.
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.55, size=5.0, clob_order_id="0xEARLIER",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xE",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    # Another strategy's exit in the same hour.
+    await journal_db.journal_live_order(
+        intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.55, size=5.0, clob_order_id="0xOTHER",
+        strategy_id=KRONOS_ID,
+    )
+    client = _orders_client({
+        "0xE": {"size_matched": "5.26", "price": "0.57"},
+        "0xEARLIER": {"size_matched": "5", "price": "0.55"},
+        "0xOTHER": {"size_matched": "5", "price": "0.55"},
+    })
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    slot = account.slot_executor(SPOT_PUSH_ID)
+    assert slot._entry_sold_size == 0.0
+    assert (await slot.record_settlement(True, HSLUG)).size == pytest.approx(5.26)
+
+
+@pytest.mark.asyncio
+async def test_boot_closes_a_row_whose_exits_already_sold_every_share(
+    journal_db, tmp_path: Path
+) -> None:
+    position_id = await _seed_hourly_row(journal_db, SPOT_PUSH_ID)
+    async with journal_db.connect() as conn:
+        await conn.execute(
+            "UPDATE paper_positions SET realized_pnl_usd = -0.1 WHERE position_id = ?",
+            (position_id,),
+        )
+        await conn.commit()
+    await journal_db.journal_live_order(
+        intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=HSLUG,
+        token_id=UP_TOKEN, price=0.57, size=5.26, clob_order_id="0xE",
+        strategy_id=SPOT_PUSH_ID,
+    )
+    for oid in ("0xS1", "0xS2"):
+        await journal_db.journal_live_order(
+            intent="EXIT", side="SELL", status="SUBMITTED", window_slug=HSLUG,
+            token_id=UP_TOKEN, price=0.55, size=5.26, clob_order_id=oid,
+            strategy_id=SPOT_PUSH_ID,
+        )
+    client = _orders_client({
+        "0xE": {"size_matched": "5.26", "price": "0.57"},
+        "0xS1": {"size_matched": "2", "price": "0.55"},
+        "0xS2": {"size_matched": "3.26", "price": "0.55"},
+    })
+    account = _executor(client, tmp_path)
+
+    await account.start()
+
+    row = await _row(journal_db, position_id)
+    assert (row["state"], row["exit_reason"]) == ("closed", "RECONCILED_FLAT")
+    assert row["realized_pnl_usd"] == pytest.approx(-0.1)  # kept, never re-booked
+    assert account.gate.live_pnl == 0.0
+    assert account.slot_executor(SPOT_PUSH_ID).entry_block_reason(3.0) is None

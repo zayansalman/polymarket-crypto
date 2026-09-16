@@ -13,7 +13,7 @@ import db as _db
 from polymarket_bot import controller, market_selection, paper
 from polymarket_bot.hourly import engine
 from polymarket_bot.hourly import market as hm
-from polymarket_exec.execution.live import LiveOrderResult
+from polymarket_exec.execution.live import LiveExecutor, LiveOrderResult
 
 H = 1_789_326_000
 SLUG = hm.slug_for(H)
@@ -218,3 +218,98 @@ async def test_live_stop_never_sells_a_past_hour_row(test_db, monkeypatch) -> No
     slot.submit_exit.assert_not_awaited()
     account.submit_exit.assert_not_called()
     assert await paper.count_open_positions(mode="live") == 1
+
+
+# Claude, 2026-09-15, branch-review finding reconcile-resets-sold-size-double-books:
+# a live Stop that sells only part of the current hour's position leaves the row open
+# to settle after the next live Start. That boot must restore the shares already sold,
+# so settlement books only the shares still held.
+SPOT_PUSH_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+
+
+def _stop_restart_client(orders: dict[str, dict]) -> MagicMock:
+    client = MagicMock()
+    client.get_order_book.return_value = SimpleNamespace(
+        asks=[SimpleNamespace(price="0.99", size="100"), SimpleNamespace(price="0.52", size="100")],
+        bids=[SimpleNamespace(price="0.01", size="100"), SimpleNamespace(price="0.48", size="100")],
+        tick_size="0.01", min_order_size="5",
+    )
+    client.cancel_order.side_effect = lambda p: {"canceled": [p.orderID], "not_canceled": {}}
+    client.cancel_all.return_value = {"canceled": [], "not_canceled": {}}
+    client.get_order.side_effect = lambda oid: orders[oid]
+    client.create_or_derive_api_key.return_value = SimpleNamespace(
+        api_key="k", api_secret="s", api_passphrase="p")
+    client.get_ok.return_value = "OK"
+    return client
+
+
+def _stop_restart_executor(client: MagicMock, tmp_path: Path) -> LiveExecutor:
+    return LiveExecutor(
+        private_key="0x" + "1" * 64, funder="0xF", signature_type=2,
+        max_trade_usd=3.0, daily_loss_halt_usd=10.0, bankroll_cap_usd=30.0,
+        max_entry_slippage=0.5, exit_fill_timeout_seconds=0.0,
+        kill_switch_path=tmp_path / "KILL", client=client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_stop_partial_sell_then_restart_settles_only_the_shares_still_held(
+    test_db, tmp_path, monkeypatch
+) -> None:
+    orders = {
+        "0xENTRY": {"size_matched": "5", "price": "0.52", "status": "matched"},
+        "0xEXIT": {"size_matched": "2", "price": "0.48", "status": "canceled"},
+    }
+    # Session 1: the live entry fills 5 @ 0.52.
+    client = _stop_restart_client(orders)
+    placements = iter([
+        {"success": True, "orderID": "0xENTRY", "status": "matched",
+         "makingAmount": "2.6", "takingAmount": "5"},
+        {"success": True, "orderID": "0xEXIT", "status": "live"},
+    ])
+    client.create_and_post_order.side_effect = lambda args: next(placements)
+    account = _stop_restart_executor(client, tmp_path)
+    await account.gate.load()
+    assert (await account.slot_executor(SPOT_PUSH_ID).submit_entry(
+        "999", 0.52, 2.6, window_slug=SLUG)).ok
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
+            " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
+            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, ?, '1h', ?, 'live')",
+            (SLUG, SPOT_PUSH_ID, H),
+        )
+        position_id = int(cur.lastrowid)
+        await conn.commit()
+
+    # Operator Stop mid-hour: the exit SELL fills 2 of 5 before its timeout-cancel.
+    monkeypatch.setattr(paper, "_live_executor", account)
+    snap = SimpleNamespace(window_slug=SLUG, created_at="y", spot_price=1.0,
+                           up_best_bid=0.52, down_best_bid=0.48)
+    monkeypatch.setattr(engine, "build_snapshot", AsyncMock(return_value=snap))
+    assert await paper.force_close_open_positions("STOP_REQUEST") == 0
+    assert account.gate.live_pnl == pytest.approx(-0.08)
+    monkeypatch.setattr(paper, "_live_executor", None)  # the loop drops its executor
+
+    # Next live Start: a new executor boots and adopts the open row.
+    restarted = _stop_restart_executor(_stop_restart_client(orders), tmp_path)
+    await restarted.start()
+    assert restarted.slot_executor(SPOT_PUSH_ID)._entry_sold_size == pytest.approx(2.0)
+
+    # H+1: the Binance candle says Down won; the engine settles the live row.
+    monkeypatch.setattr(paper, "_live_executor", restarted)
+    monkeypatch.setattr(hm, "fetch_hour_candle", AsyncMock(
+        return_value=hm.HourCandle(open=100.0, close=99.0, closed=True)))
+    await engine.settle_due(MagicMock(), snap, H + 3600 + 120)
+
+    entry_fee = 0.07 * 0.52 * 0.48 * 5
+    true_pnl = -0.08 + 3 * (1 - 0.52) - entry_fee
+    async with _db.connect() as conn:
+        async with conn.execute(
+            "SELECT state, realized_pnl_usd FROM paper_positions WHERE position_id = ?",
+            (position_id,),
+        ) as cur:
+            row = dict(await cur.fetchone())
+    assert row["state"] == "closed"
+    assert restarted.gate.live_pnl == pytest.approx(true_pnl, abs=1e-3)
+    assert row["realized_pnl_usd"] == pytest.approx(true_pnl, abs=1e-3)
