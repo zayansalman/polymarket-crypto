@@ -76,13 +76,17 @@ def no_grad(): return contextlib.nullcontext()
 FAKE_MODEL = '''
 import pandas as pd
 class _Loaded:
+    in_eval_mode = False
     @classmethod
     def from_pretrained(cls, path): return cls()
-    def eval(self): return self
+    def eval(self):
+        self.in_eval_mode = True
+        return self
 class Kronos(_Loaded): pass
 class KronosTokenizer(_Loaded): pass
 class KronosPredictor:
     def __init__(self, model, tokenizer, device=None, max_context=512, clip=5):
+        assert model.in_eval_mode and tokenizer.in_eval_mode, "model and tokenizer must be in eval mode"
         assert device == "cpu" and max_context == 512
     def predict_batch(self, df_list, x_timestamp_list, y_timestamp_list, pred_len, T, top_k, top_p,
                       sample_count, verbose):
