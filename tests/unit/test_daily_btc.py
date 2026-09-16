@@ -153,6 +153,14 @@ def test_current_window_across_fall_back_is_25_hours() -> None:
     assert w.settle_ts - w.reference_ts == 25 * 3600
 
 
+def test_current_window_across_spring_forward_is_23_hours() -> None:
+    w = dm.current_window(_utc(2027, 3, 13, 17, 0, 30))
+    assert w.market_date == date(2027, 3, 14)
+    assert w.reference_ts == _utc(2027, 3, 13, 17)   # noon EST
+    assert w.settle_ts == _utc(2027, 3, 14, 16)      # noon EDT (clocks go forward that morning)
+    assert w.settle_ts - w.reference_ts == 23 * 3600
+
+
 def test_payout_pays_half_on_a_tie() -> None:
     assert dm.payout("Up", "Up") == 1.0
     assert dm.payout("Down", "Up") == 0.0

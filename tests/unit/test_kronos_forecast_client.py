@@ -173,6 +173,29 @@ async def test_an_unreadable_last_line_is_a_failure(
         ok=False, error="Kronos worker returned an unreadable result: " + repr(line)[:200])
 
 
+@pytest.mark.asyncio
+async def test_payload_names_the_model_and_tokenizer_folders_the_right_way_round(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = models / "payload.json"
+    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
+        import sys
+        from pathlib import Path
+        Path(SEEN).write_text(sys.stdin.read())
+        print(LINE)
+    """, SEEN=str(seen), LINE=json.dumps(GOOD_RESULT)))
+    assert (await kc.run_forecast(REQUEST)).ok
+    payload = json.loads(seen.read_text())
+    assert payload["model_dir"] == str(
+        models / "models" / "models--NeoQuasar--Kronos-mini" / "snapshots"
+        / "f4e68697d9d5aed55cef5c96aabc3376bcad9f81")
+    assert payload["tokenizer_dir"] == str(
+        models / "models" / "models--NeoQuasar--Kronos-Tokenizer-2k" / "snapshots"
+        / "26966d0035065a0cae0ebad7af8ece35bc1fb51c")
+    assert payload["code_dir"] == str(kc.CODE_DIR)
+    assert (payload["horizon"], payload["paths"], payload["seed"]) == (1, 2, 1)
+
+
 @pytest.mark.parametrize(("torch_field", "expected"), [
     ({}, None), ({"torch": None}, None), ({"torch": 2.1}, None), ({"torch": " "}, None),
     ({"torch": "2.10.0+cpu"}, "2.10.0+cpu"), ({"torch": "v" * 100}, "v" * 40),
