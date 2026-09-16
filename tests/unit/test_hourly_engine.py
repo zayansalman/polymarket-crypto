@@ -114,9 +114,9 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
     assert len(pos) == 1
     p = pos[0]
     assert (p["side"], p["strategy_id"], p["market_timeframe"], p["window_start_ts"]) == (
-        "Down", "hourly_mean_reversion", "1h", H)
+        "Down", "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "1h", H)
     assert p["entry_price"] == 0.52 and p["shares"] == 5.0 and p["mode"] == "paper"
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert row["action"] == "ENTERED" and row["position_id"] == p["position_id"]
 
     venue.end_hour = H + 3600
@@ -124,7 +124,7 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
     closed = (await _positions())[0]
     assert closed["state"] == "closed" and closed["exit_price"] == 1.0
     assert closed["realized_pnl_usd"] == pytest.approx(5 * (1 - 0.52) - 5 * 0.07 * 0.52 * 0.48)
-    settled = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    settled = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert settled["outcome_side"] == "Down" and settled["hour_close"] == 109.0
 
 
@@ -134,13 +134,13 @@ async def test_other_strategy_slot_does_not_block(test_db, monkeypatch):
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, 'Up', 'open', 0.5, 2.5, 5, 'kronos_btc_finetune', '1h', ?, 'paper')",
+            " VALUES ('x', ?, 'Up', 'open', 0.5, 2.5, 5, 'kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price', '1h', ?, 'paper')",
             (SLUG, H),
         )
         await conn.commit()
     await _tick(monkeypatch, H + 30, _Venue())
     sids = sorted(p["strategy_id"] for p in await _positions() if p["state"] == "open")
-    assert sids == ["hourly_mean_reversion", "kronos_btc_finetune"]
+    assert sids == ["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"]
 
 
 @pytest.mark.asyncio
@@ -149,14 +149,14 @@ async def test_hour_candle_not_closed_on_binance_keeps_position_and_record_open(
     await _tick(monkeypatch, H + 30, venue)
     await _tick(monkeypatch, H + 3600 + 5, venue)  # local clock past H+1; Binance has no H+1 candle yet
     assert (await _positions())[0]["state"] == "open"
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["settled_at"] is None
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper"))["settled_at"] is None
 
 
 @pytest.mark.asyncio
 async def test_after_deadline_signal_is_missed_and_no_entry(test_db, monkeypatch):
     await _tick(monkeypatch, H + 121, _Venue())
     assert await _positions() == []
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == "MISSED"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_gate_block_is_recorded_once_and_journaled(test_db, monkeypatch):
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     assert await _positions() == []
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert row["action"] == "BLOCKED:daily loss halt: test"
     async with _db.connect() as conn:
         cur = await conn.execute("SELECT COUNT(*) AS n FROM live_orders WHERE status='BLOCKED'")
@@ -177,13 +177,13 @@ async def test_gate_block_is_recorded_once_and_journaled(test_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disabled_strategy_records_nothing_and_kill_holds_entries(test_db, monkeypatch):
-    await _knobs.set("hourly_mean_reversion_enabled", False)
+    await _knobs.set("hourly_btcusdt_1h_spot_taker_push_reversal_enabled", False)
     await _tick(monkeypatch, H + 30, _Venue())
-    assert await ledger.get_decision(H, "hourly_mean_reversion", mode="paper") is None
-    await _knobs.set("hourly_mean_reversion_enabled", True)
+    assert await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper") is None
+    await _knobs.set("hourly_btcusdt_1h_spot_taker_push_reversal_enabled", True)
     await _tick(monkeypatch, H + 31, _Venue(), allow=False)
     assert await _positions() == []
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper"))["action"] == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -204,7 +204,7 @@ async def test_waits_until_previous_hour_is_closed(test_db, monkeypatch):
     venue = _Venue()
     venue.end_hour = H - 3600  # Binance hasn't produced a closed H-1 candle yet
     await _tick(monkeypatch, H + 2, venue)
-    assert await ledger.get_decision(H, "hourly_mean_reversion", mode="paper") is None
+    assert await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper") is None
 
 
 # --- Live mode: the same decision, routed through the strategy's live slot ---------
@@ -254,7 +254,7 @@ async def _insert_hourly(start: int, mode: str, side: str = "Down") -> None:
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, ?, 'open', 0.5, 2.5, 5, 'hourly_mean_reversion', '1h', ?, ?)",
+            " VALUES ('x', ?, ?, 'open', 0.5, 2.5, 5, 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', ?, ?)",
             (hm.slug_for(start), side, start, mode),
         )
         await conn.commit()
@@ -267,12 +267,12 @@ async def test_own_open_row_blocks_a_second_entry_in_paper_and_live(test_db, mon
     await _insert_hourly(H, "paper")
     await _tick(monkeypatch, H + 30, _Venue())
     assert len(await _positions()) == 1
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert (row["action"], row["position_id"]) == ("ENTERED", 1)
     await _insert_hourly(H, "live")
     account = await _go_live(monkeypatch)
     await _tick(monkeypatch, H + 40, _Venue())
-    slot = account.slots.get("hourly_mean_reversion")
+    slot = account.slots.get("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     assert slot is None or (slot.submit_entry.await_count == 0 and slot.resync_flat.await_count == 0)
     assert len(await _positions()) == 2
 
@@ -285,7 +285,7 @@ async def test_previous_hour_open_row_holds_the_slot_and_the_hour_stays_pending(
     await _insert_hourly(H - 3600, "paper")
     await _tick(monkeypatch, H + 30, _Venue())
     assert len(await _positions()) == 1
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert (row["action"], row["position_id"]) == ("PENDING", None)
 
 
@@ -314,7 +314,7 @@ async def test_paper_entry_whose_entered_write_failed_is_linked_not_missed(
     await _tick(monkeypatch, H + 150, _Venue())
     positions = await _positions()
     assert len(positions) == 1
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
 
 
@@ -327,13 +327,13 @@ async def test_live_entry_whose_entered_write_failed_is_linked_not_missed(
     _fail_the_first_entered_write(monkeypatch)
     with pytest.raises(RuntimeError):
         await _tick(monkeypatch, H + 30, _Venue())
-    slot = account.slots["hourly_mean_reversion"]
+    slot = account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"]
     slot.tracks_position = True  # the slot holds the filled entry
     await _tick(monkeypatch, next_tick, _Venue())
     positions = await _positions()
     assert len(positions) == 1 and positions[0]["mode"] == "live"
     assert slot.submit_entry.await_count == 1
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="live")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live")
     assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
 
 
@@ -358,9 +358,9 @@ async def test_entry_sold_at_stop_before_its_record_was_written_ends_the_same_wa
         await _tick(monkeypatch, H + 30, _Venue())
     await _close_hourly_rows_as_stopped()  # Stop sold the current-hour position
     if mode == "live":
-        account.slots["hourly_mean_reversion"].tracks_position = False  # flat after the sale
+        account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].tracks_position = False  # flat after the sale
     await _tick(monkeypatch, H + 60, _Venue())
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode=mode)
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode)
     assert row["action"] == engine.UNFINISHED_ATTEMPT
     assert len(await _positions()) == 1  # nothing entered again
 
@@ -373,11 +373,11 @@ async def test_live_row_the_slot_does_not_track_stays_an_unfinished_attempt(
     _fail_the_first_entered_write(monkeypatch)
     with pytest.raises(RuntimeError):
         await _tick(monkeypatch, H + 30, _Venue())
-    account.slots["hourly_mean_reversion"].tracks_position = False  # outcome unknown
+    account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].tracks_position = False  # outcome unknown
     await _tick(monkeypatch, H + 40, _Venue())
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="live")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live")
     assert row["action"] == engine.UNFINISHED_ATTEMPT
-    assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
+    assert account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -385,14 +385,14 @@ async def test_live_entry_uses_the_strategy_slot_and_settles_through_it(test_db,
     account = await _go_live(monkeypatch)
     venue = _Venue(hour_close=109.0)
     await _tick(monkeypatch, H + 30, venue)
-    slot = account.slots["hourly_mean_reversion"]
+    slot = account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"]
     slot.resync_flat.assert_awaited_once()
     slot.submit_entry.assert_awaited_once_with(
         token_id=f"down-{H}", side_price=0.52, notional_usd=pytest.approx(2.6), window_slug=SLUG)
     p = (await _positions())[0]
     assert (p["mode"], p["strategy_id"], p["entry_price"], p["shares"]) == (
-        "live", "hourly_mean_reversion", 0.52, 5.0)
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["mode"] == "live"
+        "live", "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", 0.52, 5.0)
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["mode"] == "live"
 
     venue.end_hour = H + 3600
     await _tick(monkeypatch, H + 3600 + 20, venue)
@@ -408,8 +408,8 @@ async def test_live_blocked_entry_is_recorded_once_and_leaves_no_row(test_db, mo
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     assert await _positions() == []
-    assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="live")
+    assert account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry.await_count == 1
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live")
     assert row["action"] == "BLOCKED:daily loss halt: test"
 
 
@@ -422,11 +422,11 @@ async def test_live_order_error_ends_the_hour_as_uncertain_without_a_second_post
     account = await _go_live(monkeypatch, LiveOrderResult(ok=False, status="ERROR", reason="venue"))
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
-    submit = account.slots["hourly_mean_reversion"].submit_entry
+    submit = account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry
     assert submit.await_count == 1 and await _positions() == []
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == "UNCERTAIN:ERROR venue"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == "UNCERTAIN:ERROR venue"
     await _tick(monkeypatch, H + 121, _Venue())
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == "UNCERTAIN:ERROR venue"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == "UNCERTAIN:ERROR venue"
     assert submit.await_count == 1
 
 
@@ -463,7 +463,7 @@ async def test_live_post_exception_is_posted_once_per_hour_and_notified(
         await _tick(monkeypatch, H + offset, _Venue())
     assert client.create_and_post_order.call_count == 1
     assert await _positions() == []
-    action = (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"]
+    action = (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"]
     assert action.startswith("UNCERTAIN:ERROR ") and "Request exception!" in action
     async with _db.connect() as conn:
         cur = await conn.execute("SELECT status FROM live_orders WHERE intent = 'ENTRY'")
@@ -477,31 +477,31 @@ async def test_live_post_exception_is_posted_once_per_hour_and_notified(
 async def test_submitting_is_recorded_before_the_live_post(test_db, monkeypatch):
     account = await _go_live(monkeypatch)
     seen: list[str] = []
-    slot = account.slot_executor("hourly_mean_reversion")
+    slot = account.slot_executor("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     entered = slot.submit_entry.return_value
 
     async def submit_entry(**_kwargs):
-        seen.append((await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"])
+        seen.append((await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"])
         return entered
 
     slot.submit_entry.side_effect = submit_entry
     await _tick(monkeypatch, H + 30, _Venue())
     assert seen == ["SUBMITTING"]
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == "ENTERED"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == "ENTERED"
 
 
 @pytest.mark.asyncio
 async def test_live_attempt_that_raised_is_not_retried_and_ends_uncertain(test_db, monkeypatch):
     account = await _go_live(monkeypatch)
-    slot = account.slot_executor("hourly_mean_reversion")
+    slot = account.slot_executor("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     slot.submit_entry.side_effect = RuntimeError("journal write failed")
     with pytest.raises(RuntimeError):
         await _tick(monkeypatch, H + 30, _Venue())
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == "SUBMITTING"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == "SUBMITTING"
     await _tick(monkeypatch, H + 35, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     assert slot.submit_entry.await_count == 1
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == (
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == (
         "UNCERTAIN:entry attempt did not finish")
 
 
@@ -588,7 +588,7 @@ async def test_untraced_live_post_then_restart_is_not_posted_again_and_is_notifi
         await _tick(monkeypatch, H + offset, _Venue())
     assert client.create_and_post_order.call_count == 1
     assert [(r["state"], r["exit_reason"]) for r in await _positions()] == closed
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == (
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == (
         engine.UNFINISHED_ATTEMPT)
     assert await _unfinished_attempt_notifications() == 1
 
@@ -640,8 +640,8 @@ async def test_deleted_row_whose_uncertain_record_was_never_written_is_not_poste
     assert await _positions() == []  # the failed submit deleted its row before the crash
     await _tick(monkeypatch, H + 40, _Venue())
     await _tick(monkeypatch, H + 50, _Venue())
-    assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="live"))["action"] == (
+    assert account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry.await_count == 1
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live"))["action"] == (
         engine.UNFINISHED_ATTEMPT)
     assert await _unfinished_attempt_notifications() == 1
 
@@ -662,7 +662,7 @@ async def test_paper_attempt_that_raised_is_not_retried_and_ends_uncertain(test_
         await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 35, _Venue())
     assert calls["n"] == 1 and await _positions() == []
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == (
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper"))["action"] == (
         "UNCERTAIN:entry attempt did not finish")
 
 
@@ -683,7 +683,7 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     row = [r for r in await _positions() if r["mode"] == "paper"][0]
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
-    account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+    account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].record_settlement.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -702,11 +702,11 @@ async def test_filled_live_entry_whose_record_was_lost_is_linked_after_restart(
 
     engine.reset_caches()  # restart: boot reconciliation adopts the filled entry
     executor = await _boot_live_executor(monkeypatch, client, tmp_path)
-    assert executor.slot_executor("hourly_mean_reversion").tracks_position is True
+    assert executor.slot_executor("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal").tracks_position is True
     await _tick(monkeypatch, H + 150, _Venue())  # past the 120 s entry deadline
     positions = await _positions()
     assert [(p["state"], p["mode"]) for p in positions] == [("open", "live")]
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="live")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="live")
     assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
     assert client.create_and_post_order.call_count == 1
 
@@ -787,7 +787,7 @@ async def _decision_rows_by_mode(start: int) -> dict[str, dict]:
     async with _db.connect() as conn:
         cur = await conn.execute(
             "SELECT * FROM hourly_strategy_context WHERE window_start_ts = ? AND strategy_id = ?",
-            (start, "hourly_mean_reversion"),
+            (start, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"),
         )
         return {r["mode"]: dict(r) for r in await cur.fetchall()}
 
@@ -803,7 +803,7 @@ async def test_paper_gate_block_does_not_stop_a_live_entry_in_the_same_hour(test
     account = await _go_live(monkeypatch)
     await _tick(monkeypatch, H + 60, _Venue())
 
-    assert account.slot_executor("hourly_mean_reversion").submit_entry.await_count == 1
+    assert account.slot_executor("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal").submit_entry.await_count == 1
     live_positions = [p for p in await _positions() if p["mode"] == "live"]
     assert len(live_positions) == 1
     rows = await _decision_rows_by_mode(H)
@@ -872,15 +872,15 @@ async def test_kill_file_holds_the_hour_pending_then_enters_after_removal(
     kill, account = await _loop_on_1h_with_kill_file(monkeypatch, tmp_path, mode)
     kill.touch()
     await _loop_tick(monkeypatch, H + 30)
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode=mode))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode))["action"] == "PENDING"
     assert await _positions() == [] and await _blocked_journal_rows() == 0
 
     kill.unlink()
     await _loop_tick(monkeypatch, H + 40)
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode=mode))["action"] == "ENTERED"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode))["action"] == "ENTERED"
     assert [p["mode"] for p in await _positions()] == [mode]
     if account is not None:
-        assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
+        assert account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -892,7 +892,7 @@ async def test_kill_file_kept_past_the_deadline_records_missed_and_no_journal_ro
     kill.touch()
     await _loop_tick(monkeypatch, H + 30)
     await _loop_tick(monkeypatch, H + 121)
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode=mode))["action"] == "MISSED"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode))["action"] == "MISSED"
     assert await _positions() == [] and await _blocked_journal_rows() == 0
 
 
@@ -977,7 +977,7 @@ async def test_thin_top_ask_venue_minimum_over_the_per_trade_cap_blocks_in_both_
     client.create_and_post_order.assert_not_called()
     assert gate.daily_buy_notional == 0.0
     assert gate_notionals and all(n == pytest.approx(2.6) for n in gate_notionals)
-    action = (await ledger.get_decision(H, "hourly_mean_reversion", mode=mode))["action"]
+    action = (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode))["action"]
     assert action.startswith("BLOCKED:per-trade cap: 2.60 USD exceeds 2.00 USD")
 
 
@@ -986,11 +986,11 @@ async def test_thin_top_ask_venue_minimum_over_the_per_trade_cap_blocks_in_both_
 async def test_pending_decision_from_a_stopped_hour_is_missed_on_a_later_tick(test_db, monkeypatch):
     venue = _Venue(hour_close=109.0)
     await _tick(monkeypatch, H + 30, venue, allow=False)  # entries held: the row stays PENDING
-    assert (await ledger.get_decision(H, "hourly_mean_reversion", mode="paper"))["action"] == "PENDING"
+    assert (await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper"))["action"] == "PENDING"
     # Loop stopped before H's deadline; the next tick runs in hour H+1.
     venue.end_hour = H + 3600
     await _tick(monkeypatch, H + 3600 + 20, venue)
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert row["settled_at"] is not None and row["outcome_side"] == "Down"
     assert row["action"] == "MISSED"
     assert [p["window_slug"] for p in await _positions()] == [NEXT_SLUG]  # nothing chased in H
@@ -1012,7 +1012,7 @@ async def test_open_decision_with_a_position_for_its_ended_hour_is_entered(
     venue.end_hour = H + 3600
     monkeypatch.setattr(engine, "open_entries", AsyncMock())  # only the ended hour matters
     await _tick(monkeypatch, H + 3600 + 20, venue)
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode=mode)
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode=mode)
     assert (row["action"], row["position_id"]) == ("ENTERED", position_id)
 
 
@@ -1034,7 +1034,7 @@ async def test_ended_hour_is_missed_when_boot_reconciliation_closed_its_row_as_n
     venue.end_hour = H + 3600
     monkeypatch.setattr(engine, "open_entries", AsyncMock())
     await _tick(monkeypatch, H + 3600 + 20, venue)
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert (row["action"], row["position_id"]) == ("MISSED", None)
 
 
@@ -1046,11 +1046,11 @@ async def test_attempt_left_submitting_in_an_ended_hour_is_uncertain_and_the_ope
     hourly-ambiguous-post-error-retried; an unfinished attempt is never recorded as MISSED."""
     venue = _Venue(hour_close=109.0)
     await _tick(monkeypatch, H + 30, venue, allow=False)
-    await ledger.set_action(H, "hourly_mean_reversion", engine.SUBMITTING, mode="paper")
+    await ledger.set_action(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", engine.SUBMITTING, mode="paper")
     venue.end_hour = H + 3600
     monkeypatch.setattr(engine, "open_entries", AsyncMock())
     await _tick(monkeypatch, H + 3600 + 20, venue)
-    row = await ledger.get_decision(H, "hourly_mean_reversion", mode="paper")
+    row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert row["action"] == engine.UNFINISHED_ATTEMPT
     async with _db.connect() as conn:
         cur = await conn.execute(

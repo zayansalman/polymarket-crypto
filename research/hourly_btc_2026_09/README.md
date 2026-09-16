@@ -23,6 +23,12 @@ rebuilt from the Claude Code session transcript by `tools/recover_from_transcrip
 | `scripts/` | Rerunnable copies (path changes only) and the 2026-09-16 re-download and app-code check. |
 | `outputs_rerun_2026-09-16/` | Rerun outputs; compared in `REPRODUCTION.md`. |
 
+The literature files are verbatim agent outputs from 2026-09-13 and 2026-09-15. They use the
+strategy's earlier working names ("Hourly Mean Reversion", "Mean Reversion", `mean_reversion`),
+which Zayan (operator) replaced on 2026-09-15 with "Binance BTCUSDT 1h reversal after a spot
+taker-buy/sell push that perps didn't match, with the hour closing at its high or low". They are
+kept unedited as records.
+
 The downloaded data files (CSV) were not recoverable, since they were never printed. The three
 files the frozen rule was tested on were downloaded again on 2026-09-16 and came out identical in
 row count and byte size; the walk-forward test and the app's own rule code reproduce the original

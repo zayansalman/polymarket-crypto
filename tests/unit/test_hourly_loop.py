@@ -64,7 +64,7 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'hourly_mean_reversion', '1h', ?,"
+            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', ?,"
             " 'live')",
             (SLUG, H),
         )
@@ -84,7 +84,7 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 1
 
-    account.slot_executor.assert_called_with("hourly_mean_reversion")
+    account.slot_executor.assert_called_with("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     slot.submit_exit.assert_awaited_once_with(side_price=0.50, size=5.0, window_slug=SLUG)
     account.submit_exit.assert_not_called()
 
@@ -180,7 +180,7 @@ async def _insert_open_hourly_row(start_ts: int, mode: str) -> None:
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'hourly_mean_reversion', '1h', ?, ?)",
+            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', ?, ?)",
             (hm.slug_for(start_ts), start_ts, mode),
         )
         await conn.commit()
@@ -402,7 +402,6 @@ async def test_stop_keeps_the_5m_count_when_the_hourly_read_fails(test_db, monke
 
 # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
 # boot adopts open live rows of either timeframe, so each run settles both kinds.
-MR = "hourly_mean_reversion"
 FIVE_MIN_SLUG = f"btc-updown-5m-{H}"
 
 
@@ -438,7 +437,7 @@ async def test_5m_tick_settles_an_adopted_past_hour_live_hourly_row_into_the_los
     await _insert_open_hourly_row(past, "live")
     await _db.journal_live_order(
         intent="ENTRY", side="BUY", status="SUBMITTED", window_slug=hm.slug_for(past),
-        token_id="1234567890", price=0.57, size=5.26, clob_order_id="0xMR", strategy_id=MR,
+        token_id="1234567890", price=0.57, size=5.26, clob_order_id="0xSPOTPUSH", strategy_id=SPOT_PUSH_ID,
     )
     account = LiveExecutor(
         private_key="0x" + "1" * 64, funder="0xF", signature_type=2, max_trade_usd=3.0,
@@ -447,7 +446,7 @@ async def test_5m_tick_settles_an_adopted_past_hour_live_hourly_row_into_the_los
         client=_clob_client_mock(),
     )
     await account.start()
-    assert account.slot_executor(MR)._position_open is True  # boot adopted it
+    assert account.slot_executor(SPOT_PUSH_ID)._position_open is True  # boot adopted it
 
     # The operator then started BTC 5m live.
     monkeypatch.setattr(paper, "_live_executor", account)
@@ -464,7 +463,7 @@ async def test_5m_tick_settles_an_adopted_past_hour_live_hourly_row_into_the_los
     await paper.paper_tick_once()
 
     assert await paper.count_open_positions(mode="live") == 0
-    assert account.slot_executor(MR)._position_open is False
+    assert account.slot_executor(SPOT_PUSH_ID)._position_open is False
     assert account.gate.halt_pnl < -2.9  # the held Down side lost: about -3.09 booked
 
 

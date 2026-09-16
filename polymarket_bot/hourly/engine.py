@@ -15,7 +15,8 @@ import httpx
 from db import journal_live_order, notify
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
-from polymarket_bot.hourly import ledger, market, mean_reversion
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as spot_taker_push_rule
+from polymarket_bot.hourly import ledger, market
 from polymarket_bot.hourly.market import HOUR_S, HourMarket
 from polymarket_exec.execution.gate import EntryRequest
 from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
@@ -27,11 +28,14 @@ log = get_logger("hourly_engine")
 
 TIMEFRAME = "1h"
 _ET = ZoneInfo("America/New_York")
-_CANDLES = mean_reversion.WINDOW + 2
+# One closed candle beyond the rule's window, plus Binance's still-forming candle, which
+# fetch_closed_candles drops.
+_CANDLES = spot_taker_push_rule.WINDOW + 2
 
-# (strategy_id, enable knob). Kronos BTC Fine Tune joins in PR 2.
+# (strategy_id, enable knob). "Kronos BTCUSDT 1h fine-tune (Hugging Face lc2004): next-hour
+# Up chance vs Polymarket price" joins in a later change.
 STRATEGIES: tuple[tuple[str, str], ...] = (
-    (mean_reversion.STRATEGY_ID, "hourly_mean_reversion_enabled"),
+    (spot_taker_push_rule.STRATEGY_ID, "hourly_btcusdt_1h_spot_taker_push_reversal_enabled"),
 )
 
 # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
@@ -155,15 +159,16 @@ async def decide_hour(
     )
     prev_ms = (start - HOUR_S) * 1000
     if not (
-        len(spot) >= mean_reversion.WINDOW and len(perp) >= mean_reversion.WINDOW
+        len(spot) >= spot_taker_push_rule.WINDOW
+        and len(perp) >= spot_taker_push_rule.WINDOW
         and spot[-1].open_time_ms == prev_ms and perp[-1].open_time_ms == prev_ms
     ):
         log.info("hourly_engine.waiting_for_previous_hour", window_slug=snapshot.window_slug)
         return rows
     late = now - start > _knobs.cached("hourly_entry_deadline_seconds")
     for sid in pending:
-        if sid == mean_reversion.STRATEGY_ID:
-            d = mean_reversion.decide(spot, perp)
+        if sid == spot_taker_push_rule.STRATEGY_ID:
+            d = spot_taker_push_rule.decide(spot, perp)
         else:  # pragma: no cover - PR 2 adds Kronos
             continue
         await ledger.record_decision(

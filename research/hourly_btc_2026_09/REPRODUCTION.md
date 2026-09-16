@@ -19,7 +19,7 @@ SHA-256 of today's files: `outputs_rerun_2026-09-16/data_sha256.txt`.
 | Number | Original | Rerun | Same? |
 |---|---|---|---|
 | Walk-forward rules R1–R8, every line (incl. R1 57.3% [53.3, 61.1] n=620 and R5 60.5% n=306) | `session_commands/050_…_od5yeD.output.txt` | `outputs_rerun_2026-09-16/walkforward_oi_out.txt` (`scripts/walkforward_oi.py`, path change only) | Yes, line for line |
-| Held-out rule result: 220 bets, 57.27% | `PREREG_minute.md` R5 → `session_commands/046` | App code (`polymarket_bot/hourly/mean_reversion.py`): 220 bets, 126 wins, 0.5727 (`outputs_rerun_2026-09-16/check_app_rule_on_held_out_hours_out.txt`) | Yes |
+| Held-out rule result: 220 bets, 57.27% | `PREREG_minute.md` R5 → `session_commands/046` | App code (`polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py`): 220 bets, 126 wins, 0.5727 (`outputs_rerun_2026-09-16/check_app_rule_on_held_out_hours_out.txt`) | Yes |
 
 Not rerun: the Kronos backtest (needs torch and hours of CPU on the operator's 8 GB Mac), and the
 scripts that need the 15-minute, ETH/SOL/XRP and funding files; their original outputs are in

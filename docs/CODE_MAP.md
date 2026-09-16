@@ -18,7 +18,7 @@ They are **bidirectionally coupled**: the FastAPI dashboard imports `polymarket_
 | Change | File |
 |---|---|
 | Plug in a **new strategy** (the loop's entry decision) | `polymarket_bot/paper.py:_build_snapshot` — the `NO_STRATEGY_REASON` block |
-| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `mean_reversion.py` (Hourly Mean Reversion) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`); strategy doc `docs/strategies/hourly-btc-strategies.md` |
+| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `btcusdt_1h_spot_taker_push_reversal.py` (Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`); strategy doc `docs/strategies/hourly-btc-strategies.md` |
 | Shared pricing math (fair value, sigma) used by shadow/daily/backtests | `polymarket_bot/strategy.py` (NOT `polymarket_exec/strategy/` — that only feeds backtests) |
 | Risk limits / kill-switch / daily-loss halt | `polymarket_exec/execution/gate.py` |
 | Live order placement | `polymarket_exec/execution/live.py` |
@@ -98,11 +98,11 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
-| `polymarket_bot/hourly/__init__.py` | pkg | 2 | Hourly BTC Up/Down strategies: Hourly Mean Reversion and Kronos BTC Fine Tune. |
+| `polymarket_bot/hourly/__init__.py` | pkg | 3 | Hourly BTC Up/Down strategies (sources: docs/strategies/hourly-btc-strategies.md). |
+| `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` | WIRED | 2 | Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low. |
 | `polymarket_bot/hourly/engine.py` | WIRED | 1 | Hourly BTC engine: one decision per hour per strategy, per-strategy entries, Binance settlement. |
 | `polymarket_bot/hourly/ledger.py` | WIRED | 1 | Hourly decision record: one row per (UTC hour start, strategy, mode), actions, settlement. |
-| `polymarket_bot/hourly/market.py` | WIRED | 3 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
-| `polymarket_bot/hourly/mean_reversion.py` | WIRED | 1 | Hourly Mean Reversion: fade an hour pushed by aggressive spot flow that perps did not confirm. |
+| `polymarket_bot/hourly/market.py` | WIRED | 4 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
 | `polymarket_bot/market_selection.py` | WIRED | 5 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
 | `polymarket_bot/pairarb/feed.py` | WIRED | 1 | Fill feed for the copier — one interface, two transports (#182). |

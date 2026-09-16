@@ -1,8 +1,8 @@
-# Hourly Engine + Hourly Mean Reversion Implementation Plan (PR 1 of 4)
+# Hourly Engine + BTCUSDT 1h spot taker push, perp unconfirmed, close at extreme: bet reversal Implementation Plan (PR 1 of 4)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The trading loop trades Polymarket's hourly BTC Up/Down market with the Hourly Mean Reversion strategy, in whichever mode the operator selects (paper or live):
+**Goal:** The trading loop trades Polymarket's hourly BTC Up/Down market with the Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low strategy, in whichever mode the operator selects (paper or live):
 - one decision per hour;
 - one open position per strategy, in both modes;
 - settlement from the Binance 1h candle;
@@ -14,7 +14,7 @@
 **Architecture:**
 - New package `polymarket_bot/hourly/`:
   - `market.py`: window timing, Gamma discovery, Binance candles and settlement.
-  - `mean_reversion.py`: the pure signal.
+  - `btcusdt_1h_spot_taker_push_reversal.py`: the pure signal.
   - `ledger.py`: `hourly_strategy_context` table ops.
   - `engine.py`: one hourly tick; entries and settlement route through paper or the live slot by mode.
 - `paper.py` routes a tick to the engine when the loop was started on the BTC 1h selection. The controller pins the selection at Start, exactly like mode.
@@ -26,7 +26,7 @@
 **Spec:** `docs/strategies/hourly-btc-strategies.md` (operator-facing strategy doc) and `docs/superpowers/specs/2026-09-14-hourly-btc-flow-strategy-design.md` (PR #234).
 
 **Roadmap (separate plans; each runs in both modes):**
-- PR 2: Kronos worker + Kronos BTC Fine Tune.
+- PR 2: Kronos worker + Kronos BTCUSDT 1h fine-tune (Hugging Face lc2004): next-hour Up chance vs Polymarket price.
 - PR 3: order style choice (pay the ask / resting post-only at the bid, cancelled at the deadline).
 - PR 4: per-strategy results panel and venue-flow factors (after #234 merges).
 
@@ -46,10 +46,10 @@
   - Kline row: `[open_time, open, high, low, close, volume, close_time, quote_volume, trades, taker_buy_base, taker_buy_quote, ignore]`.
   - Closed-candle read (`fetch_closed_candles`, no `startTime`): Binance always returns its own current (forming) candle as the last row, so drop that last row, then keep only rows with `close_time < now_ms`. Both checks together mean a local clock running ahead of Binance cannot hand the strategy a previous hour that is still forming.
   - Settlement read (`fetch_hour_candle`): the hour candle is closed only when `close_time < now_ms` **and** Binance already returns the next hour's candle (request `limit: 2`; the second row's open time is `start + 3600` s). Binance opens the next candle only after processing every trade of this one, so a local clock running ahead cannot settle on a forming candle.
-- **Hourly Mean Reversion constants (frozen):**
+- **Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low constants (frozen):**
   - `WINDOW = 168`, `SPOT_FZ_MIN = 1.20`, `PERP_FZ_MAX = 1.24`, `CLV_MIN = 0.80`.
   - z uses the sample standard deviation (ddof = 1) over the 168 hourly imbalances **ending at and including** hour H-1.
-- **Strategy ids:** `hourly_mean_reversion` (this PR) and `kronos_btc_finetune` (PR 2). Timeframe value: `1h`.
+- **Strategy ids:** `btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal` (this PR) and `kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price` (PR 2). Timeframe value: `1h`.
 - **Taker fee:** `polymarket_bot/shadow/fees.py:taker_fee_per_share(price)` = `0.07 × p × (1 − p)`.
 - **Tests:**
   - Run with `PYTHON_DOTENV_DISABLED=1`.
@@ -68,19 +68,19 @@
 |---|---|
 | Create `polymarket_bot/hourly/__init__.py` | Package marker |
 | Create `polymarket_bot/hourly/market.py` | `HOUR_S`, `hour_start`, `slug_for`, `HourMarket`, `Candle`, `HourCandle`, `discover`, `fetch_closed_candles`, `fetch_hour_candle`, `fetch_spot`, `up_won` |
-| Create `polymarket_bot/hourly/mean_reversion.py` | `FlowPush`, `Decision`, `flow_push`, `decide` (pure) |
+| Create `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` | `FlowPush`, `Decision`, `flow_push`, `decide` (pure) |
 | Modify `db.py` | `hourly_strategy_context` table; `paper_positions` gains `strategy_id`, `market_timeframe`, `window_start_ts` |
 | Create `polymarket_bot/hourly/ledger.py` | Context rows: `record_decision`, `get_decision`, `set_action`, `unsettled_windows`, `settle_window` |
 | Modify `db.py` (again) | `live_orders.strategy_id`; `journal_live_order(strategy_id=…)` |
 | Modify `polymarket_exec/execution/live.py` | Strategy slots: `slot_executor`, `cancel_open_all`, kill switch over every slot, per-slot boot reconciliation, hourly window resolution, journal rows tagged with the slot |
 | Modify `polymarket_bot/paper.py` | Paper settled closes net of taker fee; 5m paths ignore 1h rows; `_executor_for(pos)`; `run_paper_loop(..., timeframe)`; route 1h ticks to the engine; Stop cancels every slot and closes 1h rows at the current hour's bid (other 1h rows wait for settlement; a failed hourly read never hides the 5m close count — Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery); every tick settles open rows of the other timeframe too, and a failed 5m read at Stop never skips selling the current hour's 1h rows (Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled) |
 | Create `polymarket_bot/hourly/engine.py` | `build_snapshot`, `settle_due`, `decide_hour`, `open_entries`, `tick` (paper and live) |
-| Modify `polymarket_bot/runtime_knobs.py` | `hourly_mean_reversion_enabled`, `hourly_entry_deadline_seconds` |
+| Modify `polymarket_bot/runtime_knobs.py` | `hourly_btcusdt_1h_spot_taker_push_reversal_enabled`, `hourly_entry_deadline_seconds` |
 | Modify `polymarket_bot/controller.py` | Pin the market selection at Start; pass timeframe to the runner |
 | Modify `polymarket_bot/market_selection.py` | `LOOP_SUPPORTED` gains `("btc", "1h")` |
 | Modify `polymarket_exec/ops/dashboard/panels/market_selector.py` | Open-position glow recognises hourly slugs |
 | Modify `AGENTS.md`, `docs/CODE_MAP.md` | Rule "one open position per strategy, per mode"; BTC hourly authorized for live (operator, 2026-09-14); routing row; regenerate docs |
-| Tests | `tests/unit/test_hourly_market.py`, `test_hourly_mean_reversion.py`, `test_hourly_ledger.py`, `test_hourly_engine.py`, `test_hourly_loop.py`; appended slot tests in `test_live_executor.py`; edits in `test_loop_watchdog.py`, `test_settle_style.py` |
+| Tests | `tests/unit/test_hourly_market.py`, `test_hourly_btcusdt_1h_spot_taker_push_reversal.py`, `test_hourly_ledger.py`, `test_hourly_engine.py`, `test_hourly_loop.py`; appended slot tests in `test_live_executor.py`; edits in `test_loop_watchdog.py`, `test_settle_style.py` |
 
 ---
 
@@ -252,7 +252,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'polymarket_bot.hourly
 `polymarket_bot/hourly/__init__.py`:
 
 ```python
-"""Hourly BTC Up/Down strategies: Hourly Mean Reversion and Kronos BTC Fine Tune."""
+"""Hourly BTC Up/Down strategies: Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low and Kronos BTCUSDT 1h fine-tune (Hugging Face lc2004): next-hour Up chance vs Polymarket price."""
 ```
 
 `polymarket_bot/hourly/market.py`:
@@ -449,16 +449,16 @@ git commit -m "feat(hourly): BTC hourly market discovery, Binance candles and se
 
 ---
 
-### Task 2: Hourly Mean Reversion signal
+### Task 2: Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low signal
 
 **Files:**
-- Create: `polymarket_bot/hourly/mean_reversion.py`
-- Test: `tests/unit/test_hourly_mean_reversion.py`
+- Create: `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py`
+- Test: `tests/unit/test_hourly_btcusdt_1h_spot_taker_push_reversal.py`
 
 **Interfaces:**
 - Consumes: `Candle` (Task 1).
 - Produces:
-  - constants `STRATEGY_ID = "hourly_mean_reversion"`, `WINDOW = 168`, `SPOT_FZ_MIN = 1.20`, `PERP_FZ_MAX = 1.24`, `CLV_MIN = 0.80`
+  - constants `STRATEGY_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"`, `WINDOW = 168`, `SPOT_FZ_MIN = 1.20`, `PERP_FZ_MAX = 1.24`, `CLV_MIN = 0.80`
   - `@dataclass(frozen=True) FlowPush(imbalance: float | None, z: float | None, direction: int, fz: float | None, clv: float | None)`
   - `@dataclass(frozen=True) Decision(side: str | None, reason: str, signal: dict[str, Any])`
   - `flow_push(candles: list[Candle]) -> FlowPush` (raises `ValueError` with fewer than `WINDOW` candles)
@@ -467,14 +467,14 @@ git commit -m "feat(hourly): BTC hourly market discovery, Binance candles and se
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-"""Hourly Mean Reversion: flow push, close location and the frozen rule."""
+"""Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low: flow push, close location and the frozen rule."""
 from __future__ import annotations
 
 import statistics
 
 import pytest
 
-from polymarket_bot.hourly import mean_reversion as mr
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as rule
 from polymarket_bot.hourly.market import Candle
 
 
@@ -531,13 +531,13 @@ def test_no_bet_when_perps_confirm_weak_push_mid_close_or_flat() -> None:
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_hourly_mean_reversion.py -q`
+Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_hourly_btcusdt_1h_spot_taker_push_reversal.py -q`
 Expected: FAIL with `ImportError: cannot import name 'mean_reversion'`
 
 - [ ] **Step 3: Write the implementation**
 
 ```python
-"""Hourly Mean Reversion: fade an hour pushed by aggressive spot flow that perps did not confirm.
+"""Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low: fade an hour pushed by aggressive spot flow that perps did not confirm.
 
 Bet against hour H-1 when all hold (thresholds frozen from 2023-10..2025-10 discovery data):
 spot flow push > 1.20, perp flow push <= 1.24, and H-1 closed beyond +-0.80 of its range in
@@ -552,7 +552,7 @@ from typing import Any
 
 from polymarket_bot.hourly.market import Candle
 
-STRATEGY_ID = "hourly_mean_reversion"
+STRATEGY_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
 WINDOW = 168
 SPOT_FZ_MIN = 1.20
 PERP_FZ_MAX = 1.24
@@ -635,7 +635,7 @@ def decide(spot: list[Candle], perp: list[Candle]) -> Decision:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_hourly_mean_reversion.py -q`
+Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_hourly_btcusdt_1h_spot_taker_push_reversal.py -q`
 Expected: PASS (5 passed)
 
 - [ ] **Step 5: Parity check against the research data (not committed)**
@@ -647,7 +647,7 @@ python3 - <<'EOF'
 import sys; sys.path.insert(0, ".")
 import pandas as pd
 from polymarket_bot.hourly.market import Candle
-from polymarket_bot.hourly import mean_reversion as mr
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as rule
 B = "/private/tmp/claude-501/-Users-zayankhan-projects-polymarket-crypto/6f03044c-3dcc-4df5-b5f5-73f1372f4182/scratchpad/kronos-test"
 def load(n):
     d = pd.read_csv(f"{B}/{n}", parse_dates=["ts"])
@@ -668,8 +668,8 @@ Expected output: `bets 220 win rate 0.5727` (±1 bet at a flat-hour edge). If it
 - [ ] **Step 6: Commit**
 
 ```bash
-git add polymarket_bot/hourly/mean_reversion.py tests/unit/test_hourly_mean_reversion.py
-git commit -m "feat(hourly): Hourly Mean Reversion signal (frozen rule, stdlib math)"
+git add polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py tests/unit/test_hourly_btcusdt_1h_spot_taker_push_reversal.py
+git commit -m "feat(hourly): Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low signal (frozen rule, stdlib math)"
 ```
 
 ---
@@ -721,7 +721,7 @@ async def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return _db
 
 
-async def _record(strategy_id: str = "hourly_mean_reversion", side: str | None = "Down",
+async def _record(strategy_id: str = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", side: str | None = "Down",
                   late: bool = False, start: int = H, slug: str = SLUG) -> bool:
     return await ledger.record_decision(
         strategy_id=strategy_id, window_slug=slug, window_start_ts=start, side=side,
@@ -735,32 +735,32 @@ async def _record(strategy_id: str = "hourly_mean_reversion", side: str | None =
 async def test_record_is_idempotent_per_hour_and_strategy(test_db) -> None:
     assert await _record() is True
     assert await _record() is False
-    assert await _record(strategy_id="kronos_btc_finetune", side=None) is True
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert await _record(strategy_id="kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price", side=None) is True
+    row = await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     assert row["action"] == "PENDING" and row["decision_side"] == "Down"
     assert json.loads(row["signal_json"]) == {"spot_fz": 2.5}
-    assert (await ledger.get_decision(SLUG, "kronos_btc_finetune"))["action"] == "NO_SIGNAL"
+    assert (await ledger.get_decision(SLUG, "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"))["action"] == "NO_SIGNAL"
 
 
 @pytest.mark.asyncio
 async def test_late_signal_is_recorded_missed(test_db) -> None:
     await _record(late=True)
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
 async def test_set_action_and_settle_every_strategy_row(test_db) -> None:
     await _record()
-    await _record(strategy_id="kronos_btc_finetune", side=None)
-    await ledger.set_action(SLUG, "hourly_mean_reversion", "ENTERED", position_id=7)
+    await _record(strategy_id="kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price", side=None)
+    await ledger.set_action(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "ENTERED", position_id=7)
     assert await ledger.unsettled_windows(H + 3599) == []
     assert await ledger.unsettled_windows(H + 3600) == [H]
     await ledger.settle_window(H, 77000.0, 76900.0)
-    for sid in ("hourly_mean_reversion", "kronos_btc_finetune"):
+    for sid in ("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"):
         row = await ledger.get_decision(SLUG, sid)
         assert row["outcome_side"] == "Down" and row["hour_close"] == 76900.0
         assert row["settled_at"] is not None
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["position_id"] == 7
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["position_id"] == 7
     assert await ledger.unsettled_windows(H + 7200) == []
 
 
@@ -990,7 +990,7 @@ async def test_five_minute_paths_ignore_hourly_rows(test_db, monkeypatch):
             " notional_usd, shares, quote_source, strategy_style, strategy_id,"
             " market_timeframe, window_start_ts)"
             " VALUES (?, 'bitcoin-up-or-down-september-13-2026-3pm-et', 'Down', 'open',"
-            " 0.5, 2.5, 5.0, 'clob', 'settle', 'hourly_mean_reversion', '1h', 1789326000)",
+            " 0.5, 2.5, 5.0, 'clob', 'settle', 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', 1789326000)",
             (snap.created_at,),
         )
         await db.commit()
@@ -1115,8 +1115,8 @@ git commit -m "fix(paper): settled paper closes net of the entry taker fee; 5m p
 # Strategy slots: one open position per strategy (operator decision 2026-09-14)
 # ---------------------------------------------------------------------------
 
-MR = "hourly_mean_reversion"
-KR = "kronos_btc_finetune"
+MR = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+KR = "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"
 HSLUG = "bitcoin-up-or-down-september-13-2026-3pm-et"
 
 
@@ -1480,8 +1480,8 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
 - Produces in `paper.py`: `_executor_for(pos: dict) -> LiveExecutor | None`.
 - Produces:
   - `TIMEFRAME = "1h"`
-  - `STRATEGIES: tuple[tuple[str, str], ...] = (("hourly_mean_reversion", "hourly_mean_reversion_enabled"),)`
-  - knobs `hourly_mean_reversion_enabled` (bool, default True) and `hourly_entry_deadline_seconds` (int, default 120, 10–1800)
+  - `STRATEGIES: tuple[tuple[str, str], ...] = (("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "hourly_btcusdt_1h_spot_taker_push_reversal_enabled"),)`
+  - knobs `hourly_btcusdt_1h_spot_taker_push_reversal_enabled` (bool, default True) and `hourly_entry_deadline_seconds` (int, default 120, 10–1800)
   - `SUBMITTING`, `UNCERTAIN_PREFIX`, `UNFINISHED_ATTEMPT` decision-record actions for an entry attempt (Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried)
   - `open_entries` links a `PENDING`/`SUBMITTING` hour to this strategy's same-hour position that is still open (both modes; open-only rule from a review by Claude session polymarket-crypto-95, 2026-09-16) as `ENTERED`, before the deadline check; in live only while `LiveExecutor.tracks_position` is true for the strategy's slot (Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed)
   - `reset_caches() -> None`
@@ -1495,9 +1495,9 @@ git commit -m "feat(live): one position slot per strategy on a shared client and
 
 ```python
     # --- Hourly BTC strategies (polymarket_bot/hourly/engine.py) -----------
-    "hourly_mean_reversion_enabled": Knob(
-        "runtime.hourly.mean_reversion_enabled", True, "bool",
-        "Hourly Mean Reversion enabled", group="Hourly BTC",
+    "hourly_btcusdt_1h_spot_taker_push_reversal_enabled": Knob(
+        "runtime.hourly.btcusdt_1h_spot_taker_push_reversal_enabled", True, "bool",
+        "BTCUSDT 1h spot taker push, perp unconfirmed, close at extreme: bet reversal (enabled)", group="Hourly BTC",
     ),
     "hourly_entry_deadline_seconds": Knob(
         "runtime.hourly.entry_deadline_seconds", 120, "int",
@@ -1621,9 +1621,9 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
     assert len(pos) == 1
     p = pos[0]
     assert (p["side"], p["strategy_id"], p["market_timeframe"], p["window_start_ts"]) == (
-        "Down", "hourly_mean_reversion", "1h", H)
+        "Down", "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "1h", H)
     assert p["entry_price"] == 0.52 and p["shares"] == 5.0 and p["mode"] == "paper"
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    row = await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     assert row["action"] == "ENTERED" and row["position_id"] == p["position_id"]
 
     venue.end_hour = H + 3600
@@ -1631,7 +1631,7 @@ async def test_signal_enters_once_on_its_own_slot_and_settles_net_of_fee(test_db
     closed = (await _positions())[0]
     assert closed["state"] == "closed" and closed["exit_price"] == 1.0
     assert closed["realized_pnl_usd"] == pytest.approx(5 * (1 - 0.52) - 5 * 0.07 * 0.52 * 0.48)
-    settled = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    settled = await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     assert settled["outcome_side"] == "Down" and settled["hour_close"] == 109.0
 
 
@@ -1641,20 +1641,20 @@ async def test_other_strategy_slot_does_not_block_but_own_slot_does(test_db, mon
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, 'Up', 'open', 0.5, 2.5, 5, 'kronos_btc_finetune', '1h', ?, 'paper')",
+            " VALUES ('x', ?, 'Up', 'open', 0.5, 2.5, 5, 'kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price', '1h', ?, 'paper')",
             (SLUG, H),
         )
         await conn.commit()
     await _tick(monkeypatch, H + 30, _Venue())
     sids = sorted(p["strategy_id"] for p in await _positions() if p["state"] == "open")
-    assert sids == ["hourly_mean_reversion", "kronos_btc_finetune"]
+    assert sids == ["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", "kronos_lc2004_btcusdt_1h_finetune_up_chance_vs_polymarket_price"]
 
 
 @pytest.mark.asyncio
 async def test_after_deadline_signal_is_missed_and_no_entry(test_db, monkeypatch):
     await _tick(monkeypatch, H + 121, _Venue())
     assert await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "MISSED"
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["action"] == "MISSED"
 
 
 @pytest.mark.asyncio
@@ -1666,7 +1666,7 @@ async def test_gate_block_is_recorded_once_and_journaled(test_db, monkeypatch):
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     assert await _positions() == []
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    row = await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     assert row["action"] == "BLOCKED:daily loss halt: test"
     async with _db.connect() as conn:
         cur = await conn.execute("SELECT COUNT(*) AS n FROM live_orders WHERE status='BLOCKED'")
@@ -1675,13 +1675,13 @@ async def test_gate_block_is_recorded_once_and_journaled(test_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disabled_strategy_records_nothing_and_kill_holds_entries(test_db, monkeypatch):
-    await _knobs.set("hourly_mean_reversion_enabled", False)
+    await _knobs.set("hourly_btcusdt_1h_spot_taker_push_reversal_enabled", False)
     await _tick(monkeypatch, H + 30, _Venue())
-    assert await ledger.get_decision(SLUG, "hourly_mean_reversion") is None
-    await _knobs.set("hourly_mean_reversion_enabled", True)
+    assert await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal") is None
+    await _knobs.set("hourly_btcusdt_1h_spot_taker_push_reversal_enabled", True)
     await _tick(monkeypatch, H + 31, _Venue(), allow=False)
     assert await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["action"] == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -1702,7 +1702,7 @@ async def test_waits_until_previous_hour_is_closed(test_db, monkeypatch):
     venue = _Venue()
     venue.end_hour = H - 3600  # Binance hasn't produced a closed H-1 candle yet
     await _tick(monkeypatch, H + 2, venue)
-    assert await ledger.get_decision(SLUG, "hourly_mean_reversion") is None
+    assert await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal") is None
 
 
 # --- Live mode: the same decision, routed through the strategy's live slot ---------
@@ -1751,7 +1751,7 @@ async def _insert_hourly(start: int, mode: str, side: str = "Down") -> None:
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, ?, 'open', 0.5, 2.5, 5, 'hourly_mean_reversion', '1h', ?, ?)",
+            " VALUES ('x', ?, ?, 'open', 0.5, 2.5, 5, 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', ?, ?)",
             (hm.slug_for(start), side, start, mode),
         )
         await conn.commit()
@@ -1762,14 +1762,14 @@ async def test_live_entry_uses_the_strategy_slot_and_settles_through_it(test_db,
     account = await _go_live(monkeypatch)
     venue = _Venue(hour_close=109.0)
     await _tick(monkeypatch, H + 30, venue)
-    slot = account.slots["hourly_mean_reversion"]
+    slot = account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"]
     slot.resync_flat.assert_awaited_once()
     slot.submit_entry.assert_awaited_once_with(
         token_id=f"down-{H}", side_price=0.52, notional_usd=pytest.approx(2.6), window_slug=SLUG)
     p = (await _positions())[0]
     assert (p["mode"], p["strategy_id"], p["entry_price"], p["shares"]) == (
-        "live", "hourly_mean_reversion", 0.52, 5.0)
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["mode"] == "live"
+        "live", "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", 0.52, 5.0)
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["mode"] == "live"
 
     venue.end_hour = H + 3600
     await _tick(monkeypatch, H + 3600 + 20, venue)
@@ -1785,8 +1785,8 @@ async def test_live_blocked_entry_is_recorded_once_and_leaves_no_row(test_db, mo
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
     assert await _positions() == []
-    assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
-    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry.await_count == 1
+    row = await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     assert row["action"] == "BLOCKED:daily loss halt: test"
 
 
@@ -1799,11 +1799,11 @@ async def test_live_order_error_ends_the_hour_as_uncertain_without_a_second_post
     account = await _go_live(monkeypatch, LiveOrderResult(ok=False, status="ERROR", reason="venue"))
     await _tick(monkeypatch, H + 30, _Venue())
     await _tick(monkeypatch, H + 40, _Venue())
-    submit = account.slots["hourly_mean_reversion"].submit_entry
+    submit = account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].submit_entry
     assert submit.await_count == 1 and await _positions() == []
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:ERROR venue"
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["action"] == "UNCERTAIN:ERROR venue"
     await _tick(monkeypatch, H + 121, _Venue())
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "UNCERTAIN:ERROR venue"
+    assert (await ledger.get_decision(SLUG, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"))["action"] == "UNCERTAIN:ERROR venue"
     assert submit.await_count == 1
 
 
@@ -1824,7 +1824,7 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     row = [r for r in await _positions() if r["mode"] == "paper"][0]
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
-    account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+    account.slots["btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"].record_settlement.assert_not_awaited()
 ```
 
 - [ ] **Step 3: Run them to verify they fail**
@@ -1852,7 +1852,7 @@ import httpx
 from db import journal_live_order, notify
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
-from polymarket_bot.hourly import ledger, market, mean_reversion
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal, ledger, market
 from polymarket_bot.hourly.market import HOUR_S, HourMarket
 from polymarket_exec.execution.gate import EntryRequest
 from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
@@ -1864,11 +1864,11 @@ log = get_logger("hourly_engine")
 
 TIMEFRAME = "1h"
 _ET = ZoneInfo("America/New_York")
-_CANDLES = mean_reversion.WINDOW + 2
+_CANDLES = btcusdt_1h_spot_taker_push_reversal.WINDOW + 2
 
-# (strategy_id, enable knob). Kronos BTC Fine Tune joins in PR 2.
+# (strategy_id, enable knob). Kronos BTCUSDT 1h fine-tune (Hugging Face lc2004): next-hour Up chance vs Polymarket price joins in PR 2.
 STRATEGIES: tuple[tuple[str, str], ...] = (
-    (mean_reversion.STRATEGY_ID, "hourly_mean_reversion_enabled"),
+    (btcusdt_1h_spot_taker_push_reversal.STRATEGY_ID, "hourly_btcusdt_1h_spot_taker_push_reversal_enabled"),
 )
 
 # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
@@ -1989,7 +1989,7 @@ async def decide_hour(
     )
     prev_ms = (start - HOUR_S) * 1000
     if not (
-        len(spot) >= mean_reversion.WINDOW and len(perp) >= mean_reversion.WINDOW
+        len(spot) >= btcusdt_1h_spot_taker_push_reversal.WINDOW and len(perp) >= btcusdt_1h_spot_taker_push_reversal.WINDOW
         and spot[-1].open_time_ms == prev_ms and perp[-1].open_time_ms == prev_ms
     ):
         log.info("hourly_engine.waiting_for_previous_hour", window_slug=snapshot.window_slug)
@@ -1997,8 +1997,8 @@ async def decide_hour(
     late = now - start > _knobs.cached("hourly_entry_deadline_seconds")
     mode = "live" if P._live_executor is not None else "paper"
     for sid in pending:
-        if sid == mean_reversion.STRATEGY_ID:
-            d = mean_reversion.decide(spot, perp)
+        if sid == btcusdt_1h_spot_taker_push_reversal.STRATEGY_ID:
+            d = btcusdt_1h_spot_taker_push_reversal.decide(spot, perp)
         else:  # pragma: no cover - PR 2 adds Kronos
             continue
         await ledger.record_decision(
@@ -2405,7 +2405,7 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
         await conn.execute(
             "INSERT INTO paper_positions(opened_at, window_slug, side, state, entry_price,"
             " notional_usd, shares, strategy_id, market_timeframe, window_start_ts, mode)"
-            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'hourly_mean_reversion', '1h', ?,"
+            " VALUES ('x', ?, 'Down', 'open', 0.52, 2.6, 5, 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', ?,"
             " 'live')",
             (SLUG, H),
         )
@@ -2424,7 +2424,7 @@ async def test_stop_in_live_sells_current_hour_rows_through_their_own_slot(
 
     assert await paper.force_close_open_positions("STOP_REQUEST") == 1
 
-    account.slot_executor.assert_called_with("hourly_mean_reversion")
+    account.slot_executor.assert_called_with("btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal")
     slot.submit_exit.assert_awaited_once_with(side_price=0.50, size=5.0, window_slug=SLUG)
     account.submit_exit.assert_not_called()
 
@@ -2802,7 +2802,7 @@ Agents still never flip the live gate, click LIVE or Start, or place live orders
 In `docs/CODE_MAP.md`, add under `"I want to change X → edit Y"` after the "Plug in a new strategy" row:
 
 ```markdown
-| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `mean_reversion.py` (Hourly Mean Reversion) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`); strategy doc `docs/strategies/hourly-btc-strategies.md` |
+| Hourly BTC strategies (decision, entries, settlement, per-hour record) | `polymarket_bot/hourly/engine.py` (tick) + `btcusdt_1h_spot_taker_push_reversal.py` (Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low) + `market.py` (discovery/Binance) + `ledger.py` (`hourly_strategy_context`); strategy doc `docs/strategies/hourly-btc-strategies.md` |
 ```
 
 - [ ] **Step 5: Regenerate docs and run every gate**
@@ -2821,7 +2821,7 @@ Expected: all tests pass, ruff `All checks passed!`, `--check` exits 0.
 Start the app from the worktree with an isolated DB and no `.env`, using a preview config that sets `PYTHON_DOTENV_DISABLED=1 BOT_MODE=paper DATA_DIR=<scratch> DB_PATH=<scratch>/smoke.db DASHBOARD_SERVER_PORT=7872`. Then:
 1. Select **BTC 1h** in the header and press **Start**.
 2. Within one tick, `paper_ticks` has a row whose `window_slug` is the current `bitcoin-up-or-down-…-et` slug, with a book and a reference price.
-3. `hourly_strategy_context` has a row for `hourly_mean_reversion` for the current hour once H-1 is closed.
+3. `hourly_strategy_context` has a row for `btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal` for the current hour once H-1 is closed.
 4. Press Stop. Do **not** click LIVE: live behaviour is covered by the mocked-client tests in Tasks 5–7, and agents never arm live.
 5. Stop the smoke app and remove the preview config entry.
 

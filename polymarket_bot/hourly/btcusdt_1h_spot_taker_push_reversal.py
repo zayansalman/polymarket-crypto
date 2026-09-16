@@ -1,9 +1,23 @@
-"""Hourly Mean Reversion: fade an hour pushed by aggressive spot flow that perps did not confirm.
+"""Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low.
 
-Bet against hour H-1 when all hold (thresholds frozen from 2023-10..2025-10 discovery data):
-spot flow push > 1.20, perp flow push <= 1.24, and H-1 closed beyond +-0.80 of its range in
-the direction it moved. Flow push = z-score of the taker-buy imbalance against the trailing
-168 hours (sample stdev, including H-1) times the sign of H-1's move.
+Calculated from hour H-1's Binance spot and USD-M perp BTCUSDT 1h candles, at the open of hour H:
+- imbalance = 2 * taker_buy_volume / volume - 1
+- z = (imbalance - mean) / sample stdev, over the 168 hours ending at and including H-1
+- flow push = z * sign(close - open), for spot and perp separately
+- close location = (2 * close - high - low) / (high - low), on spot
+
+Bet against H-1 (Down after an up hour, Up after a down hour) when spot flow push > 1.20,
+perp flow push <= 1.24 and close location * direction > 0.80.
+
+Sources (full table: docs/strategies/hourly-btc-strategies.md; evidence:
+research/hourly_btc_2026_09/):
+- skip hours without an extra signal: Zayan (operator), 2026-09-14;
+- taker order flow as that signal: proposed by Claude, 2026-09-14, citing Kitron & Wengrowicz,
+  arXiv 2608.21888; approved by Zayan (operator), 2026-09-14;
+- the formulas, the perp and close-location conditions and the thresholds: Claude,
+  2026-09-14, pre-registered in PREREG_orderflow.md, PREREG_perp_selective.md and
+  PREREG_minute.md (rule R5); close location as in Marc Chaikin's Accumulation/Distribution;
+- name: Zayan (operator), 2026-09-15.
 """
 from __future__ import annotations
 
@@ -13,7 +27,10 @@ from typing import Any
 
 from polymarket_bot.hourly.market import Candle
 
-STRATEGY_ID = "hourly_mean_reversion"
+STRATEGY_ID = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+# Frozen values (Claude, 2026-09-14): 168-hour window from PREREG_orderflow.md; 1.20 and 1.24
+# are the 80th percentiles of spot and perp flow push on the discovery data (Binance
+# 2023-10-12 to 2025-10-18 14:00 UTC); 0.80 was fixed in PREREG_minute.md before its test ran.
 WINDOW = 168
 SPOT_FZ_MIN = 1.20
 PERP_FZ_MAX = 1.24

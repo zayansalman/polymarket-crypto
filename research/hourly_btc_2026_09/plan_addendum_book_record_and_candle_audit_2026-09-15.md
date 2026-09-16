@@ -7,7 +7,7 @@ Source: alphaXiv literature sweep of 21 papers (2604.24366, 2606.19517, 2608.253
 
 ### Task 9: Hourly book record through the entry window, with a spot-based fair value
 
-**Why:** only our own data can answer whether Polymarket's price at the hour open already leans against the last hour. Hourly Mean Reversion stops paying at a 57.3% hit rate once the side it buys costs about 55.6c including the fee. The record covers every hour the hourly loop runs, bet or no bet.
+**Why:** only our own data can answer whether Polymarket's price at the hour open already leans against the last hour. Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low stops paying at a 57.3% hit rate once the side it buys costs about 55.6c including the fee. The record covers every hour the hourly loop runs, bet or no bet.
 
 **Files:**
 - Create: `polymarket_bot/hourly/book_record.py`
@@ -81,14 +81,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_window_offset
 
 ### Task 10: Save the candles each decision used and audit them against Binance's archive
 
-**Why:** Hourly Mean Reversion's cut-offs are sharp; a slightly different taker-buy volume on a just-closed candle can flip a bet. Point-in-time audits (2608.25348) found one-bar timing slips turned every skilled run into a loser. The audit is observation only.
+**Why:** Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low's cut-offs are sharp; a slightly different taker-buy volume on a just-closed candle can flip a bet. Point-in-time audits (2608.25348) found one-bar timing slips turned every skilled run into a loser. The audit is observation only.
 
 **Files:**
-- Modify: `polymarket_bot/hourly/mean_reversion.py` (`FlowPush` gains `window_mean`, `window_sd`, `window_n`; `decide` records the H-1 rows and window stats in `signal`)
+- Modify: `polymarket_bot/hourly/btcusdt_1h_spot_taker_push_reversal.py` (`FlowPush` gains `window_mean`, `window_sd`, `window_n`; `decide` records the H-1 rows and window stats in `signal`)
 - Modify: `polymarket_bot/hourly/engine.py` (`decide_hour` adds `candles_fetched_at_ms` and `decided_at_ms` to the signal; `tick` calls the audit)
 - Modify: `db.py` (`hourly_strategy_context` CREATE TABLE gains `candle_audit TEXT`, `candle_audit_json TEXT`, `candle_audited_at TEXT` — the table has never shipped, so extend the CREATE statement; also add a `HOURLY_CONTEXT_COLUMN_MIGRATIONS` dict with the same three columns, applied in `init_db` like the others, so a dev DB created earlier on this branch upgrades)
 - Create: `polymarket_bot/hourly/candle_audit.py`
-- Test: `tests/unit/test_hourly_candle_audit.py`; extend `tests/unit/test_hourly_mean_reversion.py`
+- Test: `tests/unit/test_hourly_candle_audit.py`; extend `tests/unit/test_hourly_btcusdt_1h_spot_taker_push_reversal.py`
 
 **Signal additions (`decide`):**
 - `spot_h1`, `perp_h1`: dicts of the last candle used (`open_time_ms, open, high, low, close, volume, quote_volume, taker_buy_volume`).
@@ -103,10 +103,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_window_offset
 - `recheck(signal: dict, spot: Candle, perp: Candle, recorded_side: str | None) -> dict` (pure):
   - for each venue, swap the recorded H-1 imbalance `x` for the archive imbalance `x'` inside the recorded window stats exactly: `S = n·mean`, `Q = (n-1)·sd² + n·mean²`; `S' = S - x + x'`, `Q' = Q - x² + x'²`; `mean' = S'/n`; `sd' = sqrt((Q' - n·mean'²)/(n-1))`; `z' = (x' - mean')/sd'`;
   - direction, CLV and `fz'` from the archive spot candle; perp `fz'` uses the archive perp candle's own direction as `flow_push` does;
-  - apply the frozen rule (import the constants from `mean_reversion`) to get `side'`;
+  - apply the frozen rule (import the constants from `btcusdt_1h_spot_taker_push_reversal`) to get `side'`;
   - return `{"fields_differ": [<venue.field>…], "spot_fz": …, "perp_fz": …, "clv": …, "side": side', "recorded_side": recorded_side, "flipped": side' != recorded_side}`. Field comparison uses a relative tolerance of 1e-9.
 - `AUDIT_AFTER_S = 6 * 3600` after the end of the UTC day containing H-1; `GIVE_UP_AFTER_S = 7 * 86400` after that same day end.
-- `async audit_due(client, now: int) -> int` — audits at most **one UTC day** per call (≤ 2 archive requests) and retries a missing archive at most once per hour per day (module-level `dict[day, last_attempt_ts]`). Selects `hourly_mean_reversion` rows with `candle_audit IS NULL`; rows whose `signal_json` lacks `spot_h1` get `NO_CANDLES`; a 404 before give-up leaves the row NULL, after give-up sets `UNAVAILABLE`; otherwise `MATCH` (no field differs), `MISMATCH` (fields differ, same side) or `FLIPPED`. Writes `candle_audit`, `candle_audit_json` (the recheck dict) and `candle_audited_at`. `FLIPPED` also logs `hourly_candle_audit.flipped` at warning and calls `notify("hourly_candle_audit", …)`. Never raises: errors log `hourly_candle_audit.failed` and return 0. Returns rows written.
+- `async audit_due(client, now: int) -> int` — audits at most **one UTC day** per call (≤ 2 archive requests) and retries a missing archive at most once per hour per day (module-level `dict[day, last_attempt_ts]`). Selects `btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal` rows with `candle_audit IS NULL`; rows whose `signal_json` lacks `spot_h1` get `NO_CANDLES`; a 404 before give-up leaves the row NULL, after give-up sets `UNAVAILABLE`; otherwise `MATCH` (no field differs), `MISMATCH` (fields differ, same side) or `FLIPPED`. Writes `candle_audit`, `candle_audit_json` (the recheck dict) and `candle_audited_at`. `FLIPPED` also logs `hourly_candle_audit.flipped` at warning and calls `notify("hourly_candle_audit", …)`. Never raises: errors log `hourly_candle_audit.failed` and return 0. Returns rows written.
 
 **Engine wiring:** at the end of `tick`, before `_log_tick`: `await candle_audit.audit_due(client, now)`.
 
@@ -133,7 +133,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_window_offset
    - strict paper fill rule for resting orders: fill for certain only when the best ask drops below our price or a trade prints below it; fill at exactly our price only after volume traded there since posting exceeds the queue ahead plus our size; never fill on a touch; track the lowest ask and trades between polls;
    - refresh a book older than a few seconds before sending and log its age;
    - store the fee (and any maker rebate) actually charged per fill; check Polymarket's current fee/rebate rules for the hourly BTC market;
-   - optional operator setting: a limit-price cap per strategy so a swept ask is never paid above its measured break-even (about 55.6c for Hourly Mean Reversion at 57.3%);
+   - optional operator setting: a limit-price cap per strategy so a swept ask is never paid above its measured break-even (about 55.6c for Binance BTCUSDT 1h reversal after a spot taker-buy/sell push that perps didn't match, with the hour closing at its high or low at 57.3%);
    - why: resting fills are adverse-selected (2407.16527: about a third never fill, mostly the favourable ones; 2409.12721: 66–89% of simple resting fills adverse); at 57.3% a bid 1c better only beats paying the ask if at least ~65% of signals fill even with no adverse selection.
 4. This plan's roadmap: add the same requirements under PR 3 (order style), and under PR 4 (results panel): 95% ranges on hit rate, break-even lines from prices actually paid, hit rate minus average all-in price, baselines on the same hours (always Up; always the side above 50c), and a count of every filter/factor ever tried shown beside any factor split — observation only, never a gate.
 

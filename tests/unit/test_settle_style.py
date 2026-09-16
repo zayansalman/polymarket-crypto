@@ -432,7 +432,7 @@ async def test_five_minute_paths_ignore_hourly_rows(test_db, monkeypatch):
             " notional_usd, shares, quote_source, strategy_style, strategy_id,"
             " market_timeframe, window_start_ts)"
             " VALUES (?, 'bitcoin-up-or-down-september-13-2026-3pm-et', 'Down', 'open',"
-            " 0.5, 2.5, 5.0, 'clob', 'settle', 'hourly_mean_reversion', '1h', 1789326000)",
+            " 0.5, 2.5, 5.0, 'clob', 'settle', 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', 1789326000)",
             (snap.created_at,),
         )
         await db.commit()
@@ -454,7 +454,7 @@ async def test_hourly_row_does_not_hold_the_five_minute_slot(test_db, monkeypatc
             " notional_usd, shares, quote_source, strategy_style, strategy_id,"
             " market_timeframe, window_start_ts)"
             " VALUES (?, 'bitcoin-up-or-down-september-13-2026-3pm-et', 'Down', 'open',"
-            " 0.5, 2.5, 5.0, 'clob', 'settle', 'hourly_mean_reversion', '1h', 1789326000)",
+            " 0.5, 2.5, 5.0, 'clob', 'settle', 'btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal', '1h', 1789326000)",
             (snap.created_at,),
         )
         await db.commit()

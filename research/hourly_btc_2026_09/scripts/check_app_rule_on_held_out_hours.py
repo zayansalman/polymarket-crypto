@@ -17,7 +17,7 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from polymarket_bot.hourly import mean_reversion as rule  # noqa: E402
+from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as rule  # noqa: E402
 from polymarket_bot.hourly.market import Candle  # noqa: E402
 
 DATA = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "data"
