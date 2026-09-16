@@ -57,4 +57,6 @@ Recreation check: `outputs/recreated_timing_check.csv` holds three hours whose l
 | 2 | 3% | 3% |
 | 3 | 93% | 100% |
 
-With 30 paths, differences of about ±9 points are expected. A 280-hour check is in `outputs/recreated_every_25h.csv`. Each forecast takes about 7-10 s of CPU on the operator's M2.
+With 30 paths, differences of about ±9 points are expected.
+
+Wider check (`scripts/compare_recreated_with_published.py`, output `outputs/recreated_vs_published.txt`): 267 hours spread over the whole Kronos-mini era, one every 25 hours. Inputs were identical for all 267. Correlation with the published numbers was 0.896, the mean gap -0.001 and the mean absolute gap 0.086. 13 of 267 gaps (4.9%) were beyond two sampling standard errors, which is what sampling alone predicts (about 5%). The recreation reproduces the published forecast. The median run was 8.8 s of CPU on the operator's M2.
