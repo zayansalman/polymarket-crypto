@@ -1069,3 +1069,17 @@ async def test_tick_records_the_opening_book_once_per_offset(test_db, monkeypatc
             "SELECT window_start_ts, offset_s, up_best_ask, down_best_ask FROM hourly_book_snapshots")
         rows = [tuple(r) for r in await cur.fetchall()]
     assert rows == [(H, 0, 0.52, 0.52)]
+
+
+@pytest.mark.asyncio
+async def test_decision_saves_the_candles_and_times_the_audit_needs(test_db, monkeypatch):
+    """Candle audit inputs (approved by Zayan (operator), 2026-09-15)."""
+    await _tick(monkeypatch, H + 30, _Venue())
+    row = await ledger.get_decision(
+        H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
+    signal = json.loads(row["signal_json"])
+    assert signal["decided_at_ms"] == (H + 30) * 1000
+    assert signal["candles_fetched_at_ms"] > 0
+    assert signal["spot_h1"]["open_time_ms"] == (H - 3600) * 1000
+    assert signal["perp_h1"]["open_time_ms"] == (H - 3600) * 1000
+    assert row["candle_audit"] is None  # the archive for that day is not due yet

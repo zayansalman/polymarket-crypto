@@ -44,6 +44,11 @@ class FlowPush:
     direction: int
     fz: float | None
     clv: float | None
+    # Window statistics behind z, saved so the candle audit can recheck the decision
+    # (candle audit approved by Zayan (operator), 2026-09-15).
+    window_n: int = WINDOW
+    window_mean: float | None = None
+    window_sd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -65,10 +70,13 @@ def flow_push(candles: list[Candle]) -> FlowPush:
     last = window[-1]
     imbs = [_imbalance(c) for c in window]
     z: float | None = None
+    mean: float | None = None
+    sd: float | None = None
     if all(i is not None for i in imbs):
+        mean = statistics.mean(imbs)
         sd = statistics.stdev(imbs)
         if sd > 0:
-            z = (imbs[-1] - statistics.mean(imbs)) / sd
+            z = (imbs[-1] - mean) / sd
     direction = 1 if last.close > last.open else (-1 if last.close < last.open else 0)
     rng = last.high - last.low
     clv = (2 * last.close - last.high - last.low) / rng if rng > 0 else None
@@ -78,7 +86,18 @@ def flow_push(candles: list[Candle]) -> FlowPush:
         direction=direction,
         fz=z * direction if z is not None else None,
         clv=clv,
+        window_n=len(window),
+        window_mean=mean,
+        window_sd=sd,
     )
+
+
+def _candle_fields(c: Candle) -> dict[str, Any]:
+    return {
+        "open_time_ms": c.open_time_ms, "open": c.open, "high": c.high, "low": c.low,
+        "close": c.close, "volume": c.volume, "quote_volume": c.quote_volume,
+        "taker_buy_volume": c.taker_buy_volume,
+    }
 
 
 def decide(spot: list[Candle], perp: list[Candle]) -> Decision:
@@ -94,6 +113,11 @@ def decide(spot: list[Candle], perp: list[Candle]) -> Decision:
         "direction": s.direction,
         "wider_rule_fired": s.fz is not None and s.fz > SPOT_FZ_MIN,
         "hour_open_time_ms": spot[-1].open_time_ms,
+        # The exact inputs, for the candle audit against Binance's archive.
+        "spot_h1": _candle_fields(spot[-1]),
+        "perp_h1": _candle_fields(perp[-1]),
+        "spot_window": {"n": s.window_n, "mean": s.window_mean, "sd": s.window_sd},
+        "perp_window": {"n": p.window_n, "mean": p.window_mean, "sd": p.window_sd},
     }
     if s.direction == 0:
         return Decision(None, "no signal: last hour was flat", signal)

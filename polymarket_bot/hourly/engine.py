@@ -6,6 +6,7 @@ entry. Each strategy owns one open-position slot (operator decision 2026-09-14).
 """
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -16,7 +17,7 @@ from db import journal_live_order, notify
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot.hourly import btcusdt_1h_spot_taker_push_reversal as spot_taker_push_rule
-from polymarket_bot.hourly import book_record, ledger, market
+from polymarket_bot.hourly import book_record, candle_audit, ledger, market
 from polymarket_bot.hourly.market import HOUR_S, HourMarket
 from polymarket_exec.execution.gate import EntryRequest
 from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
@@ -53,6 +54,7 @@ def reset_caches() -> None:
     _market_cache.clear()
     _open_cache.clear()
     book_record.reset_caches()
+    candle_audit.reset_state()
 
 
 async def _market_for(client: httpx.AsyncClient, start_ts: int) -> HourMarket:
@@ -158,6 +160,7 @@ async def decide_hour(
     perp = await market.fetch_closed_candles(
         client, market="perp", symbol="BTCUSDT", now_ms=now_ms, limit=_CANDLES
     )
+    candles_fetched_at_ms = int(time.time() * 1000)
     prev_ms = (start - HOUR_S) * 1000
     if not (
         len(spot) >= spot_taker_push_rule.WINDOW
@@ -172,6 +175,9 @@ async def decide_hour(
             d = spot_taker_push_rule.decide(spot, perp)
         else:  # pragma: no cover - PR 2 adds Kronos
             continue
+        # When the candles were read and which tick decided, for the candle audit.
+        d.signal["candles_fetched_at_ms"] = candles_fetched_at_ms
+        d.signal["decided_at_ms"] = now_ms
         await ledger.record_decision(
             strategy_id=sid, window_slug=snapshot.window_slug, window_start_ts=start,
             side=d.side, reason=d.reason, signal=d.signal, factors=_factors(start),
@@ -515,6 +521,9 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     for sid in list(rows):
         rows[sid] = await ledger.get_decision(start, sid, mode=mode) or rows[sid]
     snapshot.reason = _reason_line(rows)
+    # Candle audit of earlier decisions once Binance publishes the day's archive (observation
+    # only; approved by Zayan (operator), 2026-09-15). At most one archive day per tick.
+    await candle_audit.audit_due(client, now)
     entered = [r for r in rows.values() if r.get("action") == "ENTERED"]
     if entered:
         snapshot.signal_side = entered[0].get("decision_side")

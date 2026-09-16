@@ -203,7 +203,10 @@ CREATE TABLE IF NOT EXISTS hourly_strategy_context (
   mode TEXT NOT NULL,
   hour_close REAL,
   outcome_side TEXT,
-  settled_at TEXT
+  settled_at TEXT,
+  candle_audit TEXT,
+  candle_audit_json TEXT,
+  candle_audited_at TEXT
 );
 -- Keyed by the hour's UTC start, not its slug: on the November fall-back day two UTC hours
 -- share one ET-labelled slug (Claude, 2026-09-15, branch-review finding
@@ -252,6 +255,14 @@ CREATE TABLE IF NOT EXISTS hourly_book_snapshots (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hourly_book_start_offset
   ON hourly_book_snapshots(window_start_ts, offset_s);
 """
+
+# Candle audit of hourly decisions (approved by Zayan (operator), 2026-09-15). The table is
+# new on this branch; this upgrades a database created by an earlier build of it.
+HOURLY_CONTEXT_COLUMN_MIGRATIONS = {
+    "candle_audit": "TEXT",
+    "candle_audit_json": "TEXT",
+    "candle_audited_at": "TEXT",
+}
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
     "mode": "TEXT",
@@ -402,6 +413,9 @@ async def init_db() -> None:
         await _migrate_columns(db, "paper_positions", POSITION_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "paper_ticks", TICK_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "live_orders", LIVE_ORDERS_COLUMN_MIGRATIONS)
+        await _migrate_columns(
+            db, "hourly_strategy_context", HOURLY_CONTEXT_COLUMN_MIGRATIONS
+        )
         await _migrate_columns(
             db, "model_shadow_positions", SHADOW_COLUMN_MIGRATIONS
         )
