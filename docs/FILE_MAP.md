@@ -6,10 +6,10 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 29 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 30 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
 | `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 12 | Structured JSON logging with structlog. Module + trade_id context. |
+| `logging_setup.py` | WIRED | 13 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -21,6 +21,9 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/scanner.py` | WIRED | 1 | The daily altcoin scanner's tick loop (issue #185). |
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
+| `polymarket_bot/daily_btc/__init__.py` | pkg | 0 | Daily (noon-ET) BTC Up/Down markets: window timing, discovery, Binance reads, strategies. |
+| `polymarket_bot/daily_btc/fade_three_day.py` | DEAD? | 0 | Fade the 3-day direction: bet the daily BTC market against BTC's last 3 days. |
+| `polymarket_bot/daily_btc/market.py` | DEAD? | 0 | Daily BTC Up/Down market: noon-ET window timing, Gamma discovery, Binance reads. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
 | `polymarket_bot/hourly/__init__.py` | pkg | 2 | Hourly BTC Up/Down strategies: Hourly Mean Reversion and Kronos BTC Fine Tune. |
 | `polymarket_bot/hourly/engine.py` | WIRED | 1 | Hourly BTC engine: one decision per hour per strategy, per-strategy entries, Binance settlement. |
@@ -58,7 +61,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/connectors/chainlink_settlement.py` | WIRED | 1 | Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21). |
 | `polymarket_exec/connectors/polymarket.py` | DEAD? | 0 | Polymarket connector — discovers the current BTC 5-minute binary market window. |
 | `polymarket_exec/connectors/registry.py` | WIRED | 1 | Connector registry — manages the lifecycle and discovery of all connectors. |
-| `polymarket_exec/connectors/updown_quote.py` | WIRED | 3 | Live top-of-book quote for the current window of any crypto Up/Down market. |
+| `polymarket_exec/connectors/updown_quote.py` | WIRED | 4 | Live top-of-book quote for the current window of any crypto Up/Down market. |
 | `polymarket_exec/core/__init__.py` | pkg | 0 | Core domain types, interfaces, and exceptions. |
 | `polymarket_exec/core/exceptions.py` | WIRED | 4 | Custom exception hierarchy for the BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/core/interfaces.py` | WIRED | 10 | Abstract base classes for all pluggable system components. |
