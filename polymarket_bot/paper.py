@@ -537,6 +537,12 @@ async def paper_tick_once() -> PaperSnapshot:
     if _live_executor is not None:
         # Kill switch is checked every tick BEFORE any order can be placed.
         kill_active = await _live_executor.enforce_kill_switch()
+    elif _risk_gate is not None:
+        # Same kill decision in paper, so both modes hold entries (an hourly row stays
+        # PENDING, then ENTERED or MISSED) instead of paper recording a final BLOCKED.
+        # Live's cancel sweep above stays the only live-only side effect.
+        # Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending
+        kill_active = _risk_gate.kill_switch_active()
     # Re-read paper override toggles so dashboard changes take effect on the
     # very next tick without needing a Stop/Start. No-op in live mode.
     # The runtime per-trade cap (#50) is re-read for BOTH modes — it is a

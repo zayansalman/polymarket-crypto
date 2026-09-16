@@ -19,6 +19,7 @@ import config as _config
 import db as _db
 import polymarket_bot.controller as controller
 import polymarket_bot.paper as paper
+from polymarket_exec.execution.gate import build_gate_from_config
 from polymarket_exec.execution.live import LiveOrderResult
 
 
@@ -305,6 +306,30 @@ async def test_kill_switch_skips_new_entries_in_tick(
     executor.enforce_kill_switch.assert_awaited_once()
     executor.submit_entry.assert_not_awaited()
     assert await _open_positions(bot_db) == []
+
+
+@pytest.mark.asyncio
+async def test_paper_kill_file_skips_new_entries_in_tick_like_live(
+    bot_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending:
+    # paper holds entries under kill exactly as live does, with no BLOCKED journal row.
+    kill = tmp_path / "KILL"
+    kill.touch()
+    monkeypatch.setattr(_config, "KILL_SWITCH_PATH", kill)
+    gate = build_gate_from_config()
+    await gate.load()
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", gate)
+    monkeypatch.setattr(paper, "_timeframe", "5m")
+    monkeypatch.setattr(paper, "_build_snapshot", AsyncMock(return_value=_snapshot()))
+
+    await paper.paper_tick_once()
+
+    assert await _open_positions(bot_db) == []
+    async with bot_db.connect() as conn:
+        async with conn.execute("SELECT COUNT(*) AS n FROM live_orders") as cur:
+            assert (await cur.fetchone())["n"] == 0
 
 
 # ---------------------------------------------------------------------------

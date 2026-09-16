@@ -2520,6 +2520,8 @@ In `paper_tick_once`, replace the `async with _make_settlement_client() as clien
     return snapshot
 ```
 
+Decide `kill_active` the same way in both modes before this block. Live keeps `await _live_executor.enforce_kill_switch()` (its cancel sweep is the only live-only side effect); paper sets `kill_active = _risk_gate.kill_switch_active()`. Under kill, both modes hold the hourly row `PENDING`, enter if the file is removed before the entry deadline, and record `MISSED` if not. Paper no longer records a final `BLOCKED:KILL…` plus a `live_orders` row. (Claude, 2026-09-15, branch-review finding kill-switch-paper-blocked-live-pending)
+
 In `force_close_open_positions`, replace everything from `if not positions:` to the end of the function with:
 
 ```python
