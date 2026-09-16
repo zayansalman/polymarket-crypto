@@ -214,6 +214,7 @@ def _live_account(entry: LiveOrderResult | None = None) -> MagicMock:
     def slot_executor(strategy_id: str) -> MagicMock:
         if strategy_id not in slots:
             slot = MagicMock()
+            slot.tracks_position = False  # a test sets True when the slot holds a filled entry
             slot.resync_flat = AsyncMock(return_value=False)
             slot.submit_entry = AsyncMock(return_value=entry or LiveOrderResult(
                 ok=True, status="SUBMITTED", order_id="0xE", price=0.52, size=5.0,
@@ -258,16 +259,94 @@ async def _insert_hourly(start: int, mode: str, side: str = "Down") -> None:
 
 @pytest.mark.asyncio
 async def test_own_open_row_blocks_a_second_entry_in_paper_and_live(test_db, monkeypatch):
+    # The same-hour paper row is this hour's entry: the record links it (Claude, 2026-09-15,
+    # branch-review finding crash-after-entry-marks-missed) and nothing enters again.
     await _insert_hourly(H, "paper")
     await _tick(monkeypatch, H + 30, _Venue())
     assert len(await _positions()) == 1
-    assert (await ledger.get_decision(SLUG, "hourly_mean_reversion"))["action"] == "PENDING"
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("ENTERED", 1)
     await _insert_hourly(H, "live")
     account = await _go_live(monkeypatch)
     await _tick(monkeypatch, H + 40, _Venue())
     slot = account.slots.get("hourly_mean_reversion")
     assert slot is None or (slot.submit_entry.await_count == 0 and slot.resync_flat.await_count == 0)
     assert len(await _positions()) == 2
+
+
+@pytest.mark.asyncio
+async def test_previous_hour_open_row_holds_the_slot_and_the_hour_stays_pending(
+    test_db, monkeypatch
+):
+    monkeypatch.setattr(engine, "settle_due", AsyncMock())  # previous hour not settled yet
+    await _insert_hourly(H - 3600, "paper")
+    await _tick(monkeypatch, H + 30, _Venue())
+    assert len(await _positions()) == 1
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("PENDING", None)
+
+
+def _fail_the_first_entered_write(monkeypatch, exc: BaseException | None = None) -> None:
+    real = ledger.set_action
+    state = {"failed": False}
+
+    async def set_action(window_slug, strategy_id, action, position_id=None, **kwargs):
+        if action == "ENTERED" and not state["failed"]:
+            state["failed"] = True
+            raise exc or RuntimeError("database is locked")
+        return await real(window_slug, strategy_id, action, position_id, **kwargs)
+
+    monkeypatch.setattr(ledger, "set_action", set_action)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("next_tick", [H + 40, H + 130])  # before and after the deadline
+async def test_paper_entry_whose_entered_write_failed_is_linked_not_missed(
+    test_db, monkeypatch, next_tick
+):
+    _fail_the_first_entered_write(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await _tick(monkeypatch, H + 30, _Venue())
+    await _tick(monkeypatch, next_tick, _Venue())
+    await _tick(monkeypatch, H + 150, _Venue())
+    positions = await _positions()
+    assert len(positions) == 1
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("next_tick", [H + 40, H + 130])
+async def test_live_entry_whose_entered_write_failed_is_linked_not_missed(
+    test_db, monkeypatch, next_tick
+):
+    account = await _go_live(monkeypatch)
+    _fail_the_first_entered_write(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await _tick(monkeypatch, H + 30, _Venue())
+    slot = account.slots["hourly_mean_reversion"]
+    slot.tracks_position = True  # the slot holds the filled entry
+    await _tick(monkeypatch, next_tick, _Venue())
+    positions = await _positions()
+    assert len(positions) == 1 and positions[0]["mode"] == "live"
+    assert slot.submit_entry.await_count == 1
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
+
+
+@pytest.mark.asyncio
+async def test_live_row_the_slot_does_not_track_stays_an_unfinished_attempt(
+    test_db, monkeypatch
+):
+    account = await _go_live(monkeypatch)
+    _fail_the_first_entered_write(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await _tick(monkeypatch, H + 30, _Venue())
+    account.slots["hourly_mean_reversion"].tracks_position = False  # outcome unknown
+    await _tick(monkeypatch, H + 40, _Venue())
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert row["action"] == engine.UNFINISHED_ATTEMPT
+    assert account.slots["hourly_mean_reversion"].submit_entry.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -574,3 +653,28 @@ async def test_live_mode_settles_a_paper_row_paper_style(test_db, monkeypatch):
     assert row["state"] == "closed"
     assert row["realized_pnl_usd"] == pytest.approx(5 * 0.5 - 5 * 0.07 * 0.5 * 0.5)
     account.slots["hourly_mean_reversion"].record_settlement.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filled_live_entry_whose_record_was_lost_is_linked_after_restart(
+    test_db, monkeypatch, tmp_path
+):
+    """Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: the order
+    filled and was journaled, then the process died before ENTERED was written."""
+    client = _clob_client_whose_post_fills()
+    client.get_order.return_value = {"size_matched": "5", "price": "0.52"}
+    await _boot_live_executor(monkeypatch, client, tmp_path)
+    _fail_the_first_entered_write(monkeypatch, _ProcessDied())
+    with pytest.raises(_ProcessDied):
+        await _tick(monkeypatch, H + 30, _Venue())
+    assert client.create_and_post_order.call_count == 1
+
+    engine.reset_caches()  # restart: boot reconciliation adopts the filled entry
+    executor = await _boot_live_executor(monkeypatch, client, tmp_path)
+    assert executor.slot_executor("hourly_mean_reversion").tracks_position is True
+    await _tick(monkeypatch, H + 150, _Venue())  # past the 120 s entry deadline
+    positions = await _positions()
+    assert [(p["state"], p["mode"]) for p in positions] == [("open", "live")]
+    row = await ledger.get_decision(SLUG, "hourly_mean_reversion")
+    assert (row["action"], row["position_id"]) == ("ENTERED", positions[0]["position_id"])
+    assert client.create_and_post_order.call_count == 1

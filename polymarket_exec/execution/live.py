@@ -1187,6 +1187,16 @@ class LiveExecutor:
         self._exit_order_id = None
         self._exit_price = None
 
+    @property
+    def tracks_position(self) -> bool:
+        """True while this executor tracks an entry: a filled position or a resting order.
+
+        Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: the hourly
+        engine uses this to tell an entry that went through (the ledger write after it
+        failed) from an attempt whose outcome is unknown.
+        """
+        return self._position_open or self._entry_order_id is not None
+
     async def resync_flat(self) -> bool:
         """Heal stale in-memory open-state that a flat position ledger refutes.
 

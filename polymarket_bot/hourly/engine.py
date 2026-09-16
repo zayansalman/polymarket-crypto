@@ -188,6 +188,27 @@ async def _open_row_for(strategy_id: str, mode: str) -> bool:
             return bool((await cur.fetchone())["n"])
 
 
+async def _same_hour_position_id(strategy_id: str, start: int, mode: str) -> int | None:
+    """This strategy's position for this hour and mode, if the entry went through.
+
+    Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed. Rows closed by
+    boot reconciliation (RECONCILED_*) had nothing real behind them, so they don't count.
+    """
+    from polymarket_bot import paper as P
+
+    async with P.connect() as db:
+        async with db.execute(
+            "SELECT position_id FROM paper_positions "
+            "WHERE strategy_id = ? AND market_timeframe = ? AND window_start_ts = ? "
+            "AND mode = ? "
+            "AND (state = 'open' OR COALESCE(exit_reason, '') NOT LIKE 'RECONCILED_%') "
+            "ORDER BY position_id DESC LIMIT 1",
+            (strategy_id, TIMEFRAME, start, mode),
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row["position_id"]) if row else None
+
+
 async def _insert_row(
     snapshot: PaperSnapshot, *, strategy_id: str, side: str, price: float, notional: float,
     shares: float, start: int, reason: str | None, mode: str,
@@ -323,12 +344,34 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
 
 
 async def open_entries(snapshot: PaperSnapshot, now: int, *, allow_entries: bool) -> None:
+    from polymarket_bot import paper as P
+
     start = market.hour_start(now)
     deadline = _knobs.cached("hourly_entry_deadline_seconds")
+    executor = P._live_executor
+    mode = "live" if executor is not None else "paper"
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
         row = await ledger.get_decision(snapshot.window_slug, sid)
+        if row is not None and row["action"] in ("PENDING", SUBMITTING):
+            # Claude, 2026-09-15, branch-review finding crash-after-entry-marks-missed: the
+            # entry went through but the tick stopped before recording ENTERED (the ledger
+            # write failed, or the bot restarted and boot reconciliation adopted the fill).
+            # Link the hour to that position, before the deadline check, instead of
+            # recording MISSED or an unfinished attempt. Live also needs the strategy's
+            # slot to track the entry, so an order whose outcome is unknown still ends
+            # the hour as an unfinished attempt below.
+            position_id = await _same_hour_position_id(sid, start, mode)
+            if position_id is not None and (
+                executor is None or executor.slot_executor(sid).tracks_position
+            ):
+                await ledger.set_action(snapshot.window_slug, sid, "ENTERED", position_id,
+                                        expected_action=row["action"])
+                log.warning("hourly_engine.entry_linked_after_interrupted_tick",
+                            strategy_id=sid, position_id=position_id,
+                            previous_action=row["action"], window_slug=snapshot.window_slug)
+                continue
         if row is not None and row["action"] == SUBMITTING:
             # Claude, 2026-09-15, branch-review finding hourly-ambiguous-post-error-retried:
             # an earlier tick started an entry and never recorded its result (it raised,
