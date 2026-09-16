@@ -119,7 +119,10 @@ _URL_QUERY = re.compile(r"(https?://[^\s?#'\"<>]+)[?#][^\s'\"<>]*")
 
 
 def _detail(exc: Exception) -> str:
-    if isinstance(exc, _Unusable):
+    """Failure text for the card and logs: at most 200 chars, URL query strings dropped."""
+    if isinstance(exc, RetryAfter):
+        text = exc.detail
+    elif isinstance(exc, _Unusable):
         text = str(exc)
     elif isinstance(exc, httpx.RequestError):
         try:
@@ -272,7 +275,7 @@ class MacroRecorder:
         try:
             rows = int(await source.poll(client, now_ms))
         except RetryAfter as exc:
-            self._failed(source, previous, now, exc.detail[:200], exc.seconds, retry_after=True)
+            self._failed(source, previous, now, _detail(exc), exc.seconds, retry_after=True)
         except Exception as exc:  # noqa: BLE001 — every failure is a feed status
             self._failed(source, previous, now, _detail(exc), source.retry_s, retry_after=False)
         else:

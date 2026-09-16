@@ -224,6 +224,24 @@ async def test_retry_after_pushes_the_next_attempt_out() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_after_detail_drops_query_strings(test_db, monkeypatch) -> None:
+    log = _Log()
+    monkeypatch.setattr(mr, "log", log)
+    clock = _Clock()
+
+    async def keyed(client: httpx.AsyncClient, _now) -> int:
+        raise mr.RetryAfter(60, "HTTP 429 from https://api.example.com/flows?api_key=SECRET123")
+
+    rec = mr.MacroRecorder(sources=[mr.MacroSource("x:keyed", 3600.0, keyed)], time_fn=clock)
+    async with _client() as c:
+        await rec.record_once(c, clock.ms)
+    st = rec.snapshot().feeds["x:keyed"]
+    assert (st.ok, st.retry_after) == (False, True)
+    assert st.detail == "HTTP 429 from https://api.example.com/flows"
+    assert log.events == [("macro_recorder.feed_down", {"feed": "x:keyed", "error": st.detail})]
+
+
+@pytest.mark.asyncio
 async def test_record_once_never_raises_and_other_sources_still_run(test_db) -> None:
     clock = _Clock()
     rec = mr.MacroRecorder(
