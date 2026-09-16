@@ -36,8 +36,10 @@ async def record_decision(
     """INSERT OR IGNORE the window's decision; True iff this call wrote the row.
 
     The action is UNAVAILABLE when the forecast could not run; else MISSED when the decision
-    came after the entry deadline (the engine then skips the model, so there is no side);
-    else NO_SIGNAL without a side; else PENDING (Claude, 2026-09-16).
+    came after the entry deadline (no side when the engine skipped the model because the
+    window was already late; the model's side and signal are kept when the forecast itself
+    finished past the deadline); else NO_SIGNAL without a side; else PENDING
+    (Claude, 2026-09-16).
     """
     if not available:
         action = UNAVAILABLE
