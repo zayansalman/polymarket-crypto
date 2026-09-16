@@ -3,7 +3,9 @@
 Started from the dashboard lifespan (next to the flow recorder), so the macro calendar
 accrues whether or not the bot loop runs. Every ``tick_s`` it polls each source that is
 due: never tried, last success older than its cadence, or last failure older than its
-retry delay (a source may raise ``RetryAfter`` to wait longer, e.g. on HTTP 429).
+retry delay (a source may raise ``RetryAfter`` to wait longer, e.g. on HTTP 429). Each
+source's schedule is saved in the ``config`` table, so a restart neither re-polls every
+source at once nor ignores a pending rate-limit wait.
 
 PR 1 sources are release calendars (BLS, BEA, Census, Fed, ForexFactory week); later
 sources plug in as more ``MacroSource`` entries. Pure observation data for the hourly
@@ -13,13 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from email.utils import parsedate_to_datetime
 from functools import partial
+from typing import Any
 
 import httpx
 
@@ -48,6 +52,9 @@ MAX_RETRY_S = 900.0
 SOURCE_DEADLINE_S = 120.0
 # ForexFactory's feed rate-limits hard; never try it again sooner than this.
 FF_MIN_RETRY_S = 300.0
+# A wait carried over a restart never runs past this (or one cadence) from now, so a bad
+# saved value or a clock jump cannot silence a source for good.
+MAX_CARRIED_WAIT_S = 86_400.0
 
 BLS_SCHEDULE = "bls:schedule"
 BEA_SCHEDULE = "bea:schedule"
@@ -94,6 +101,32 @@ class MacroSnapshot:
     started_at: float
     tick_s: float
     feeds: dict[str, MacroFeedStatus]
+
+
+def _saved_time(value: Any) -> float | None:
+    if value is None:
+        return None
+    t = float(value)
+    if not math.isfinite(t):
+        raise ValueError("saved time is not finite")
+    return t
+
+
+def _status_from_state(cadence_s: float, state: Any) -> MacroFeedStatus:
+    """A status as saved by ``MacroRecorder``; raises on anything malformed."""
+    ok, rows, detail = state["ok"], state["rows"], state["detail"]
+    if ok is not None and not isinstance(ok, bool):
+        raise TypeError("saved ok is not a bool")
+    return MacroFeedStatus(
+        cadence_s,
+        ok,
+        _saved_time(state["last_ok_at"]),
+        _saved_time(state["last_attempt_at"]),
+        _saved_time(state["next_attempt_at"]),
+        None if rows is None else int(rows),
+        None if detail is None else str(detail),
+        bool(state["retry_after"]),
+    )
 
 
 class RetryAfter(Exception):
@@ -249,6 +282,8 @@ class MacroRecorder:
         self._time_fn = time_fn
         self._started_at = time_fn()
         self._status: dict[str, MacroFeedStatus] = {}
+        self._restored = False  # saved schedules are read on the first pass
+        self._state_saved = True  # last save worked; failures are logged on the change
 
     def snapshot(self) -> MacroSnapshot:
         feeds = {
@@ -277,6 +312,8 @@ class MacroRecorder:
         ``now_ms`` is the pass start. Each source is checked and stamped on its own clock
         reading (never earlier than that), so a slow source cannot back-date later ones.
         """
+        if not self._restored:
+            await self._restore(now_ms)
         for source in self._sources:
             start_ms = self._clock_ms(now_ms)
             status = self._status.get(source.key)
@@ -284,6 +321,46 @@ class MacroRecorder:
                     and start_ms / 1000 < status.next_attempt_at:
                 continue
             await self._attempt(source, client, start_ms)
+            await self._save(source.key)
+
+    async def _restore(self, now_ms: int) -> None:
+        """Carry each source's saved schedule over from the previous process.
+
+        A saved failure is logged again (``restored=True``) so this process's log shows it.
+        Anything unreadable counts as never attempted.
+        """
+        self._restored = True
+        try:
+            saved = await store.load_feed_states(s.key for s in self._sources)
+        except Exception as exc:  # noqa: BLE001 — start from nothing, as on a fresh database
+            log.warning("macro_recorder.state_unreadable", error=_detail(exc))
+            return
+        cap_from = now_ms / 1000
+        for source in self._sources:
+            if source.key not in saved or source.key in self._status:
+                continue
+            try:
+                status = _status_from_state(source.cadence_s, saved[source.key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if status.next_attempt_at is not None:
+                cap = cap_from + max(source.cadence_s, MAX_CARRIED_WAIT_S)
+                status = replace(status, next_attempt_at=min(status.next_attempt_at, cap))
+            self._status[source.key] = status
+            if status.ok is False:
+                log.warning("macro_recorder.feed_down", feed=source.key, error=status.detail,
+                            restored=True)
+
+    async def _save(self, key: str) -> None:
+        state = {k: v for k, v in asdict(self._status[key]).items() if k != "cadence_s"}
+        try:
+            await store.save_feed_state(key, state)
+        except Exception as exc:  # noqa: BLE001 — the schedule still runs from memory
+            if self._state_saved:
+                log.warning("macro_recorder.state_not_saved", feed=key, error=_detail(exc))
+            self._state_saved = False
+        else:
+            self._state_saved = True
 
     async def _attempt(
         self, source: MacroSource, client: httpx.AsyncClient, start_ms: int

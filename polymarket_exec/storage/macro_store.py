@@ -1,12 +1,16 @@
 """SQLite read/write for the macro calendar: scheduled events and first-seen consensus values."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import db as _db
 from polymarket_exec.connectors.macro_calendar import ConsensusRow, MacroEvent
+
+# config-table keys holding each recorder source's last schedule state (one JSON object each).
+FEED_STATE_KEY_PREFIX = "macro.feed_state."
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,31 @@ async def record_consensus(rows: Iterable[ConsensusRow], now_ms: int) -> int:
             inserted += 1
         await conn.commit()
     return inserted
+
+
+async def save_feed_state(key: str, state: Mapping[str, Any]) -> None:
+    """Keep one recorder source's schedule state (last attempt, next attempt, ...) across restarts."""
+    await _db.set_config(FEED_STATE_KEY_PREFIX + key, json.dumps(dict(state), sort_keys=True))
+
+
+async def load_feed_states(keys: Iterable[str]) -> dict[str, Any]:
+    """Saved state per source key, as decoded JSON; keys never saved or not JSON are left out."""
+    wanted = {FEED_STATE_KEY_PREFIX + k: k for k in keys}
+    if not wanted:
+        return {}
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            f"SELECT key, value FROM config WHERE key IN ({', '.join('?' for _ in wanted)})",
+            list(wanted),
+        )
+        rows = await cur.fetchall()
+    states: dict[str, Any] = {}
+    for row in rows:
+        try:
+            states[wanted[row["key"]]] = json.loads(row["value"])
+        except (TypeError, ValueError):  # NULL or not JSON: as if never saved
+            continue
+    return states
 
 
 async def events_between(

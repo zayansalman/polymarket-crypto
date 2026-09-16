@@ -146,7 +146,7 @@ async def test_default_sources_record_every_calendar(test_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sources_poll_on_their_own_cadence() -> None:
+async def test_sources_poll_on_their_own_cadence(test_db) -> None:
     clock = _Clock()
     fast_calls: list[int] = []
     slow_calls: list[int] = []
@@ -220,7 +220,9 @@ async def test_stamps_never_run_before_the_pass_start(test_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failure_retries_after_the_retry_delay_and_keeps_last_success(monkeypatch) -> None:
+async def test_failure_retries_after_the_retry_delay_and_keeps_last_success(
+    test_db, monkeypatch
+) -> None:
     log = _Log()
     monkeypatch.setattr(mr, "log", log)
     clock = _Clock()
@@ -250,7 +252,7 @@ async def test_failure_retries_after_the_retry_delay_and_keeps_last_success(monk
 
 
 @pytest.mark.asyncio
-async def test_retry_after_pushes_the_next_attempt_out() -> None:
+async def test_retry_after_pushes_the_next_attempt_out(test_db) -> None:
     clock = _Clock()
     calls: list[int] = []
     rec = mr.MacroRecorder(
@@ -369,23 +371,25 @@ async def test_zero_events_and_http_errors_are_failures_without_query_strings(te
 
 
 @pytest.mark.asyncio
-async def test_forexfactory_429_waits_at_least_five_minutes_with_one_request(test_db) -> None:
-    for header, wait in (("600", 600), ("30", 300), (None, 300)):
-        clock = _Clock()
-        calls: list[str] = []
-        headers = {"content-type": "text/html"}
-        if header is not None:
-            headers["retry-after"] = header
-        rec = mr.MacroRecorder(sources=[s for s in mr.default_sources() if s.key == mr.FF_WEEK],
-                               time_fn=clock)
-        async with _client(_fixture_handler(calls, ff_status=429, ff_headers=headers)) as c:
-            await rec.record_once(c, clock.ms)
-            st = rec.snapshot().feeds[mr.FF_WEEK]
-            assert (st.ok, st.retry_after, st.next_attempt_at) == (False, True, T0 + wait)
-            assert "429" in (st.detail or "")
-            clock.t += wait - 1
-            await rec.record_once(c, clock.ms)
-        assert calls == [mr.FF_WEEK_URL]  # exactly one request per attempt, no early retry
+@pytest.mark.parametrize(("header", "wait"), [("600", 600), ("30", 300), (None, 300)])
+async def test_forexfactory_429_waits_at_least_five_minutes_with_one_request(
+    test_db, header: str | None, wait: int
+) -> None:
+    clock = _Clock()
+    calls: list[str] = []
+    headers = {"content-type": "text/html"}
+    if header is not None:
+        headers["retry-after"] = header
+    rec = mr.MacroRecorder(sources=[s for s in mr.default_sources() if s.key == mr.FF_WEEK],
+                           time_fn=clock)
+    async with _client(_fixture_handler(calls, ff_status=429, ff_headers=headers)) as c:
+        await rec.record_once(c, clock.ms)
+        st = rec.snapshot().feeds[mr.FF_WEEK]
+        assert (st.ok, st.retry_after, st.next_attempt_at) == (False, True, T0 + wait)
+        assert "429" in (st.detail or "")
+        clock.t += wait - 1
+        await rec.record_once(c, clock.ms)
+    assert calls == [mr.FF_WEEK_URL]  # exactly one request per attempt, no early retry
 
 
 @pytest.mark.asyncio
@@ -426,6 +430,102 @@ async def test_forexfactory_html_body_is_no_data(test_db) -> None:
     assert st.ok is False and st.retry_after is False and "no data" in (st.detail or "")
 
 
+@pytest.mark.asyncio
+async def test_a_restart_keeps_the_forexfactory_hold_off(test_db, monkeypatch) -> None:
+    log = _Log()
+    monkeypatch.setattr(mr, "log", log)
+    clock = _Clock()
+    calls: list[str] = []
+    ff = [s for s in mr.default_sources() if s.key == mr.FF_WEEK]
+    handler = _fixture_handler(calls, ff_status=429,
+                               ff_headers={"content-type": "text/html", "retry-after": "600"})
+    async with _client(handler) as c:
+        await mr.MacroRecorder(sources=ff, time_fn=clock).record_once(c, clock.ms)
+        assert calls == [mr.FF_WEEK_URL]
+        for restart_at in (T0 + 60, T0 + 105, T0 + 599):  # restarts inside the hold-off
+            clock.t = restart_at
+            rec = mr.MacroRecorder(sources=ff, time_fn=clock)
+            await rec.record_once(c, clock.ms)
+            st = rec.snapshot().feeds[mr.FF_WEEK]
+            assert (st.ok, st.retry_after, st.last_attempt_at, st.next_attempt_at) == (
+                False, True, T0, T0 + 600)
+            assert "HTTP 429" in (st.detail or "")
+        assert calls == [mr.FF_WEEK_URL]  # no request from any restarted recorder
+        clock.t = T0 + 600
+        await mr.MacroRecorder(sources=ff, time_fn=clock).record_once(c, clock.ms)
+    assert calls == [mr.FF_WEEK_URL] * 2  # exactly one once the hold-off is over
+    # Each restart says the feed is down; the retried 429 is not a new transition.
+    assert [e for e, _kw in log.events] == ["macro_recorder.feed_down"] * 5
+    assert [kw.get("restored", False) for _e, kw in log.events] == [False] + [True] * 4
+
+
+@pytest.mark.asyncio
+async def test_a_restart_carries_every_source_schedule_over(test_db) -> None:
+    clock = _Clock()
+    calls: list[str] = []
+    async with _client(_fixture_handler(calls)) as c:
+        await mr.MacroRecorder(time_fn=clock).record_once(c, clock.ms)
+        assert len(calls) == 5
+        clock.t += 60
+        rec = mr.MacroRecorder(time_fn=clock)
+        await rec.record_once(c, clock.ms)
+        assert len(calls) == 5  # nothing is due again yet
+        assert {k: (f.ok, f.rows, f.last_ok_at) for k, f in rec.snapshot().feeds.items()} == {
+            mr.BLS_SCHEDULE: (True, 7, T0), mr.BEA_SCHEDULE: (True, 8, T0),
+            mr.CENSUS_SCHEDULE: (True, 3, T0), mr.FED_CALENDAR: (True, 7, T0),
+            mr.FF_WEEK: (True, 8, T0),
+        }
+        clock.t = T0 + 3600
+        await rec.record_once(c, clock.ms)
+    assert sorted(calls[5:]) == sorted([mr.FED_CALENDAR_URL, mr.FF_WEEK_URL])  # the hourly two
+
+
+@pytest.mark.asyncio
+async def test_bad_saved_state_is_ignored_and_a_carried_wait_is_capped(test_db) -> None:
+    clock = _Clock()
+    await _db.set_config(store.FEED_STATE_KEY_PREFIX + "a:junk", "not json")
+    await store.save_feed_state("b:nan", {
+        "ok": True, "last_ok_at": float("nan"), "last_attempt_at": T0 - 60,
+        "next_attempt_at": T0 + 600, "rows": 3, "detail": None, "retry_after": False})
+    await store.save_feed_state("c:far", {
+        "ok": False, "last_ok_at": None, "last_attempt_at": T0 - 60,
+        "next_attempt_at": T0 + 10 * 365 * 86_400, "rows": None,
+        "detail": "rate limited", "retry_after": True})
+    polled: dict[str, list[int]] = {"a": [], "b": [], "c": []}
+    rec = mr.MacroRecorder(sources=[_source("a:junk", [1], calls=polled["a"]),
+                                    _source("b:nan", [1], calls=polled["b"]),
+                                    _source("c:far", [1], calls=polled["c"])],
+                           time_fn=clock)
+    async with _client() as c:
+        await rec.record_once(c, clock.ms)
+    assert {k: len(v) for k, v in polled.items()} == {"a": 1, "b": 1, "c": 0}
+    far = rec.snapshot().feeds["c:far"]
+    assert (far.ok, far.retry_after, far.next_attempt_at) == (False, True, T0 + 86_400)
+
+
+@pytest.mark.asyncio
+async def test_state_storage_errors_never_stop_the_recorder(monkeypatch) -> None:
+    log = _Log()
+    monkeypatch.setattr(mr, "log", log)
+
+    async def locked(*_args, **_kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(store, "load_feed_states", locked)
+    monkeypatch.setattr(store, "save_feed_state", locked)
+    clock = _Clock()
+    calls: list[int] = []
+    rec = mr.MacroRecorder(sources=[_source("a:src", [1], cadence_s=60, calls=calls)],
+                           time_fn=clock)
+    async with _client() as c:
+        await rec.record_once(c, clock.ms)
+        clock.t += 60
+        await rec.record_once(c, clock.ms)
+    assert len(calls) == 2 and rec.snapshot().feeds["a:src"].ok is True
+    assert [e for e, _kw in log.events] == ["macro_recorder.state_unreadable",
+                                            "macro_recorder.state_not_saved"]
+
+
 def test_snapshot_lists_every_source_before_any_attempt() -> None:
     clock = _Clock()
     rec = mr.MacroRecorder(tick_s=30.0, time_fn=clock)
@@ -437,7 +537,7 @@ def test_snapshot_lists_every_source_before_any_attempt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_records_then_stops_cleanly() -> None:
+async def test_run_records_then_stops_cleanly(test_db) -> None:
     calls: list[int] = []
     rec = mr.MacroRecorder(sources=[_source("a:src", [2], calls=calls)], tick_s=3600,
                            client_factory=_client)
