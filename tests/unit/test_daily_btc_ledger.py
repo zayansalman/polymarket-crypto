@@ -73,7 +73,7 @@ async def test_one_row_per_window_strategy_and_mode(test_db) -> None:
 @pytest.mark.parametrize(("side", "late", "available", "action"), [
     ("Up", False, True, "PENDING"), ("Up", True, True, "MISSED"),
     (None, False, True, "NO_SIGNAL"), (None, True, True, "MISSED"),
-    (None, False, False, "UNAVAILABLE"),
+    (None, False, False, "UNAVAILABLE"), (None, True, False, "UNAVAILABLE"),
 ])
 async def test_action_mapping(test_db, side, late, available, action) -> None:
     await _record(side=side, late=late, available=available)
@@ -97,6 +97,16 @@ async def test_set_action_with_expected_action_only_replaces_that_action(test_db
 
 
 @pytest.mark.asyncio
+async def test_set_action_without_a_position_keeps_the_recorded_position(test_db) -> None:
+    await _record()
+    ref = WINDOW.reference_ts
+    assert await ledger.set_action(ref, SID, "ENTERED", 7, mode="paper") is True
+    assert await ledger.set_action(ref, SID, "MISSED", mode="paper") is True
+    row = await ledger.get_decision(ref, SID, mode="paper")
+    assert (row["action"], row["position_id"]) == ("MISSED", 7)
+
+
+@pytest.mark.asyncio
 async def test_settlement_of_every_row_in_the_window(test_db) -> None:
     await _record()
     await _record(mode="live", side=None)
@@ -110,6 +120,17 @@ async def test_settlement_of_every_row_in_the_window(test_db) -> None:
             100.0, 100.0, "tie")
         assert row["settled_at"] is not None
     assert await ledger.unsettled_windows(WINDOW.settle_ts + 999, 120) == []
+
+
+@pytest.mark.asyncio
+async def test_a_settled_window_is_never_settled_again(test_db) -> None:
+    await _record()
+    await ledger.settle_window(WINDOW.reference_ts, 100.0, 101.0, "Up")
+    first = await ledger.get_decision(WINDOW.reference_ts, SID, mode="paper")
+    assert (first["reference_close"], first["settle_close"], first["outcome"]) == (
+        100.0, 101.0, "Up")
+    await ledger.settle_window(WINDOW.reference_ts, 200.0, 150.0, "Down")
+    assert await ledger.get_decision(WINDOW.reference_ts, SID, mode="paper") == first
 
 
 # Same rules as the hourly record's finalize_ended_hours (Claude, 2026-09-15, branch-review
@@ -146,6 +167,32 @@ async def test_open_decisions_of_ended_windows_are_finalized_per_strategy_and_mo
         "action"] == "NO_SIGNAL"
     assert await ledger.finalize_ended_windows(WINDOW.reference_ts, "x") == {
         "entered": 0, "unfinished": 0, "missed": 0}
+
+
+@pytest.mark.asyncio
+async def test_current_window_attempt_with_its_open_position_is_left_to_the_entry_step(
+    test_db,
+) -> None:
+    ref = WINDOW.reference_ts
+    await _record()
+    await ledger.set_action(ref, SID, "SUBMITTING", mode="paper")
+    await _insert_position(strategy_id=SID, mode="paper", reference_ts=ref)
+    counts = await ledger.finalize_ended_windows(ref, UNFINISHED)
+    assert counts == {"entered": 0, "unfinished": 0, "missed": 0}
+    row = await ledger.get_decision(ref, SID, mode="paper")
+    assert (row["action"], row["position_id"]) == ("SUBMITTING", None)
+
+
+@pytest.mark.asyncio
+async def test_ended_window_attempt_with_its_open_paper_position_is_entered(test_db) -> None:
+    prev = PREV_WINDOW.reference_ts
+    await _record(market=PREV_MARKET)
+    await ledger.set_action(prev, SID, "SUBMITTING", mode="paper")
+    position_id = await _insert_position(strategy_id=SID, mode="paper", reference_ts=prev)
+    counts = await ledger.finalize_ended_windows(WINDOW.reference_ts, UNFINISHED)
+    assert counts == {"entered": 1, "unfinished": 0, "missed": 0}
+    row = await ledger.get_decision(prev, SID, mode="paper")
+    assert (row["action"], row["position_id"]) == ("ENTERED", position_id)
 
 
 @pytest.mark.asyncio
