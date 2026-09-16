@@ -24,7 +24,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
 | `polymarket_bot/hourly/__init__.py` | pkg | 2 | Hourly BTC Up/Down strategies: Hourly Mean Reversion and Kronos BTC Fine Tune. |
 | `polymarket_bot/hourly/engine.py` | WIRED | 1 | Hourly BTC engine: one decision per hour per strategy, per-strategy entries, Binance settlement. |
-| `polymarket_bot/hourly/ledger.py` | WIRED | 1 | Hourly strategy decision record: one row per (hour, strategy), actions, and settlement. |
+| `polymarket_bot/hourly/ledger.py` | WIRED | 1 | Hourly decision record: one row per (UTC hour start, strategy, mode), actions, settlement. |
 | `polymarket_bot/hourly/market.py` | WIRED | 3 | Hourly BTC Up/Down market: window timing, Gamma discovery, Binance candles and settlement. |
 | `polymarket_bot/hourly/mean_reversion.py` | WIRED | 1 | Hourly Mean Reversion: fade an hour pushed by aggressive spot flow that perps did not confirm. |
 | `polymarket_bot/market_selection.py` | WIRED | 5 | Operator market selection: which crypto asset + window timeframe to trade. |
