@@ -74,7 +74,8 @@ DASHBOARD_SERVER_PORT = int(os.getenv("DASHBOARD_SERVER_PORT", "7860"))
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 # Interpreter for the isolated Kronos forecast worker (Tsinghua-Kronos BTC 24h). Blank =
-# the app's own interpreter; set it when torch lives in a different environment.
+# the app's own interpreter; set it, as an absolute path, when torch lives in a different
+# environment (Claude, 2026-09-16).
 KRONOS_PYTHON = os.getenv("KRONOS_PYTHON", "")
 CHAINLINK_STREAM_URL = "https://data.chain.link/streams/btc-usd-cexprice-streams"
 MARKET_TIMEFRAME_MINUTES = 5

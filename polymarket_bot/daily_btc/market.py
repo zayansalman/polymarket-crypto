@@ -79,7 +79,10 @@ def outcome(reference_close: float, settle_close: float) -> str:
 
 
 def payout(side: str, result: str) -> float:
-    """Per-share payout at resolution: an exact tie pays 0.50 to both sides (market rules)."""
+    """Per-share payout at resolution: an exact tie pays 0.50 to both sides.
+
+    Source: market rules, Gamma, 2026-09-16.
+    """
     if result == "tie":
         return 0.5
     return 1.0 if side == result else 0.0

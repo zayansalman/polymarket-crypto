@@ -31,8 +31,11 @@ WORKER_SCRIPT = Path(__file__).resolve().with_name("worker.py")
 # github.com/shiyu-coder/Kronos model/ at this commit, MIT, vendored unchanged.
 KRONOS_CODE_COMMIT = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
 CODE_DIR = REPO_ROOT / "third_party" / "kronos_67b630e"
-# Under the loop watchdog's 180 s stall threshold (controller.WATCHDOG_STALL_SECONDS).
+# Under the loop watchdog's 180 s stall threshold (controller.WATCHDOG_STALL_SECONDS)
+# (Claude, 2026-09-16).
 DEFAULT_TIMEOUT_S = 90.0
+# CPU threads for one forecast: torch.set_num_threads and OMP_NUM_THREADS (Claude, 2026-09-16).
+WORKER_THREADS = 4
 UNREADABLE_RESULT = "Kronos worker returned an unreadable result: "
 # Longest error text kept in a result or a log line (Claude, 2026-09-16).
 MAX_ERROR_CHARS = 400
@@ -66,7 +69,7 @@ class ForecastRequest:
     top_k: int
     seed: int
     max_context: int = 512
-    threads: int = 4
+    threads: int = WORKER_THREADS
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,7 @@ def worker_env() -> dict[str, str]:
         "HF_HUB_OFFLINE": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "TRANSFORMERS_OFFLINE": "1",
-        "OMP_NUM_THREADS": "4",
+        "OMP_NUM_THREADS": str(WORKER_THREADS),
         "PYTHON_DOTENV_DISABLED": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
