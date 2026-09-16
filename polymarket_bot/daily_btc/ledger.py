@@ -120,21 +120,26 @@ async def finalize_ended_windows(
     2026-09-16). A row left open when no tick ran before its window ended (Stop, crash,
     sleep, failing ticks, strategy switched off) otherwise stays open forever. The current
     window is left to the engine's entry step. For each ended window, per strategy and mode:
-    - ENTERED with the position, when this strategy has a 1d position for that window in
-      that mode that boot reconciliation did not close as never placed
-      (RECONCILED_NO_LIVE_TRACE) or never filled (RECONCILED_UNFILLED);
+    - ENTERED with the position, when this strategy still has an open 1d position for that
+      window in that mode (for live, with its order in the journal);
     - otherwise an attempt that was started (SUBMITTING) becomes ``unfinished_action``
       (branch-review finding hourly-ambiguous-post-error-retried: never assume it failed);
     - otherwise MISSED.
     """
+    # Only a still-open position counts, and a live one only when its order is in the journal
+    # with an order id: a post whose journal write failed must end as an unfinished attempt
+    # with the operator warning, never as ENTERED (Claude, 2026-09-16, mirroring the hourly
+    # record's review fix).
     position_for_row = (
         "SELECT p.position_id FROM paper_positions p "
         "WHERE p.window_start_ts = btc_daily_market_decisions.reference_ts "
         "AND p.strategy_id = btc_daily_market_decisions.strategy_id "
         "AND p.mode = btc_daily_market_decisions.mode "
-        "AND p.market_timeframe = '1d' "
-        "AND COALESCE(p.exit_reason, '') "
-        "NOT IN ('RECONCILED_NO_LIVE_TRACE', 'RECONCILED_UNFILLED')"
+        "AND p.market_timeframe = '1d' AND p.state = 'open' "
+        "AND (p.mode != 'live' OR EXISTS ("
+        "SELECT 1 FROM live_orders o WHERE o.intent = 'ENTRY' AND o.status = 'SUBMITTED' "
+        "AND o.clob_order_id IS NOT NULL AND o.window_slug = p.window_slug "
+        "AND o.strategy_id = p.strategy_id))"
     )
     async with _db.connect() as conn:
         entered = await conn.execute(

@@ -125,6 +125,9 @@ async def test_open_decisions_of_ended_windows_are_finalized_per_strategy_and_mo
     await _record()
     await _record(strategy_id=SECOND_SID, side=None)
     position_id = await _insert_position(strategy_id=SECOND_SID, mode="live", reference_ts=prev)
+    await _db.journal_live_order(intent="ENTRY", side="BUY", status="SUBMITTED",
+                                 window_slug="slug", token_id="t", price=0.52, size=5.0,
+                                 clob_order_id="0xE", strategy_id=SECOND_SID)
     await ledger.set_action(prev, SID, "SUBMITTING", mode="paper")
 
     counts = await ledger.finalize_ended_windows(WINDOW.reference_ts, UNFINISHED)
@@ -147,7 +150,10 @@ async def test_open_decisions_of_ended_windows_are_finalized_per_strategy_and_mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("timeframe", "state", "exit_reason", "action"), [
-    ("1d", "closed", "STOP_REQUEST", "ENTERED"),  # sold at Stop: the entry went through
+    ("1d", "open", None, "ENTERED"),
+    # Only a still-open position counts, as in the hourly record (Claude, 2026-09-16,
+    # review of the merged hourly branch).
+    ("1d", "closed", "STOP_REQUEST", "MISSED"),
     ("1d", "closed", "RECONCILED_NO_LIVE_TRACE", "MISSED"),  # boot found no order placed
     ("1d", "closed", "RECONCILED_UNFILLED", "MISSED"),  # boot found the order never filled
     ("1h", "open", None, "MISSED"),  # an hourly position is not this window's
@@ -164,3 +170,28 @@ async def test_ended_window_links_only_its_own_daily_position(
     row = await ledger.get_decision(prev, SID, mode="paper")
     linked = position_id if action == "ENTERED" else None
     assert (row["action"], row["position_id"]) == (action, linked)
+
+
+@pytest.mark.asyncio
+async def test_ended_window_links_a_live_position_only_with_its_order_in_the_journal(
+    test_db,
+) -> None:
+    """A live post whose journal write failed ends as an unfinished attempt, never ENTERED
+    (Claude, 2026-09-16, mirroring the hourly record's review fix)."""
+    prev = PREV_WINDOW.reference_ts
+    await _record(market=PREV_MARKET, mode="live")
+    await ledger.set_action(prev, SID, "SUBMITTING", mode="live")
+    position_id = await _insert_position(strategy_id=SID, mode="live", reference_ts=prev)
+    await ledger.finalize_ended_windows(WINDOW.reference_ts, UNFINISHED)
+    row = await ledger.get_decision(prev, SID, mode="live")
+    assert (row["action"], row["position_id"]) == (UNFINISHED, None)
+
+    await _record(market=PREV_MARKET, strategy_id=SECOND_SID, mode="live")
+    second_id = await _insert_position(strategy_id=SECOND_SID, mode="live", reference_ts=prev)
+    await _db.journal_live_order(intent="ENTRY", side="BUY", status="SUBMITTED",
+                                 window_slug="slug", token_id="t", price=0.52, size=5.0,
+                                 clob_order_id="0xE", strategy_id=SECOND_SID)
+    await ledger.finalize_ended_windows(WINDOW.reference_ts, UNFINISHED)
+    row = await ledger.get_decision(prev, SECOND_SID, mode="live")
+    assert (row["action"], row["position_id"]) == ("ENTERED", second_id)
+    assert position_id != second_id
