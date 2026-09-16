@@ -1,9 +1,12 @@
 """Daily altcoin market discovery/resolution tests.
 
-Pins two things a live run caught: (1) the resolution instant is 24h
+Pins three things a live run caught: (1) the resolution instant is 24h
 BEFORE ``endDate``, not ``startDate`` (the trading window opens up to ~2
-days before the actual comparison period) — see ``build_market_view``; and
-(2) Up/Down's complementary-book pricing.
+days before the actual comparison period) — see ``build_market_view``;
+(2) Up/Down's complementary-book pricing; and (3) discovery asks for the
+market resolving at the NEXT noon ET, not the one named by the UTC date —
+from noon ET to UTC midnight the UTC date names the market that has just
+resolved, and Gamma no longer lists it.
 """
 from __future__ import annotations
 
@@ -13,7 +16,6 @@ from datetime import UTC, datetime
 import pytest
 
 from polymarket_bot.daily.market import (
-    _todays_slug,
     build_market_view,
     discover_daily_markets,
     market_prices,
@@ -97,14 +99,62 @@ class _FakeBinanceClient:
         raise AssertionError(f"unexpected request: {url} {params}")
 
 
-def test_todays_slug_format():
-    now = datetime(2026, 8, 30, tzinfo=UTC)
-    assert _todays_slug("solana", now) == "solana-up-or-down-on-august-30-2026"
+def _utc(*args: int) -> datetime:
+    return datetime(*args, tzinfo=UTC)
 
 
-def test_todays_slug_no_zero_padding_on_day():
-    now = datetime(2026, 9, 5, tzinfo=UTC)
-    assert _todays_slug("bnb", now) == "bnb-up-or-down-on-september-5-2026"
+# (scan instant, date in the slug of the market that must be requested).
+# That market resolves at noon New York time on its date: 16:00Z under EDT,
+# 17:00Z under EST (checked against real markets on both DST switch days).
+_NEXT_NOON_ET_CASES = [
+    # EDT (UTC-4)
+    (_utc(2026, 9, 16, 10, 0), "september-16-2026"),  # 06:00 EDT
+    (_utc(2026, 9, 16, 15, 59, 59), "september-16-2026"),  # 11:59:59 EDT
+    (_utc(2026, 9, 16, 16, 0), "september-17-2026"),  # 12:00 EDT
+    (_utc(2026, 9, 16, 18, 38), "september-17-2026"),  # the live miss
+    (_utc(2026, 9, 17, 2, 0), "september-17-2026"),  # 22:00 EDT on the 16th
+    (_utc(2026, 9, 5, 13, 0), "september-5-2026"),  # day is not zero-padded
+    # EST (UTC-5)
+    (_utc(2026, 12, 10, 16, 30), "december-10-2026"),  # 11:30 EST
+    (_utc(2026, 12, 10, 17, 0), "december-11-2026"),  # 12:00 EST
+    (_utc(2026, 12, 31, 17, 0), "january-1-2027"),  # 12:00 EST, year rolls
+    # DST ends Sun 2026-11-01 02:00: noon is 16:00Z on the 31st, 17:00Z on the 1st
+    (_utc(2026, 10, 31, 16, 0), "november-1-2026"),  # 12:00 EDT
+    (_utc(2026, 11, 1, 16, 30), "november-1-2026"),  # 11:30 EST
+    # DST starts Sun 2027-03-14 02:00: noon is 17:00Z on the 13th, 16:00Z on the 14th
+    (_utc(2027, 3, 13, 16, 30), "march-13-2027"),  # 11:30 EST
+    (_utc(2027, 3, 14, 16, 0), "march-15-2027"),  # 12:00 EDT
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("now", "want_date"), _NEXT_NOON_ET_CASES)
+async def test_discover_requests_the_market_resolving_at_the_next_noon_et(now, want_date):
+    client = _FakeGammaClient({})
+    await discover_daily_markets(client, tracked_assets=["sol"], now=now)
+    assert client.requested_slugs[0] == f"solana-up-or-down-on-{want_date}"
+
+
+@pytest.mark.asyncio
+async def test_discover_finds_every_tracked_asset_after_noon_et_without_a_sweep():
+    """Live miss, 2026-09-16 18:38Z (14:38 EDT): discovery asked for the
+    September 16 markets, which had resolved at noon ET and were no longer
+    listed, then fell back to a 335-request Gamma sweep that found none."""
+    want = {
+        "doge": "dogecoin-up-or-down-on-september-17-2026",
+        "sol": "solana-up-or-down-on-september-17-2026",
+        "xrp": "xrp-up-or-down-on-september-17-2026",
+        "bnb": "bnb-up-or-down-on-september-17-2026",
+        "eth": "ethereum-up-or-down-on-september-17-2026",
+    }
+    client = _FakeGammaClient(
+        {slug: _gamma_market(slug=slug, end_date="2026-09-17T16:00:00Z") for slug in want.values()}
+    )
+    found = await discover_daily_markets(
+        client, tracked_assets=list(want), now=_utc(2026, 9, 16, 18, 38)
+    )
+    assert {asset: m["slug"] for asset, m in found.items()} == want
+    assert client.requested_slugs == list(want.values())
 
 
 def test_market_prices_derive_down_from_up_complementary_book():
@@ -123,15 +173,30 @@ def test_market_prices_none_when_book_empty():
 
 @pytest.mark.asyncio
 async def test_discover_daily_markets_only_returns_tracked_assets():
-    # Discovery looks up TODAY's slug, so the fixture must too — a hardcoded
-    # date only passed on that one day.
-    sol_slug = _todays_slug("solana", datetime.now(UTC))
+    sol_slug = "solana-up-or-down-on-august-30-2026"
     client = _FakeGammaClient(
         {sol_slug: _gamma_market(slug=sol_slug, end_date="2026-08-30T16:00:00Z")}
     )
-    found = await discover_daily_markets(client, tracked_assets=["sol", "doge"])
+    found = await discover_daily_markets(
+        client, tracked_assets=["sol", "doge"], now=_utc(2026, 8, 30, 10, 0)
+    )
     assert list(found.keys()) == ["sol"]
     assert found["sol"]["slug"] == sol_slug
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_an_asset_without_a_daily_slug_name():
+    """A config typo or unsupported asset must not abort the other assets'
+    lookup (the shared slug builder raises on names it doesn't know)."""
+    sol_slug = "solana-up-or-down-on-august-30-2026"
+    client = _FakeGammaClient(
+        {sol_slug: _gamma_market(slug=sol_slug, end_date="2026-08-30T16:00:00Z")}
+    )
+    found = await discover_daily_markets(
+        client, tracked_assets=["shib", "sol"], now=_utc(2026, 8, 30, 10, 0)
+    )
+    assert list(found.keys()) == ["sol"]
+    assert client.requested_slugs == [sol_slug]
 
 
 @pytest.mark.asyncio
