@@ -1130,3 +1130,32 @@ async def test_a_crashing_record_never_changes_the_decision_or_the_entry(test_db
     row = await ledger.get_decision(H, "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal", mode="paper")
     assert row["action"] == "ENTERED"
     assert [p["side"] for p in await _positions()] == ["Down"]
+
+
+@pytest.mark.asyncio
+async def test_a_paper_runner_that_wakes_after_a_switch_to_live_writes_nothing(
+    test_db, monkeypatch
+):
+    """Claude session "Tsinghua base Kronos btc 24h", 2026-09-17: an abandoned paper runner
+    must not post a live order or touch any decision row after the operator switched to LIVE."""
+    sid = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+    snapshot = await _tick(monkeypatch, H + 30, _Venue(), allow=False)  # paper row PENDING
+    account = await _go_live(monkeypatch)  # a live runner took over meanwhile
+    await engine.open_entries(snapshot, H + 31, allow_entries=True, mode="paper", executor=None)
+    assert "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal" not in account.slots
+    assert (await ledger.get_decision(H, sid, mode="paper"))["action"] == "PENDING"
+    assert await ledger.get_decision(H, sid, mode="live") is None
+    assert await _positions() == []
+
+
+@pytest.mark.asyncio
+async def test_an_entry_step_whose_executor_was_replaced_mid_tick_writes_nothing(
+    test_db, monkeypatch
+):
+    sid = "btcusdt_1h_spot_taker_push_perp_unconfirmed_close_extreme_reversal"
+    first = await _go_live(monkeypatch)
+    snapshot = await _tick(monkeypatch, H + 30, _Venue(), allow=False)  # live row PENDING
+    await _go_live(monkeypatch)  # Stop/Start replaced the live executor
+    await engine.open_entries(snapshot, H + 31, allow_entries=True, mode="live", executor=first)
+    assert sid not in first.slots
+    assert (await ledger.get_decision(H, sid, mode="live"))["action"] == "PENDING"

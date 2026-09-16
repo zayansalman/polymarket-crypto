@@ -249,11 +249,19 @@ async def _insert_row(
     return position_id
 
 
-async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: int) -> None:
+async def _enter(
+    snapshot: PaperSnapshot, strategy_id: str, side: str, start: int, *, executor: Any
+) -> None:
     from polymarket_bot import paper as P
 
-    executor = P._live_executor
+    # Use the executor this tick started with, never a newer one (Claude session "Tsinghua
+    # base Kronos btc 24h", 2026-09-17: an abandoned paper runner woke after a switch to LIVE
+    # and posted a live order against its paper decision row).
     mode = "live" if executor is not None else "paper"
+    if P._live_executor is not executor:
+        log.warning("hourly_engine.entry_skipped_runner_changed", strategy_id=strategy_id,
+                    tick_mode=mode)
+        return
     if await _open_row_for(strategy_id, mode):
         return  # this strategy's slot is still held (previous hour settling): retry next tick
     ask = snapshot.up_best_ask if side == "Up" else snapshot.down_best_ask
@@ -363,13 +371,20 @@ async def _enter(snapshot: PaperSnapshot, strategy_id: str, side: str, start: in
 
 
 async def open_entries(
-    snapshot: PaperSnapshot, now: int, *, allow_entries: bool, mode: str
+    snapshot: PaperSnapshot, now: int, *, allow_entries: bool, mode: str, executor: Any = None
 ) -> None:
+    """Advance this mode's entries. ``executor`` is the live executor the tick started with.
+
+    A runner whose mode changed mid-tick (the global executor is no longer the one this tick
+    started with) writes nothing (Claude session "Tsinghua base Kronos btc 24h", 2026-09-17).
+    """
     from polymarket_bot import paper as P
 
     start = market.hour_start(now)
     deadline = _knobs.cached("hourly_entry_deadline_seconds")
-    executor = P._live_executor
+    if P._live_executor is not executor or (executor is not None) != (mode == "live"):
+        log.warning("hourly_engine.entries_skipped_runner_changed", tick_mode=mode)
+        return
     for sid, knob in STRATEGIES:
         if not _knobs.cached(knob):
             continue
@@ -420,7 +435,7 @@ async def open_entries(
             await ledger.set_action(start, sid, "MISSED", mode=mode)
             continue
         if allow_entries:
-            await _enter(snapshot, sid, str(row["decision_side"]), start)
+            await _enter(snapshot, sid, str(row["decision_side"]), start, executor=executor)
 
 
 async def settle_due(client: httpx.AsyncClient, snapshot: PaperSnapshot, now: int) -> None:
@@ -509,7 +524,8 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
     start = market.hour_start(now)
     # The decision record is per mode (Claude, 2026-09-15, branch-review finding
     # decision-row-shared-across-modes). Strategies never see it; it only picks the row.
-    mode = "live" if P._live_executor is not None else "paper"
+    executor = P._live_executor  # read once: entries use this executor or none at all
+    mode = "live" if executor is not None else "paper"
     snapshot = await build_snapshot(client, now)
     # Book record before this tick's entry step (observation only; approved by Zayan
     # (operator), 2026-09-15). Rows taken after an earlier live entry this hour are flagged,
@@ -518,7 +534,7 @@ async def tick(client: httpx.AsyncClient, *, allow_entries: bool = True) -> Pape
         client, snapshot=snapshot, market=await _market_for(client, start), now=now)
     await settle_due(client, snapshot, now)
     rows = await decide_hour(client, snapshot, now, mode=mode)
-    await open_entries(snapshot, now, allow_entries=allow_entries, mode=mode)
+    await open_entries(snapshot, now, allow_entries=allow_entries, mode=mode, executor=executor)
     for sid in list(rows):
         rows[sid] = await ledger.get_decision(start, sid, mode=mode) or rows[sid]
     snapshot.reason = _reason_line(rows)
