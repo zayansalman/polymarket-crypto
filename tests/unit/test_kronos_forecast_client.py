@@ -1,6 +1,7 @@
 """Kronos forecast client: minimal worker environment, weights check, timeout, error handling."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import textwrap
@@ -156,20 +157,90 @@ async def test_worker_error_is_reported(models: Path, monkeypatch: pytest.Monkey
     assert failed.ok is False and "torch" in failed.error
 
 
+async def _process_ends(pid: int, within_s: float = 5.0) -> bool:
+    """True once ``pid`` is gone. A killed grandchild is reaped by init, not by us: poll."""
+    deadline = time.monotonic() + within_s
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        await asyncio.sleep(0.02)
+    return False
+
+
+async def _read_pids(path: Path, count: int, within_s: float = 10.0) -> list[int]:
+    deadline = time.monotonic() + within_s
+    while time.monotonic() < deadline:
+        words = path.read_text().split() if path.exists() else []
+        if len(words) == count:
+            return [int(w) for w in words]
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"the fake worker never wrote {count} PID(s) to {path}")
+
+
+# Starts a helper process (it joins the worker's process group), records both PIDs, sleeps.
+SLEEPING_WORKER = """
+    import os, subprocess, sys, time
+    from pathlib import Path
+    helper = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(20)"])
+    Path(PID_FILE).write_text(f"{os.getpid()} {helper.pid}")
+    time.sleep(20)
+"""
+
+
 @pytest.mark.asyncio
-async def test_timeout_is_reported_and_the_worker_process_is_gone(
+async def test_timeout_kills_the_worker_and_the_processes_it_started(
     models: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pid_file = models / "worker.pid"
-    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
-        import os, time
-        from pathlib import Path
-        Path(PID_FILE).write_text(str(os.getpid()))
-        time.sleep(20)
-    """, PID_FILE=str(pid_file)))
+    pid_file = models / "worker.pids"
+    monkeypatch.setattr(kc, "WORKER_SCRIPT",
+                        _fake_worker(models, SLEEPING_WORKER, PID_FILE=str(pid_file)))
     started = time.monotonic()
     slow = await kc.run_forecast(REQUEST, timeout_s=1.0)
     assert slow == kc.ForecastResult(ok=False, error="Kronos worker timed out after 1 s")
     assert time.monotonic() - started < 10
+    worker_pid, helper_pid = await _read_pids(pid_file, 2)
     with pytest.raises(ProcessLookupError):
-        os.kill(int(pid_file.read_text()), 0)
+        os.kill(worker_pid, 0)
+    assert await _process_ends(helper_pid), "a process the worker started outlived the timeout"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_forecast_kills_the_worker(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = models / "worker.pids"
+    monkeypatch.setattr(kc, "WORKER_SCRIPT",
+                        _fake_worker(models, SLEEPING_WORKER, PID_FILE=str(pid_file)))
+    task = asyncio.create_task(kc.run_forecast(REQUEST, timeout_s=60))
+    worker_pid, helper_pid = await _read_pids(pid_file, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(ProcessLookupError):
+        os.kill(worker_pid, 0)
+    assert await _process_ends(helper_pid), "a process the worker started outlived the cancel"
+
+
+@pytest.mark.asyncio
+async def test_only_one_worker_runs_at_a_time(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A fresh lock, so this test's contention never binds the module's lock to its loop.
+    monkeypatch.setattr(kc, "_WORKER_LOCK", asyncio.Lock(), raising=False)
+    monkeypatch.setattr(kc, "WORKER_SCRIPT", _fake_worker(models, """
+        import json, os, sys, time
+        sys.stdin.read()
+        try:
+            marker = os.open(MARKER, os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            print(json.dumps({"ok": False, "error": "another Kronos worker was running"}))
+            sys.exit(0)
+        time.sleep(0.3)
+        os.close(marker)
+        os.remove(MARKER)
+        print(LINE)
+    """, MARKER=str(models / "running"), LINE=json.dumps(GOOD_RESULT)))
+    first, second = await asyncio.gather(kc.run_forecast(REQUEST), kc.run_forecast(REQUEST))
+    assert first.ok and second.ok, (first.error, second.error)

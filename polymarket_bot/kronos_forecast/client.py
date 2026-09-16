@@ -2,14 +2,18 @@
 
 The worker (worker.py) starts as ``python -I worker.py`` with an explicit minimal
 environment, so it never sees the app's environment (which holds the wallet key). It
-reads pinned weights from a local folder with the Hugging Face hub offline. Pinned
-sources: docs/strategies/tsinghua-kronos-btc-24h.md.
+reads pinned weights from a local folder with the Hugging Face hub offline. Only one
+worker runs at a time, and if a call times out, is cancelled or fails, the worker is
+killed together with every process it started. Pinned sources:
+docs/strategies/tsinghua-kronos-btc-24h.md.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import math
+import os
+import signal
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -28,6 +32,9 @@ CODE_DIR = REPO_ROOT / "third_party" / "kronos_67b630e"
 # Under the loop watchdog's 180 s stall threshold (controller.WATCHDOG_STALL_SECONDS).
 DEFAULT_TIMEOUT_S = 90.0
 UNREADABLE_RESULT = "Kronos worker returned an unreadable result: "
+# One worker at a time: each uses about 1.5 GB of memory and the operator's machine has
+# 8 GB (Claude, 2026-09-16).
+_WORKER_LOCK = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -120,23 +127,44 @@ async def run_forecast(
         "model_dir": str(snapshot_dir(spec.model_repo, spec.model_revision)),
         "tokenizer_dir": str(snapshot_dir(spec.tokenizer_repo, spec.tokenizer_revision)),
     }
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            worker_python(), "-I", str(WORKER_SCRIPT),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, env=worker_env(), cwd=str(models_dir()),
-        )
-    except OSError as exc:
-        return ForecastResult(ok=False, error=f"could not start the Kronos worker: {exc}")
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()),
-                                          timeout_s)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        log.warning("kronos_forecast.worker_timeout", timeout_s=timeout_s)
-        return ForecastResult(ok=False, error=f"Kronos worker timed out after {timeout_s:g} s")
+    async with _WORKER_LOCK:
+        try:
+            # A new session makes the worker the leader of its own process group, so
+            # everything it starts can be killed with it.
+            proc = await asyncio.create_subprocess_exec(
+                worker_python(), "-I", str(WORKER_SCRIPT),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=worker_env(), cwd=str(models_dir()),
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return ForecastResult(ok=False, error=f"could not start the Kronos worker: {exc}")
+        finished = False
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()),
+                                              timeout_s)
+            finished = True
+        except TimeoutError:
+            log.warning("kronos_forecast.worker_timeout", timeout_s=timeout_s)
+            return ForecastResult(ok=False,
+                                  error=f"Kronos worker timed out after {timeout_s:g} s")
+        finally:
+            if not finished:  # timeout, cancellation or any other exception
+                await _kill_process_group(proc)
     return read_worker_output(out, err, proc.returncode, request.paths)
+
+
+async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the worker and every process it started, then reap the worker.
+
+    ``proc.wait()`` returns only once the worker has exited and its pipes are closed, and a
+    process the worker started holds those pipes too, so the whole group is killed.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    await proc.wait()
 
 
 def _finite_number(value: Any) -> bool:
