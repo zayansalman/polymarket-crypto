@@ -1,127 +1,113 @@
-"""FEEDS card: per-feed source, delay, and status rows (moved out of the ribbon)."""
+"""FEEDS card: live rows built from the feed monitor's snapshot, not the bot's journal."""
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
-import pytest
-
 import config as _config
-from polymarket_bot import paper
+from polymarket_exec.ops import feed_monitor as fm
 from polymarket_exec.ops.dashboard.panels import feeds, ribbon
 
-_HEALTHY = "spot=chainlink_ws;ref=chainlink_rest;vol=chainlink_ws;quotes=clob"
+NOW = 1_800_000_000.0
 
 
-def _ts(age_s: float) -> str:
-    return (datetime.now(UTC) - timedelta(seconds=age_s)).isoformat()
+def _probe(ok: bool = True, ms: float = 120.0, age: float = 1.0, detail: str | None = None):
+    return fm.ProbeResult(ok=ok, latency_ms=ms, checked_at=NOW - age, detail=detail)
 
 
-def _tick(age_s: float = 2, feed_source: str = _HEALTHY, book: bool = True) -> dict:
-    return {
-        "created_at": _ts(age_s),
-        "feed_source": feed_source,
-        "up_best_bid": 0.48 if book else None,
-        "up_best_ask": 0.52 if book else None,
-        "down_best_bid": None,
-        "down_best_ask": None,
-    }
-
-
-def _rows(**kw) -> dict[tuple[str, str], feeds.FeedRow]:
+def _snap(**kw) -> fm.FeedsSnapshot:
     args = dict(
-        tick=_tick(), is_live=False, last_live_at=None, chainlink_age_s=None, tick_seconds=5.0
+        taken_at=NOW,
+        started_at=NOW - 600,
+        interval_s=10.0,
+        ws_connected=True,
+        ws_fresh=True,
+        ws_print_age_s=1.24,
+        probes={
+            fm.GAMMA: _probe(),
+            fm.CLOB_BOOK: _probe(),
+            fm.CHAINLINK_REST: _probe(),
+            fm.BINANCE: _probe(),
+        },
     )
     args.update(kw)
-    return {(r.name, r.role): r for r in feeds.build_rows(**args)}
+    return fm.FeedsSnapshot(**args)
 
 
-def test_healthy_tick_all_ok_and_binance_on_standby() -> None:
-    rows = _rows(chainlink_age_s=1.24)
-    assert rows[("Bot loop", "decision tick")].status == "OK"
+def _rows(snap) -> dict[tuple[str, str], feeds.FeedRow]:
+    return {(r.name, r.role): r for r in feeds.build_rows(snap)}
+
+
+def test_healthy_feeds_all_ok() -> None:
+    rows = _rows(_snap())
     spot = rows[("Chainlink BTC/USD", "spot · vol")]
     assert (spot.source, spot.delay, spot.status) == ("Polymarket WS", "1.2s", "OK")
-    assert rows[("Chainlink BTC/USD", "window open")].status == "OK"
-    assert rows[("Polymarket book", "UP/DOWN quotes")].status == "OK"
-    assert rows[("Polymarket Gamma", "market lookup")].status == "OK"
-    assert rows[("Binance BTCUSDT", "vol backup")].level == "idle"
-    html = feeds.render(
-        tick=_tick(), is_live=False, last_live_at=None, chainlink_age_s=1.24, tick_seconds=5.0
-    )
+    book = rows[("Polymarket book", "UP/DOWN quotes")]
+    assert (book.delay, book.status) == ("120ms", "OK")
+    assert all(r.status == "OK" for r in rows.values())
+    html = feeds.render(_snap())
     assert "FEEDS" in html and "all OK" in html
-    assert "Polymarket orders" not in html  # live-only row
 
 
-def test_fallbacks_and_failures_are_flagged() -> None:
-    src = "spot=chainlink_rest_poll;ref=unavailable;vol=binance_shape_fallback;quotes=clob"
-    rows = _rows(tick=_tick(feed_source=src, book=False))
-    assert rows[("Chainlink BTC/USD", "spot · vol")].status == "FALLBACK"
-    assert rows[("Chainlink BTC/USD", "window open")].level == "down"
-    assert rows[("Polymarket book", "UP/DOWN quotes")].status == "EMPTY"
-    assert rows[("Binance BTCUSDT", "vol backup")].status == "IN USE"
-
-    rows = _rows(tick=_tick(feed_source="spot=unavailable;ref=chainlink_rest;vol=floor"))
-    assert rows[("Chainlink BTC/USD", "spot · vol")].level == "down"
-    assert rows[("Binance BTCUSDT", "vol backup")].status == "DOWN"
+def test_card_lists_only_live_feeds() -> None:
+    names = {r.name for r in feeds.build_rows(_snap())}
+    assert names == {
+        "Chainlink BTC/USD", "Polymarket Gamma", "Polymarket book", "Binance BTCUSDT"
+    }
+    assert "Bot loop" not in feeds.render(_snap())
 
 
-def test_stale_tick_greys_out_feed_rows_instead_of_showing_old_ok() -> None:
-    rows = _rows(tick=_tick(age_s=600))
-    loop = rows[("Bot loop", "decision tick")]
-    assert (loop.status, loop.delay) == ("STALE", "10m00s")
-    others = [r for k, r in rows.items() if k[0] != "Bot loop"]
-    assert others and all(r.level == "idle" for r in others)
+def test_failed_check_is_down_with_error_on_hover() -> None:
+    snap = _snap(probes={**_snap().probes, fm.GAMMA: _probe(ok=False, detail="HTTPStatusError: 503")})
+    row = _rows(snap)[("Polymarket Gamma", "market lookup")]
+    assert (row.status, row.level, row.detail) == ("DOWN", "down", "HTTPStatusError: 503")
+    html = feeds.render(snap)
+    assert "1 issue" in html and "title='HTTPStatusError: 503'" in html
 
 
-def test_stale_cutoff_follows_runtime_tick_interval() -> None:
-    # 25s-old tick: stale at a 5s interval (cutoff 20s), fresh at 30s (cutoff 90s).
-    assert _rows(tick=_tick(age_s=25))[("Bot loop", "decision tick")].status == "STALE"
-    rows = _rows(tick=_tick(age_s=25), tick_seconds=30.0)
-    assert rows[("Bot loop", "decision tick")].status == "OK"
-    assert rows[("Chainlink BTC/USD", "spot · vol")].level == "on"
+def test_empty_book_is_a_warning_not_down() -> None:
+    snap = _snap(probes={**_snap().probes, fm.CLOB_BOOK: _probe(ok=False, detail="empty book")})
+    row = _rows(snap)[("Polymarket book", "UP/DOWN quotes")]
+    assert (row.status, row.level) == ("EMPTY", "warn")
 
 
-def test_no_tick_reports_no_data() -> None:
-    rows = _rows(tick=None)
-    assert rows[("Bot loop", "decision tick")].status == "NO DATA"
-    html = feeds.render(
-        tick=None, is_live=False, last_live_at=None, chainlink_age_s=None, tick_seconds=5.0
-    )
-    assert "1 issue" in html
+def test_old_check_goes_stale() -> None:
+    snap = _snap(probes={**_snap().probes, fm.BINANCE: _probe(age=45)})
+    row = _rows(snap)[("Binance BTCUSDT", "vol backup")]
+    assert (row.status, row.level) == ("STALE", "warn")
 
 
-def test_chainlink_delay_warns_past_stale_threshold() -> None:
-    age = _config.CHAINLINK_STALE_SECONDS + 5
-    assert _rows(chainlink_age_s=age)[("Chainlink BTC/USD", "spot · vol")].delay_warn
-    assert not _rows(chainlink_age_s=0.5)[("Chainlink BTC/USD", "spot · vol")].delay_warn
+def test_slow_round_trip_flags_delay_only() -> None:
+    snap = _snap(probes={**_snap().probes, fm.CHAINLINK_REST: _probe(ms=2600)})
+    row = _rows(snap)[("Chainlink BTC/USD", "window open")]
+    assert (row.status, row.delay, row.delay_warn) == ("OK", "2.6s", True)
 
 
-@pytest.mark.parametrize(
-    ("last_age", "status", "delay"),
-    [(None, "NONE", "—"), (42, "OK", "42s ago"), (feeds.ORDER_QUIET_AFTER_S + 60, "QUIET", "6m00s ago")],
-)
-def test_live_mode_adds_order_row(last_age, status, delay) -> None:
-    last = None if last_age is None else _ts(last_age)
-    row = _rows(is_live=True, last_live_at=last)[("Polymarket orders", "order entry")]
-    assert (row.status, row.delay) == (status, delay)
+def test_not_checked_yet_shows_checking() -> None:
+    row = _rows(_snap(probes={}))[("Polymarket Gamma", "market lookup")]
+    assert (row.status, row.level, row.delay) == ("CHECKING", "idle", "—")
+
+
+def test_ws_states() -> None:
+    ws = ("Chainlink BTC/USD", "spot · vol")
+    stale_age = _config.CHAINLINK_STALE_SECONDS + 5
+    row = _rows(_snap(ws_fresh=False, ws_print_age_s=stale_age))[ws]
+    assert (row.status, row.level, row.delay_warn) == ("STALE", "warn", True)
+
+    row = _rows(_snap(ws_fresh=False, ws_connected=False))[ws]
+    assert (row.status, row.level) == ("DOWN", "down")
+
+    booting = _snap(ws_fresh=False, ws_connected=False, ws_print_age_s=None, started_at=NOW - 2)
+    row = _rows(booting)[ws]
+    assert (row.status, row.level, row.delay) == ("CONNECTING", "idle", "—")
+
+
+def test_no_monitor_shows_off_rows() -> None:
+    rows = feeds.build_rows(None)
+    assert rows and all((r.status, r.level) == ("OFF", "idle") for r in rows)
 
 
 def test_ribbon_no_longer_carries_feed_chips() -> None:
     html = ribbon.render(
         mode="paper", state="running", session_start=None,
         live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
-        open_pos=[], closed_session=[], tick=_tick(),
+        open_pos=[], closed_session=[], tick=None,
     )
     assert "TICK" not in html and "class='feed " not in html
-
-
-def test_chainlink_print_age_from_live_feed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(paper, "_chainlink_feed", None)
-    assert paper.chainlink_print_age_seconds() is None
-
-    class _Feed:
-        def latest(self):
-            return (datetime.now(UTC).timestamp() - 3.0, 100_000.0)
-
-    monkeypatch.setattr(paper, "_chainlink_feed", _Feed())
-    age = paper.chainlink_print_age_seconds()
-    assert age is not None and 2.5 < age < 4.0

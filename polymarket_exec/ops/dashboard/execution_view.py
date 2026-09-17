@@ -15,6 +15,7 @@ import config as _config
 from db import get_config
 from polymarket_bot import runtime_knobs as _knobs
 
+from polymarket_exec.ops import feed_monitor
 from polymarket_exec.ops.dashboard import quote_feed
 from polymarket_exec.ops.dashboard.panels import _data as data
 from polymarket_exec.ops.dashboard.panels import _wallet
@@ -92,7 +93,6 @@ async def execution_view_html() -> str:
     # mode (live) is never crowded out by a high-volume mode (paper).
     closed_live = await data.closed(style, None, limit=40, mode="live")
     closed_paper = await data.closed(style, None, limit=40, mode="paper")
-    last_live_at = await data.last_live_order_at()
     spread = await data.avg_spread()
 
     perf = data.performance(closed)
@@ -143,15 +143,8 @@ async def execution_view_html() -> str:
         quote=quote_feed.snapshot(selection.asset, selection.timeframe),
         now=time.time(),
     )
-    from polymarket_bot import paper as _paper
-
-    feeds_html = feeds.render(
-        tick=tick,
-        is_live=mode == "live",
-        last_live_at=last_live_at,
-        chainlink_age_s=_paper.chainlink_print_age_seconds(),
-        tick_seconds=float(await _knobs.get("paper_tick_seconds")),
-    )
+    monitor = feed_monitor.current()
+    feeds_html = feeds.render(monitor.snapshot() if monitor is not None else None)
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
