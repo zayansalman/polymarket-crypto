@@ -446,3 +446,91 @@ def test_default_grid() -> None:
     universe = uv.MarketUniverse()
     assert universe.assets == ("btc", "eth", "sol", "xrp", "doge", "bnb")
     assert universe.timeframes == ("5m", "15m", "1h", "1d")
+    assert universe.wanted == frozenset(universe.grid)  # standalone: the whole grid
+
+
+# --- wanted markets only -------------------------------------------------------------
+
+BTC_5M = ("btc", "5m")
+ETH_1H = ("eth", "1h")
+
+
+def _pairs_of(update: uv.UniverseUpdate) -> set[tuple[str, str]]:
+    return set(update.groups)
+
+
+@pytest.mark.asyncio
+async def test_only_wanted_markets_are_looked_up_and_followed() -> None:
+    gamma = Gamma()
+    clock = {"t": T0}
+    universe = _universe(gamma, clock, assets=("btc", "eth"), timeframes=("5m", "1h"),
+                         wanted=[BTC_5M, ("hype", "1h"), ("btc", "4h")])
+    assert universe.wanted == {BTC_5M}  # pairs outside the grid are ignored
+    try:
+        update = await universe.refresh()
+        assert sorted(gamma.calls) == ["btc-updown-5m-1789640400", "btc-updown-5m-1789640700"]
+        assert _pairs_of(update) == {BTC_5M} and len(update.tokens) == 4
+        assert universe.market("eth", "5m") is None and universe.market("btc", "1h") is None
+        btc = universe.market("btc", "5m")
+        universe.set_wanted({BTC_5M, ETH_1H})
+        update = await universe.refresh()
+        assert len(gamma.calls) == 4 and _pairs_of(update) == {BTC_5M, ETH_1H}
+        assert universe.market("eth", "1h") is not None
+        # Released: its windows go at the next selection, with no I/O.
+        universe.set_wanted({ETH_1H})
+        update = universe.select()
+        assert _pairs_of(update) == {ETH_1H} and universe.groups() == update.groups
+        assert universe.market("btc", "5m") is None
+        assert universe.window_for_token(btc.up_token) is None
+        assert btc.up_token not in universe.tokens()
+        assert universe.status().markets == 2
+        universe.set_wanted(())
+        assert universe.select() == uv.UniverseUpdate(frozenset(), (), {})
+        assert universe.tokens() == frozenset() and universe.status().markets == 0
+        await universe.refresh()
+        assert len(gamma.calls) == 4  # nothing wanted, nothing looked up
+    finally:
+        await universe.aclose()
+
+
+def test_announcements_for_markets_nobody_wants_make_a_later_want_instant() -> None:
+    clock = {"t": T0}
+    gamma = Gamma()
+    universe = _universe(gamma, clock, wanted=())
+    for slug in ("btc-updown-5m-1789640400", "btc-updown-5m-1789640700"):
+        universe.observe(cm.NewMarketEvent("m", slug, "q", ("Up", "Down"),
+                                           (f"{slug}:u", f"{slug}:d"), "c", True, 0.01,
+                                           None, 0))
+    assert universe.select().tokens == frozenset() and universe.status().announced == 2
+    universe.set_wanted({BTC_5M})
+    update = universe.select()  # no lookup needed
+    assert len(update.tokens) == 4 and gamma.calls == []
+    assert [r.slug for r in update.opened] == ["btc-updown-5m-1789640400"]
+
+
+@pytest.mark.asyncio
+async def test_looked_up_tokens_are_kept_while_their_window_is_live() -> None:
+    gamma = Gamma()
+    clock = {"t": T0}
+    universe = _universe(gamma, clock, wanted={BTC_5M})
+    try:
+        first = await universe.refresh()
+        current = universe.market("btc", "5m")
+        universe.set_wanted(())
+        universe.select()
+        assert universe.market("btc", "5m") is None
+        clock["t"] += 60
+        universe.set_wanted({BTC_5M})  # wanted again inside the same windows
+        again = universe.select()
+        assert again.tokens == first.tokens and len(gamma.calls) == 2
+        assert again.opened == (current,)  # a new follower learns the window again
+        await universe.refresh()
+        assert len(gamma.calls) == 2
+        # Once both windows are over (and nobody wants them), the tokens are forgotten.
+        universe.set_wanted(())
+        clock["t"] = universe.market("btc", "5m", "next").window_end + 1
+        universe.select()
+        assert universe.known_tokens(current.slug) is None
+        assert universe.known_tokens("btc-updown-5m-1789640700") is None
+    finally:
+        await universe.aclose()

@@ -10,11 +10,17 @@ token has). Slugs come from ``updown_quote.window_slug``:
 * 1d — noon ET the day before to noon ET on the date the slug names (23 or 25 hours
   on DST change days).
 
+Only the wanted pairs are followed (``set_wanted``; the hub passes the markets someone
+is using). The grid is what is available.
+
 Token ids come from ``new_market`` announcements (Up/Down markets are announced about
-24 h ahead) or, failing that, one Gamma ``/markets?slug=`` read per window (a miss is
-retried at most every 30 s). This is metadata, not price polling. ``select`` switches
-windows from the tokens already known, without I/O, so a slow lookup never holds up a
-window that starts; ``refresh`` selects, looks up what is missing, and selects again.
+24 h ahead) or, failing that, one Gamma ``/markets?slug=`` read per window of a wanted
+pair (a miss is retried at most every 30 s). This is metadata, not price polling.
+Announcements are kept for every pair of the grid, and looked-up tokens while their
+window is current or next, so wanting a pair again is instant when they are known.
+``select`` switches windows from the tokens already known, without I/O, so a slow lookup
+never holds up a window that starts; ``refresh`` selects, looks up what is missing, and
+selects again.
 
 A window that has ended stays followed for 30 s, and until its ``market_resolved``
 arrives, which the server only sends for subscribed tokens. The wait is capped per
@@ -138,9 +144,11 @@ class MarketUniverse:
         drop_after_end_s: float = DROP_AFTER_END_S,
         await_resolution_s: float | Mapping[str, float] | None = None,
         announced_cap: int = ANNOUNCED_CAP,
+        wanted: Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """``await_resolution_s``: one wait for every timeframe, or waits by timeframe
-        (timeframes not named keep ``AWAIT_RESOLUTION_S``)."""
+        (timeframes not named keep ``AWAIT_RESOLUTION_S``). ``wanted``: the (asset,
+        timeframe) pairs to follow (default: the whole grid; see ``set_wanted``)."""
         self.assets = tuple(dict.fromkeys(assets))
         self.timeframes = tuple(dict.fromkeys(timeframes))
         self._client_factory = client_factory or _default_client
@@ -160,6 +168,7 @@ class MarketUniverse:
         self._announced_cap = max(1, announced_cap)
         self._last_error: str | None = None
         self._grid = self._valid_grid()
+        self._wanted = self._in_grid(wanted)
         self._prefixes = self._family_prefixes()
         self._announced: dict[str, Tokens] = {}
         self._found: dict[str, Tokens] = {}
@@ -174,8 +183,26 @@ class MarketUniverse:
 
     @property
     def grid(self) -> tuple[tuple[str, str], ...]:
-        """The (asset, timeframe) pairs followed (pairs without a slug scheme are skipped)."""
+        """The (asset, timeframe) pairs available (pairs without a slug scheme are skipped)."""
         return self._grid
+
+    @property
+    def wanted(self) -> frozenset[tuple[str, str]]:
+        """The grid pairs followed."""
+        return self._wanted
+
+    def set_wanted(self, pairs: Iterable[tuple[str, str]] | None) -> None:
+        """Follow only these grid pairs (None: the whole grid; others are ignored).
+
+        The next ``select`` drops the windows of pairs no longer wanted, and lookups
+        only run for wanted pairs. Tokens already known are kept for any pair while
+        their window is current or next, so wanting a pair again needs no lookup.
+        """
+        self._wanted = self._in_grid(pairs)
+
+    def _in_grid(self, pairs: Iterable[tuple[str, str]] | None) -> frozenset[tuple[str, str]]:
+        grid = frozenset(self._grid)
+        return grid if pairs is None else grid.intersection(pairs)
 
     def _valid_grid(self) -> tuple[tuple[str, str], ...]:
         grid = []
@@ -217,9 +244,10 @@ class MarketUniverse:
     def groups(self, now: float | None = None) -> dict[tuple[str, str], frozenset[str]]:
         """Tokens to keep subscribed, by (asset, timeframe); a window's two tokens stay together."""
         now = self._time_fn() if now is None else now
+        wanted = self._wanted
         out: dict[tuple[str, str], set[str]] = {}
         for ref in tuple(self._tracked.values()):
-            if self._keep(ref, now):
+            if (ref.asset, ref.timeframe) in wanted and self._keep(ref, now):
                 out.setdefault((ref.asset, ref.timeframe), set()).update(
                     (ref.up_token, ref.down_token))
         return {key: frozenset(tokens) for key, tokens in out.items()}
@@ -266,11 +294,18 @@ class MarketUniverse:
         """Follow the current and next windows whose tokens are already known (no I/O).
 
         ``opened`` lists windows that became current since the last selection, so each
-        is reported once whichever caller selects first."""
+        is reported once whichever caller selects first (a pair wanted again reports its
+        current window again)."""
         now = self._time_fn() if now is None else now
-        tracked = {slug: ref for slug, ref in self._tracked.items() if self._keep(ref, now)}
+        wanted = self._wanted
+        tracked = {slug: ref for slug, ref in self._tracked.items()
+                   if (ref.asset, ref.timeframe) in wanted and self._keep(ref, now)}
         selected: dict[tuple[str, str, str], MarketRef] = {}
+        live_slugs: set[str] = set()  # current and next windows of the whole grid
         for asset, timeframe, which, (slug, start, end) in self._windows(now):
+            live_slugs.add(slug)
+            if (asset, timeframe) not in wanted:
+                continue
             tokens = self.known_tokens(slug)
             if tokens is None:
                 continue
@@ -290,35 +325,41 @@ class MarketUniverse:
             for token, side in ((ref.up_token, "up"), (ref.down_token, "down"))
         }
         self._resolved = {slug for slug in self._resolved if slug in tracked}
-        self._found = {slug: tokens for slug, tokens in self._found.items() if slug in tracked}
+        self._found = {slug: tokens for slug, tokens in self._found.items()
+                       if slug in tracked or slug in live_slugs}
         groups = self.groups(now)
         return UniverseUpdate(frozenset().union(*groups.values()), tuple(opened), groups)
 
     async def refresh(self, now: float | None = None) -> UniverseUpdate:
         """Select what is known, look up the tokens still missing (Gamma), select again.
 
-        The first selection publishes a window switch without waiting for lookups; the
-        second one runs at the time the lookups finished (or at ``now`` if given)."""
+        Only wanted pairs are looked up. The first selection publishes a window switch
+        without waiting for lookups; the second one runs at the time the lookups finished
+        (or at ``now`` if given)."""
         start = self._time_fn() if now is None else now
         early = self.select(start)
         self._failed = {slug: at_s for slug, at_s in self._failed.items()
                         if start - at_s < self._negative_retry_s}
-        missing = [bounds[0] for *_, bounds in self._windows(start)
+        missing = [bounds[0] for *_, bounds in self._windows(start, self._wanted)
                    if self.known_tokens(bounds[0]) is None and bounds[0] not in self._failed]
         await self._lookup_all(dict.fromkeys(missing))
         late = self.select(now)
         return UniverseUpdate(late.tokens, early.opened + late.opened, late.groups)
 
-    def _windows(self, now: float) -> list[tuple[str, str, str, tuple[str, float, float]]]:
-        """(asset, timeframe, "current" | "next", (slug, start, end)) for the grid."""
+    def _windows(self, now: float, pairs: frozenset[tuple[str, str]] | None = None
+                 ) -> list[tuple[str, str, str, tuple[str, float, float]]]:
+        """(asset, timeframe, "current" | "next", (slug, start, end)) for the grid
+        (only ``pairs`` if given), in grid order."""
         at = datetime.fromtimestamp(now, UTC)
-        wanted = []
+        windows = []
         for asset, timeframe in self._grid:
+            if pairs is not None and (asset, timeframe) not in pairs:
+                continue
             current = window_bounds(asset, timeframe, at)
             upcoming = window_bounds(asset, timeframe, datetime.fromtimestamp(current[2], UTC))
-            wanted.append((asset, timeframe, CURRENT, current))
-            wanted.append((asset, timeframe, NEXT, upcoming))
-        return wanted
+            windows.append((asset, timeframe, CURRENT, current))
+            windows.append((asset, timeframe, NEXT, upcoming))
+        return windows
 
     async def aclose(self) -> None:
         if self._client is not None:
