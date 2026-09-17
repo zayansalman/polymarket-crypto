@@ -10,6 +10,7 @@ import pytest
 import websockets
 
 from polymarket_exec.marketdata import rtds_stream as rs
+from polymarket_exec.marketdata.clob_stream import tls_context
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
 RECEIVED = 1_789_555_690_000
@@ -306,4 +307,5 @@ def test_default_connection_options(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(websockets, "connect", fake_connect)
     rs._default_connect(rs.RTDS_WS)
     assert captured == {"url": "wss://ws-live-data.polymarket.com", "open_timeout": 15,
-                        "ping_interval": None, "max_queue": 1024, "close_timeout": 1}
+                        "ping_interval": None, "max_queue": 1024, "close_timeout": 1,
+                        "ssl": tls_context()}  # the one the market channel uses too

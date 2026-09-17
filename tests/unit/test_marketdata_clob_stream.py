@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import functools
 import json
+import ssl
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from websockets.frames import Close
 from polymarket_exec.marketdata import clob_messages as cm
 from polymarket_exec.marketdata import clob_shard as sh
 from polymarket_exec.marketdata import clob_stream as cs
+from polymarket_exec.marketdata import rtds_stream as rs
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
 
@@ -707,7 +709,33 @@ def test_default_connection_options(monkeypatch: pytest.MonkeyPatch) -> None:
         "url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
         "open_timeout": 15, "ping_interval": None, "max_size": 16 * 2**20,
         "max_queue": 8192, "compression": None, "close_timeout": 1,
+        "ssl": cs.tls_context(),
     }
+
+
+def test_every_socket_shares_one_tls_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    # websockets makes a TLS context per wss:// socket unless given one; each costs
+    # ~13 ms of blocking CPU, so ~28 sockets froze the loop for 215-340 ms at start.
+    made: list[ssl.SSLContext] = []
+    real = ssl.create_default_context
+
+    def counting(*args, **kwargs) -> ssl.SSLContext:
+        made.append(real(*args, **kwargs))
+        return made[-1]
+
+    captured: list[dict] = []
+    monkeypatch.setattr(cs, "_tls", None)
+    monkeypatch.setattr(ssl, "create_default_context", counting)
+    monkeypatch.setattr(websockets, "connect",
+                        lambda url, **kwargs: captured.append(kwargs) or object())
+    for _ in range(3):
+        cs._default_connect(cs.CLOB_MARKET_WS)
+        rs._default_connect(rs.RTDS_WS)
+    assert len(made) == 1 and all(kw["ssl"] is made[0] for kw in captured)
+    assert made[0].verify_mode == ssl.CERT_REQUIRED and made[0].check_hostname
+    cs._default_connect("ws://127.0.0.1:9/ws")  # plain sockets take no TLS argument
+    rs._default_connect("ws://127.0.0.1:9/")
+    assert "ssl" not in captured[-1] and "ssl" not in captured[-2]
 
 
 def test_status_before_running() -> None:

@@ -41,6 +41,7 @@ from polymarket_exec.marketdata.clob_stream import (
     pause,
     percentile,
     run_until_stopped,
+    tls_options,
 )
 
 log = get_logger("marketdata.rtds")
@@ -487,6 +488,7 @@ class RtdsPriceStream:
 def _default_connect(url: str) -> Any:
     import websockets
 
-    # RTDS negotiates permessage-deflate, so compression stays on (the default).
+    # RTDS negotiates permessage-deflate, so compression stays on (the default). The TLS
+    # context is the one the market-channel sockets share.
     return websockets.connect(url, open_timeout=15, ping_interval=None, max_queue=1024,
-                              close_timeout=1)
+                              close_timeout=1, **tls_options(url))

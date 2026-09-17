@@ -27,6 +27,9 @@ Protocol rules this client follows (live-checked 2026-09-16):
   raises the best as well, so it never triggers this).
 * At 350-900 frames/s the websockets default ``max_queue`` (16) stalls, so the queue is
   large and each frame is handled synchronously and quickly.
+* Every market-data socket (this channel and RTDS) shares one TLS context
+  (``tls_context``): building one blocks the loop for ~13 ms, and ~28 sockets opening at
+  start froze it for 215-340 ms.
 """
 from __future__ import annotations
 
@@ -34,6 +37,7 @@ import asyncio
 import itertools
 import json
 import random
+import ssl
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable, Iterator
@@ -117,6 +121,23 @@ class StreamRecycled(Exception):
     """A supervisor asked for a new connection (``request_reconnect``)."""
 
 
+_tls: ssl.SSLContext | None = None
+
+
+def tls_context() -> ssl.SSLContext:
+    """The client TLS context every market-data socket shares, made on first use."""
+    global _tls
+    if _tls is None:
+        _tls = ssl.create_default_context()
+    return _tls
+
+
+def tls_options(url: str) -> dict[str, Any]:
+    """``websockets.connect`` TLS arguments: the shared context for ``wss://`` URLs
+    (websockets would build a new one per socket), none for plain ``ws://``."""
+    return {"ssl": tls_context()} if url.startswith("wss://") else {}
+
+
 def _default_connect(url: str) -> Any:
     import websockets
 
@@ -128,6 +149,7 @@ def _default_connect(url: str) -> Any:
         max_queue=8192,
         compression=None,
         close_timeout=1,
+        **tls_options(url),
     )
 
 

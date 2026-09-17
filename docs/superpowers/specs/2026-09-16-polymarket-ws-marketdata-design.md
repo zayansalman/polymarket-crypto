@@ -161,7 +161,7 @@ activity.
 | `clob_messages.py` | Pure `parse_frame(text) -> [event]`; unknown or malformed objects become `Unknown`. |
 | `order_book.py` | `OrderBook` per token; `top()` is O(1) and returns a frozen `TopOfBook`. |
 | `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog on the followed tokens' events (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s. |
-| `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. |
+| `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. Shares the market channel's TLS context (`clob_stream.tls_context`): building one blocks the loop ~13 ms, and ~28 sockets opening at once froze it for 215-340 ms. |
 | `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. `select()` rolls windows over from the tokens already known (no I/O); the hub runs it every 2 s apart from the lookups, so a slow Gamma read never holds up a window that starts. |
 | `clob_shard.py` | `ClobShard`: one asset x timeframe's N connections, per-connection books, the freshest served, events pushed once, lagging connections replaced. |
 | `hub.py` | `MarketDataHub`: the public API; one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status. A stop cancels Gamma lookups in flight, so `run` returns within ~1 s. |
