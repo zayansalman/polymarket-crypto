@@ -189,6 +189,14 @@ market channel only carries the markets something uses:
   are the totals (characters per second over the last 10 whole seconds; RTDS after
   decompression).
 
+Live check (2026-09-17 08:21 UTC, one process, `demand_linger_s=10`):
+
+| Phase | Result |
+|---|---|
+| Nothing wanted, 30 s | no CLOB socket, 0 CLOB bytes, no Gamma read; RTDS 5.2 KiB/s steady (12.6 KiB/s in the first 10 s, history snapshots); 1.1% of a core |
+| btc-5m + btc-1h wanted, 60 s | first socket 0.8 s after `want`, first live quotes after 0.9-1.2 s (4 Gamma reads); 4 sockets; CLOB 631 KiB/s (951 frames/s; 250 KiB/s in an earlier run); served latency p50/p90/max btc-5m 50/100/312 ms, btc-1h 60/180/334 ms; no reconnects or recycles; 12.6% of a core, 77 MiB RSS |
+| Released | LINGERING for 10 s (quotes still live, 479 KiB/s); AVAILABLE at 10.0 s; all 4 sockets closed 10.2-10.3 s after the release, not counted as reconnects; reads None; 0 CLOB bytes in the next 11.5 s |
+
 ## Modules
 
 | Module | Role |
