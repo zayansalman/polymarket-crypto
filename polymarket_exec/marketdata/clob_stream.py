@@ -15,6 +15,9 @@ Protocol rules this client follows (live-checked 2026-09-16):
 * The server closes with 1000 once every subscribed token has resolved. Any close while
   tokens are wanted means reconnect (backoff 1 s doubling to 30 s, with jitter; reset
   once a connection has delivered data).
+* No wanted tokens, no connection: emptying the token set closes the socket (an idle
+  socket still gets the platform-wide ``new_market`` broadcast). That is not a
+  reconnect, and the next tokens open a new socket without a backoff wait.
 * A subscription can go silent. No event for the followed tokens for 45 s means
   unsubscribe and subscribe again (fresh snapshots); still nothing 45 s later means a new
   connection. The platform-wide ``new_market`` broadcast (0.6-1.4 a second on every
@@ -426,6 +429,12 @@ class ClobMarketStream:
                 self._last_error = describe_error(exc)
                 rate_limited = is_rate_limited(exc)
                 log.warning("marketdata.clob_disconnected", error=self._last_error)
+            else:
+                # Stopped, or closed on purpose because nothing is followed any more:
+                # not a reconnect, and no backoff before tokens open a new socket.
+                if not stop_event.is_set():
+                    log.info("marketdata.clob_closed_idle")
+                continue
             finally:
                 self._mark_down()
             if stop_event.is_set():
@@ -449,10 +458,12 @@ class ClobMarketStream:
                 waiter.cancel()
 
     async def _serve(self) -> None:
+        """Hold one connection. Returns (closing it) once no token is wanted."""
         async with self._connect(self.url) as ws:
             self._on_open()
             await self._sync(ws)
-            await first_exit(self._read(ws), self._housekeep(ws))
+            if self._desired:  # the set may have emptied during the handshake
+                await first_exit(self._read(ws), self._housekeep(ws))
 
     def _on_open(self) -> None:
         now = self._time_fn()
@@ -506,6 +517,8 @@ class ClobMarketStream:
     async def _housekeep(self, ws: Any) -> None:
         while True:
             await wait_set(self._changed, self._tick_s)
+            if not self._desired:
+                return  # nothing left to follow: the socket is closed, not unsubscribed
             if self._changed.is_set():
                 await self._sync(ws)
             now = self._time_fn()
