@@ -182,6 +182,24 @@ Every live boot, BEFORE any trading:
    boot is REFUSED with instructions — the bot never trades on top of unknown
    exposure.
 
+### Daily BTC strategies (Tsinghua-Kronos BTC 24h) setup
+
+- **One-time setup, before selecting BTC 1d.** The Kronos forecast worker
+  (`polymarket_bot/kronos_forecast/`) needs torch, einops and pandas in the
+  interpreter that runs it. Either install the optional extra into the app's
+  own interpreter (`python3 -m pip install -e '.[kronos]'`) or set
+  `KRONOS_PYTHON` in `.env` to an absolute path of a Python interpreter that
+  has them. Then fetch the pinned weights once: `python3
+  tools/fetch_kronos_mini_weights.py`. Until both are done, every noon-ET
+  decision is recorded `UNAVAILABLE` and nothing is bought — the reason names
+  which step is missing.
+- **Settlement.** A daily BTC position resolves 25 hours (the longest
+  possible noon-ET window, on a daylight-saving day) plus the usual
+  resolution grace period after its window opens — see
+  `_row_window_resolved` in `polymarket_exec/execution/live.py`. An exact
+  tie between the two Binance 1-minute closes pays 0.50 per share on either
+  side, net of the entry taker fee, same as a win/loss settlement.
+
 ### Kill switch
 
 ```bash

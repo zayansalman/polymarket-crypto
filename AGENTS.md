@@ -51,6 +51,14 @@ paper-trading lab. Two strategies are wired and run simultaneously:
    the mode selected (paper or live). One decision per hour per strategy, one
    open position per strategy, held to resolution and settled from the Binance
    1h candle. Strategy doc: `docs/strategies/hourly-btc-strategies.md`.
+4. **Daily BTC strategies** (`polymarket_bot/daily_btc/engine.py`) — the loop
+   runs them when the operator selects **BTC 1d** and presses ▶ Start, in the
+   mode selected (paper or live). Today: **Tsinghua-Kronos BTC 24h**. At noon
+   New York time it runs the Kronos team's own Kronos-mini 24-hour BTCUSDT
+   forecast in an isolated worker process, and buys Up or Down when the
+   forecast beats the market price. One position of its own, held to the
+   market's noon-ET Binance settlement. Strategy doc:
+   `docs/strategies/tsinghua-kronos-btc-24h.md`.
 
 The primary active product behavior for the BTC loop specifically is:
 
@@ -63,9 +71,9 @@ The primary active product behavior for the BTC loop specifically is:
 
 Live trading is also built and multi-gated (see the live rule below); it stays
 off unless the operator explicitly arms every gate **and** this file names an
-authorized live-trading market (BTC hourly Up/Down — see Absolute
-Rules). This includes the daily altcoin scanner: it has no live path built at
-all, so there is nothing to arm for it.
+authorized live-trading market (BTC hourly Up/Down and the BTC daily Up/Down
+market — see Absolute Rules). This includes the daily altcoin scanner: it has
+no live path built at all, so there is nothing to arm for it.
 
 ## Scope Fence (in scope / out of scope)
 
@@ -101,21 +109,27 @@ In scope:
 Out of scope:
 
 - Flipping the live gate or placing live orders on behalf of the operator.
-- **Any market other than BTC hourly Up/Down, on the live trading path (real
-  capital).** BTC hourly is authorized (2026-09-14); everything else stays
-  research/shadow-only until this file is explicitly updated naming it.
+- **Any market other than BTC hourly Up/Down and the BTC daily Up/Down market,
+  on the live trading path (real capital).** BTC hourly is authorized
+  (2026-09-14); the BTC daily Up/Down market is authorized (2026-09-16, to
+  build Tsinghua-Kronos BTC 24h; standing rule 2026-09-14: "we will run what
+  we run when we select mode"). Everything else stays research/shadow-only
+  until this file is explicitly updated naming it.
 - Remote deployment / exposing the dashboard beyond localhost by default.
 
 ## Absolute Rules
 
 - **Live trading (real capital) is authorized for the BTC hourly Up/Down market**
-  (`polymarket_bot/hourly/`, operator decision 2026-09-14). There is no
-  paper-only strategy: a strategy runs in whichever mode the operator selects at
-  Start. Every other market stays research/shadow-only until this file names it.
+  (`polymarket_bot/hourly/`, operator decision 2026-09-14) **and the BTC daily
+  Up/Down market** (`polymarket_bot/daily_btc/`, operator decision 2026-09-16:
+  build Tsinghua-Kronos BTC 24h into the app; standing rule 2026-09-14: "we
+  will run what we run when we select mode"). There is no paper-only strategy:
+  a strategy runs in whichever mode the operator selects at Start. Every other
+  market stays research/shadow-only until this file names it.
 - One open position per strategy at a time, per mode (operator decision
-  2026-09-14). The legacy 5m loop is one slot; each hourly BTC strategy owns its
-  own slot, in paper and in live. Every entry still passes RiskGate (loss halt,
-  caps, slippage, kill switch).
+  2026-09-14). The legacy 5m loop is one slot; each hourly and daily BTC
+  strategy owns its own slot, in paper and in live. Every entry still passes
+  RiskGate (loss halt, caps, slippage, kill switch).
 - **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
   It runs only when the operator **clicks LIVE in the dashboard**
   **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
@@ -173,6 +187,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1282.
-- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_bot/daily_btc/engine.py`, `polymarket_bot/daily_btc/fade_three_day.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
+- **Tests:** 1295.
+- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_bot/daily_btc/fade_three_day.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

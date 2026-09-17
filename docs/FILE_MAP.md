@@ -21,8 +21,8 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/scanner.py` | WIRED | 1 | The daily altcoin scanner's tick loop (issue #185). |
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
-| `polymarket_bot/daily_btc/__init__.py` | pkg | 2 | Daily (noon-ET) BTC Up/Down markets: window timing, discovery, Binance reads, strategies. |
-| `polymarket_bot/daily_btc/engine.py` | DEAD? | 0 | Daily BTC engine: one decision per noon-ET window per strategy, entries, Binance settlement. |
+| `polymarket_bot/daily_btc/__init__.py` | pkg | 3 | Daily (noon-ET) BTC Up/Down markets: window timing, discovery, Binance reads, strategies. |
+| `polymarket_bot/daily_btc/engine.py` | WIRED | 1 | Daily BTC engine: one decision per noon-ET window per strategy, entries, Binance settlement. |
 | `polymarket_bot/daily_btc/fade_three_day.py` | DEAD? | 0 | Fade the 3-day direction: bet the daily BTC market against BTC's last 3 days. |
 | `polymarket_bot/daily_btc/forecast_input.py` | WIRED | 2 | Tsinghua-Kronos BTC 24h input: the 383 closed Binance spot BTCUSDT 1h candles before noon ET. |
 | `polymarket_bot/daily_btc/ledger.py` | WIRED | 1 | Daily BTC decision record: one row per (noon-ET window, strategy, mode), actions, settlement. |
