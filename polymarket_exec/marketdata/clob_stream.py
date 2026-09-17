@@ -225,10 +225,20 @@ async def first_exit(*coros: Coroutine[Any, Any, None]) -> None:
         task.result()
 
 
+async def wait_set(event: asyncio.Event, timeout: float) -> None:
+    """Wait until ``event`` is set, at most ``timeout`` seconds.
+
+    Not ``asyncio.wait_for``: on Python 3.11 it returns normally when the task is
+    cancelled just as the event is set, and the cancel is lost.
+    """
+    with suppress(TimeoutError):
+        async with asyncio.timeout(timeout):
+            await event.wait()
+
+
 async def pause(stop_event: asyncio.Event, delay: float) -> None:
     """Sleep ``delay`` seconds, or less if ``stop_event`` is set first."""
-    with suppress(asyncio.TimeoutError):
-        await asyncio.wait_for(stop_event.wait(), timeout=delay)
+    await wait_set(stop_event, delay)
 
 
 class Backoff:
@@ -473,8 +483,7 @@ class ClobMarketStream:
 
     async def _housekeep(self, ws: Any) -> None:
         while True:
-            with suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._changed.wait(), timeout=self._tick_s)
+            await wait_set(self._changed, self._tick_s)
             if self._changed.is_set():
                 await self._sync(ws)
             now = self._time_fn()

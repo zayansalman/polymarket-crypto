@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from websockets.exceptions import ConnectionClosedOK
 from websockets.frames import Close
 
 from polymarket_exec.marketdata import clob_messages as cm
+from polymarket_exec.marketdata import clob_shard as sh
 from polymarket_exec.marketdata import clob_stream as cs
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
@@ -534,6 +536,105 @@ async def test_stop_during_the_backoff_wait() -> None:
     stream.set_tokens({"a"})
     await _stops_within_a_second(stream, lambda: stream.status().last_error is not None)
     assert stream.status().last_error == "OSError: refused"
+
+
+def _release(waiter: asyncio.Future, *args) -> None:
+    if not waiter.done():
+        waiter.set_result(None)
+
+
+async def _cancel_and_wait(fut: asyncio.Future) -> None:
+    waiter = asyncio.get_running_loop().create_future()
+    callback = functools.partial(_release, waiter)
+    fut.add_done_callback(callback)
+    try:
+        fut.cancel()
+        await waiter
+    finally:
+        fut.remove_done_callback(callback)
+
+
+async def wait_for_311(awaitable, timeout):
+    """``asyncio.wait_for`` as Python 3.11 ships it (the positive-timeout path). A cancel
+    that lands just as the awaited thing completes is lost: the result comes back."""
+    loop = asyncio.get_running_loop()
+    waiter = loop.create_future()
+    timeout_handle = loop.call_later(timeout, _release, waiter)
+    callback = functools.partial(_release, waiter)
+    fut = asyncio.ensure_future(awaitable)
+    fut.add_done_callback(callback)
+    try:
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            if fut.done():
+                return fut.result()
+            fut.remove_done_callback(callback)
+            await _cancel_and_wait(fut)
+            raise
+        if fut.done():
+            return fut.result()
+        fut.remove_done_callback(callback)
+        await _cancel_and_wait(fut)
+        try:
+            return fut.result()
+        except asyncio.CancelledError as exc:
+            raise TimeoutError() from exc
+    finally:
+        timeout_handle.cancel()
+
+
+async def _cancelled_beside_a_token_change(run, set_tokens, ready) -> bool:
+    """Start ``run``; change the tokens, stop and cancel in one step. True if it ended."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(run(stop))
+    try:
+        await until(ready)
+        await asyncio.sleep(0.05)  # housekeeping is waiting for a change
+        set_tokens({"a", "b"})  # e.g. the hub applying a refresh as the app shuts down
+        stop.set()
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=1.0)
+        return bool(done)
+    finally:
+        task.cancel()
+        await asyncio.wait({task}, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_beside_a_token_change_stops_the_stream(monkeypatch) -> None:
+    # On Python 3.11 the lost cancel kept run() going for up to two watchdog periods.
+    monkeypatch.setattr(asyncio, "wait_for", wait_for_311)
+    conn = Connector()
+    stream = _stream(conn, tick_s=0.5)
+    stream.set_tokens({"a"})
+    assert await _cancelled_beside_a_token_change(
+        stream.run, stream.set_tokens, lambda: conn.made and conn.made[0].sent)
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_beside_a_token_change_stops_a_hedged_group(monkeypatch) -> None:
+    monkeypatch.setattr(asyncio, "wait_for", wait_for_311)
+    conn = Connector()
+    shard = sh.ClobShard("btc-5m", 2, on_top=lambda *a: None, on_trade=lambda e: None,
+                         on_other=lambda e: None, connect=conn)
+    shard.set_tokens({"a"})
+    assert await _cancelled_beside_a_token_change(
+        shard.run, shard.set_tokens, lambda: len(conn.made) == 2
+        and all(ws.sent for ws in conn.made))
+
+
+@pytest.mark.asyncio
+async def test_pause_passes_on_a_cancel_that_meets_the_stop(monkeypatch) -> None:
+    monkeypatch.setattr(asyncio, "wait_for", wait_for_311)
+    stop = asyncio.Event()
+    task = asyncio.create_task(cs.pause(stop, 30.0))
+    await asyncio.sleep(0.01)
+    stop.set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.wait_for(cs.pause(asyncio.Event(), 0.01), timeout=1) is None
 
 
 @pytest.mark.asyncio
