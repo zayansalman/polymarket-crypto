@@ -2954,7 +2954,19 @@ git commit -m "feat(daily_btc): engine - Tsinghua-Kronos BTC 24h decision, entry
   - `market_selection.LOOP_SUPPORTED` gains `("btc", "1d")`
   - `market_selector.open_market_pnl` maps `bitcoin-up-or-down-on-<month>-<day>-<year>` rows to `("btc", "1d")`
 
-- [ ] **Step 1: Write the failing loop tests** — `tests/unit/test_daily_btc_loop.py`
+**Adaptation from the plan (Claude, 2026-09-17):** `force_close_open_positions` /
+`_force_close_hourly_rows` were already generalized by the hourly session's own review fix
+(finding `5m-stop-depends-on-hourly-discovery`, review follow-up) to sell a strategy's
+CURRENT-window rows by matching `window_start_ts` to `engine.current_window_start(now)`,
+**regardless of the currently pinned `_timeframe`** — not gated on `_timeframe ==
+engine.TIMEFRAME` as this plan originally assumed. That is more correct: `_timeframe`
+resets to 5m on restart, but a live 1h/1d row must still be sellable at Stop. This task
+generalizes that real behaviour (via a new `current_window_start(now)` accessor on both
+engine modules) into `_force_close_strategy_rows`, used for every timeframe in
+`_STRATEGY_ENGINES`. The loop test below asserts the real (better) semantics, not the
+plan's original `_timeframe`-gated one.
+
+- [x] **Step 1: Write the failing loop tests** — `tests/unit/test_daily_btc_loop.py`
 
 ```python
 """The loop trades BTC 1d when started on it, in the selected mode, and settles 1d rows from any run."""
@@ -3079,12 +3091,12 @@ def test_daily_btc_slug_rows_glow_the_btc_1d_button() -> None:
 
 If the merged `open_market_pnl` returns a different shape for rows without a live price, copy the expectation from the neighbouring hourly-glow test.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_daily_btc_loop.py tests/unit/test_market_selector.py -q -p no:cacheprovider`
 Expected: FAIL (`LOOP_SUPPORTED` lacks 1d; the tick is not routed; the daily slug does not glow).
 
-- [ ] **Step 3: Implement in `polymarket_bot/paper.py`**
+- [x] **Step 3: Implement in `polymarket_bot/paper.py`**
 
 1. Import the engine and add a registry after the existing `hourly_engine` import:
 
@@ -3164,7 +3176,7 @@ async def _settle_other_engines(
 
    `legacy` becomes the rows whose `market_timeframe` is not a key of `_STRATEGY_ENGINES`. Keep the merged error handling around the legacy block unchanged.
 
-- [ ] **Step 4: Controller, selection, selector glow**
+- [x] **Step 4: Controller, selection, selector glow**
 
 - `polymarket_bot/market_selection.py`: `LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset({("btc", "5m"), ("btc", "1h"), ("btc", "1d")})`
 - `polymarket_bot/controller.py`: the Start-refusal text ends with `Select BTC 5m, BTC 1h or BTC 1d.` If a test pins the old text, update that test.
@@ -3190,12 +3202,12 @@ _DAILY_SLUG = re.compile(
             key = (_LONG_TO_ASSET[daily.group(1)], "1d")
 ```
 
-- [ ] **Step 5: Run the loop tests and the neighbours**
+- [x] **Step 5: Run the loop tests and the neighbours**
 
 Run: `PYTHON_DOTENV_DISABLED=1 python3 -m pytest tests/unit/test_daily_btc_loop.py tests/unit/test_market_selector.py tests/unit/test_hourly_loop.py tests/unit/test_loop_watchdog.py tests/unit/test_mode_switch.py tests/unit/test_live_wiring.py tests/unit/test_runtime_config.py tests/unit/test_settle_style.py -q -p no:cacheprovider`
 Expected: PASS
 
-- [ ] **Step 6: Rules and routing** (hand-written parts only)
+- [x] **Step 6: Rules and routing** (hand-written parts only)
 
 `AGENTS.md`:
 1. In Active Scope's numbered strategy list, add:
@@ -3220,7 +3232,7 @@ Expected: PASS
 | Daily BTC strategies (Tsinghua-Kronos BTC 24h: noon-ET decision, entries, settlement, per-window record) | `polymarket_bot/daily_btc/engine.py` (tick) + `tsinghua_kronos_btc_24h.py` (rule) + `forecast_input.py` + `market.py` (windows/discovery/Binance) + `ledger.py` (`btc_daily_market_decisions`); model worker `polymarket_bot/kronos_forecast/` (isolated process, vendored MIT Kronos code in `third_party/kronos_67b630e/`); shared entry `polymarket_bot/strategy_slot_entry.py`; strategy doc `docs/strategies/tsinghua-kronos-btc-24h.md` |
 ```
 
-- [ ] **Step 7: Regenerate docs and run every gate**
+- [x] **Step 7: Regenerate docs and run every gate**
 
 ```bash
 PYTHON_DOTENV_DISABLED=1 DATA_DIR="$(mktemp -d)" python3 -m pytest tests/ -q -p no:cacheprovider 2>&1 | tail -3
@@ -3248,7 +3260,7 @@ Expected: all tests pass, ruff `All checks passed!`, and `--check` exits 0.
 7. `ps` shows no Kronos worker left running after the decision.
 8. Press Stop, stop the smoke app, and remove the preview config entry.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit** (as two commits: 9592e5e code+tests, 0609cbc docs)
 
 ```bash
 git add polymarket_bot/paper.py polymarket_bot/controller.py polymarket_bot/market_selection.py polymarket_exec/ops/dashboard/panels/market_selector.py tests/unit/test_daily_btc_loop.py tests/unit/test_market_selector.py tests/unit/test_hourly_loop.py AGENTS.md docs/CODE_MAP.md docs/FILE_MAP.md
