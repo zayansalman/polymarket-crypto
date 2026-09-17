@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -262,6 +263,34 @@ def test_status_reports_served_latency_staleness_and_connections() -> None:
     empty, _ = _shard()
     assert empty.status().served_latency_ms_p50 is None
     assert empty.status().served_staleness_s is None
+
+
+def test_status_adds_up_the_connections_throughput() -> None:
+    clock = {"t": 100.2}
+    shard, _ = _shard(time_fn=lambda: clock["t"])
+    frame = json.dumps({"event_type": "last_trade_price", "market": "m", "asset_id": UP,
+                        "price": "0.5", "size": "1", "side": "BUY", "timestamp": "99000"})
+    shard._conns[0].stream._on_frame(frame)
+    shard._conns[1].stream._on_frame(frame)
+    shard._conns[1].stream._on_frame("PONG")
+    clock["t"] = 101.0
+    st = shard.status()
+    assert st.bytes_per_s == pytest.approx((2 * len(frame) + 4) / 10)
+    assert [c.bytes_per_s for c in st.connections] == pytest.approx(
+        [len(frame) / 10, (len(frame) + 4) / 10])
+
+
+def test_a_group_that_stops_following_forgets_its_served_latency() -> None:
+    clock = {"t": 50.0}
+    shard, _ = _shard(time_fn=lambda: clock["t"])
+    shard.handle_event(0, _change(UP, 0.5, 2.0, "BUY", 41_000), 41_100)
+    st = shard.status()
+    assert (st.served_latency_ms_p50, st.served_staleness_s) == (100.0, 9.0)
+    shard.set_tokens(set())
+    st = shard.status()
+    assert (st.served_latency_ms_p50, st.served_latency_ms_max, st.served_staleness_s) == (
+        None, None, None)
+    assert st.desired == 0 and shard.top(UP) is None
 
 
 def _up(shard: sh.ClobShard, *connected: int) -> None:

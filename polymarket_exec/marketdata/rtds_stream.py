@@ -34,6 +34,7 @@ from logging_setup import get_logger
 from polymarket_exec.marketdata.clob_stream import (
     Backoff,
     StreamSilent,
+    Throughput,
     copy_deque,
     describe_error,
     first_exit,
@@ -334,6 +335,7 @@ class RtdsPriceStream:
         self._acks = 0
         self._other = 0
         self._bytes_total = 0
+        self._throughput = Throughput()
         self._last_error: str | None = None
 
     @property
@@ -342,8 +344,12 @@ class RtdsPriceStream:
 
     @property
     def bytes_total(self) -> int:
-        """Characters received (the frames are ASCII JSON)."""
+        """Characters received (the frames are ASCII JSON, after decompression)."""
         return self._bytes_total
+
+    def bytes_per_s(self) -> float:
+        """Characters received per second over the last 10 whole seconds."""
+        return self._throughput.per_second(self._time_fn())[1]
 
     def latest(self, source: str, asset: str) -> PricePoint | None:
         return self._latest.get((source, asset))
@@ -388,6 +394,7 @@ class RtdsPriceStream:
         """Apply one received frame (synchronous; also used by tests and replays)."""
         now = self._time_fn()
         self._bytes_total += len(text)
+        self._throughput.add(now, 1, len(text))
         frame = parse_rtds_frame(text, int(now * 1000), self._assets)
         if frame.kind == UPDATE:
             self._quiet_since = now

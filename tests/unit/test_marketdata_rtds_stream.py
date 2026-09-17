@@ -185,6 +185,20 @@ def test_history_window_latest_and_status() -> None:
     assert st[rs.BINANCE].points == 0 and st[rs.BINANCE].last_update_age_s is None
 
 
+def test_throughput_counts_every_frame_over_the_last_ten_seconds() -> None:
+    now = {"t": 500.3}
+    stream = _stream(time_fn=lambda: now["t"])
+    assert stream.bytes_per_s() == 0.0
+    frames = [_update(rs.BINANCE, "btc", 499_000), "", '{"junk": 1}']
+    for frame in frames:
+        stream.handle_frame(frame)
+    now["t"] = 501.0
+    size = sum(len(frame) for frame in frames)
+    assert stream.bytes_total == size and stream.bytes_per_s() == size / 10
+    now["t"] = 511.0
+    assert stream.bytes_per_s() == 0.0
+
+
 def test_a_failing_consumer_does_not_lose_the_point() -> None:
     def boom(point) -> None:
         raise RuntimeError("consumer bug")

@@ -555,6 +555,10 @@ def test_snapshot_before_running() -> None:
     assert len(snap.clob_shards["btc-5m"].connections) == 2 and snap.slowest_shard is None
     assert set(snap.prices) == set(rs.SOURCES)
     assert all(age is None for age in snap.price_ages.values())
+    market = snap.grid["btc-5m"]  # pinned: wanted from the start
+    assert (market.state, market.owners, market.since) == (hub_mod.STREAMING, ("test",), T0)
+    assert (market.connections_up, market.connections, market.bytes_per_s) == (0, 2, 0.0)
+    assert (snap.clob_kib_s, snap.rtds_kib_s) == (0.0, 0.0)
 
 
 def test_default_grid_and_registry() -> None:
@@ -697,7 +701,12 @@ async def test_a_released_market_lingers_then_stops_and_drops_its_books() -> Non
         await asyncio.sleep(0.05)
         assert not socket.exited and len(clob.made) == 1
         assert hub.quote("btc", "5m").live and hub.levels(UP, "bid", 1) == ((0.8, 282.0),)
+        lingering = hub.snapshot().grid["btc-5m"]
+        assert (lingering.state, lingering.owners, lingering.since) == (
+            hub_mod.LINGERING, (), T0)
+        assert lingering.linger_left_s == pytest.approx(1.0)
         clock["t"] = T0 + 90
+        assert hub.snapshot().grid["btc-5m"].state == hub_mod.AVAILABLE
         await until(lambda: socket.exited)
         assert hub.top(UP) is None and hub.top(DOWN) is None
         assert hub.levels(UP, "bid", 5) is None and hub.quote("btc", "5m") is None
@@ -713,6 +722,59 @@ async def test_a_released_market_lingers_then_stops_and_drops_its_books() -> Non
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_shows_each_markets_state_owners_and_throughput() -> None:
+    clock = {"t": T0}
+    clob, rtds = Connector(), Connector()
+    hub = _hub(clock, clob_connect=clob, rtds_connect=rtds, pinned=(), refresh_s=0.01,
+               assets=("btc", "eth"), timeframes=("5m", "1h"))
+    change = _price_change([(UP, "0.8", "300", "BUY"), (DOWN, "0.2", "300", "SELL")],
+                           ts=int(T0 * 1000) - 40)
+    price = _binance_print(T0 - 1)
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        hub.want("btc", "5m", "order ticket")
+        hub.want("btc", "5m", "bot loop")
+        hub.want("eth", "1h", "panel").release()  # lingering
+        await until(lambda: len(clob.made) == 3 and all(ws.sent for ws in clob.made)
+                    and rtds.made and rtds.made[0].sent)
+        btc = [ws for ws in clob.made if UP in json.loads(ws.sent[0])["assets_ids"]]
+        btc[0].incoming.put_nowait(SNAPSHOT)
+        btc[0].incoming.put_nowait(change)
+        rtds.made[0].incoming.put_nowait(price)
+        await until(lambda: hub.top(UP) is not None and hub.top(UP).bid_size == 300.0
+                    and hub.price(rs.BINANCE, "btc") is not None)
+        clock["t"] = T0 + 1.5  # rates cover the last 10 whole seconds
+        snap = hub.snapshot()
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert list(snap.grid) == ["btc-5m", "btc-1h", "eth-5m", "eth-1h"]
+    assert (snap.assets, snap.timeframes, snap.demand_linger_s) == (
+        ("btc", "eth"), ("5m", "1h"), 60.0)
+    btc5 = snap.grid["btc-5m"]
+    assert (btc5.asset, btc5.timeframe, btc5.state, btc5.owners, btc5.since) == (
+        "btc", "5m", hub_mod.STREAMING, ("bot loop", "order ticket"), T0)
+    assert (btc5.connections_up, btc5.connections, btc5.tokens, btc5.linger_left_s) == (
+        2, 2, 4, None)
+    assert (btc5.served_latency_ms_p50, btc5.served_latency_ms_p90) == (40.0, 40.0)
+    assert btc5.bytes_per_s == pytest.approx((len(SNAPSHOT) + len(change)) / 10)
+    eth1 = snap.grid["eth-1h"]
+    assert (eth1.state, eth1.owners, eth1.since, eth1.connections_up, eth1.connections) == (
+        hub_mod.LINGERING, (), T0, 1, 1)
+    assert eth1.linger_left_s == pytest.approx(58.5)
+    for idle in (snap.grid["btc-1h"], snap.grid["eth-5m"]):
+        assert (idle.state, idle.owners, idle.since, idle.linger_left_s) == (
+            hub_mod.AVAILABLE, (), None, None)
+        assert (idle.connections_up, idle.tokens, idle.bytes_per_s) == (0, 0, 0.0)
+        assert idle.served_latency_ms_p50 is None and idle.served_latency_ms_p90 is None
+    assert snap.grid["btc-1h"].connections == 2 and snap.grid["eth-5m"].connections == 1
+    assert snap.clob_kib_s == pytest.approx(btc5.bytes_per_s / 1024)
+    assert snap.clob.bytes_per_s == pytest.approx(btc5.bytes_per_s)
+    assert snap.rtds_kib_s == pytest.approx(len(price) / 10 / 1024)
 
 
 def test_dashboard_lifespan_registers_and_clears_the_hub(

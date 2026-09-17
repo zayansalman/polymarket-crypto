@@ -305,15 +305,19 @@ async def test_rate_and_latency_percentiles() -> None:
         for _ in range(10):  # data frames, but snapshots carry no latency sample
             ws.push(snapshot)
         await until(lambda: stream.status().frames_total == 30)
+        ws.push("PONG")  # bytes, but not a data frame
+        await until(lambda: stream.status().last_pong_at is not None)
         clock.t = 1_002.5
         st = stream.status()
         assert st.frames_per_s == 3.0  # 30 frames over the last 10 whole seconds
         assert (st.latency_ms_p50, st.latency_ms_p90, st.latency_ms_max) == (11.0, 19.0, 20.0)
         assert sorted(stream.latency_samples()) == list(range(1, 21))
-        sent_bytes = sum(len(_trade(1_000_000 - d)) for d in range(1, 21)) + 10 * len(snapshot)
+        sent_bytes = (sum(len(_trade(1_000_000 - d)) for d in range(1, 21))
+                      + 10 * len(snapshot) + len("PONG"))
         assert st.bytes_total == sent_bytes
+        assert st.bytes_per_s == sent_bytes / 10
         clock.t = 1_020.0
-        assert stream.status().frames_per_s == 0.0
+        assert (stream.status().frames_per_s, stream.status().bytes_per_s) == (0.0, 0.0)
 
 
 @pytest.mark.asyncio

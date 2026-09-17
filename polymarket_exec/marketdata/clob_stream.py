@@ -110,6 +110,7 @@ class StreamStatus:
     last_notice: str | None  # INVALID OPERATION / INVALID MESSAGE text from the server
     bytes_total: int = 0  # characters of every frame received (the feed is ASCII JSON)
     latency_ms_max: float | None = None  # over the same recent events as the percentiles
+    bytes_per_s: float = 0.0  # those characters over the last 10 whole seconds
 
 
 class StreamSilent(Exception):
@@ -202,6 +203,35 @@ def copy_deque(values: deque) -> tuple:
         except RuntimeError:  # deque mutated during iteration
             continue
     return ()
+
+
+class Throughput:
+    """Frames and characters received per whole second, kept for the last ``window_s``
+    seconds. Written from one event loop; read from any thread."""
+
+    def __init__(self, window_s: int = RATE_WINDOW_S) -> None:
+        self._window_s = window_s
+        self._buckets: deque[list[int]] = deque(maxlen=window_s + 2)
+
+    def add(self, now: float, frames: int, chars: int) -> None:
+        second = int(now)
+        buckets = self._buckets
+        if buckets and buckets[-1][0] == second:
+            bucket = buckets[-1]
+            bucket[1] += frames
+            bucket[2] += chars
+        else:
+            buckets.append([second, frames, chars])
+
+    def per_second(self, now: float) -> tuple[float, float]:
+        """(frames, characters) per second over the last ``window_s`` whole seconds."""
+        now_s = int(now)
+        frames = chars = 0
+        for second, count, size in copy_deque(self._buckets):
+            if now_s - self._window_s <= second < now_s:
+                frames += count
+                chars += size
+        return frames / self._window_s, chars / self._window_s
 
 
 def _live_ts(event: ClobEvent) -> int | None:
@@ -342,7 +372,7 @@ class ClobMarketStream:
         self._last_pong_at: float | None = None
         self._frames_total = 0
         self._bytes_total = 0
-        self._buckets: deque[list[int]] = deque(maxlen=RATE_WINDOW_S + 2)
+        self._throughput = Throughput()
         self._latency: deque[int] = deque(maxlen=LATENCY_SAMPLES)
         self._reconnects = 0
         self._resyncs = 0
@@ -386,11 +416,7 @@ class ClobMarketStream:
         return copy_deque(self._latency)
 
     def status(self) -> StreamStatus:
-        now_s = int(self._time_fn())
-        recent = sum(
-            count for second, count in copy_deque(self._buckets)
-            if now_s - RATE_WINDOW_S <= second < now_s
-        )
+        frames_per_s, bytes_per_s = self._throughput.per_second(self._time_fn())
         samples = sorted(copy_deque(self._latency))
         return StreamStatus(
             connected=self._connected,
@@ -398,7 +424,7 @@ class ClobMarketStream:
             last_frame_at=self._last_frame_at,
             last_pong_at=self._last_pong_at,
             frames_total=self._frames_total,
-            frames_per_s=recent / RATE_WINDOW_S,
+            frames_per_s=frames_per_s,
             latency_ms_p50=percentile(samples, 0.5),
             latency_ms_p90=percentile(samples, 0.9),
             reconnects=self._reconnects,
@@ -411,6 +437,7 @@ class ClobMarketStream:
             last_notice=self._last_notice,
             bytes_total=self._bytes_total,
             latency_ms_max=float(samples[-1]) if samples else None,
+            bytes_per_s=bytes_per_s,
         )
 
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -558,7 +585,8 @@ class ClobMarketStream:
     def _on_frame(self, frame: str | bytes) -> None:
         now = self._time_fn()
         received_ms = int(now * 1000)
-        self._bytes_total += len(frame)
+        size = len(frame)
+        self._bytes_total += size
         parsed = False  # a JSON frame: traffic
         alive = False  # it held an event for the followed tokens
         sample: int | None = None
@@ -580,15 +608,10 @@ class ClobMarketStream:
                 self._handler_errors += 1
                 if self._handler_errors <= 5:
                     log.warning("marketdata.clob_handler_failed", error=describe_error(exc))
+        self._throughput.add(now, 1 if parsed else 0, size)
         if not parsed:
             return
         self._frames_total += 1
-        second = int(now)
-        buckets = self._buckets
-        if buckets and buckets[-1][0] == second:
-            buckets[-1][1] += 1
-        else:
-            buckets.append([second, 1])
         if not alive:
             return  # announcements and unreadable events don't prove the subscription
         self._session_had_data = True

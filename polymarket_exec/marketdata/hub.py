@@ -160,6 +160,29 @@ class WindowOpened:
 
 HubEvent = Union[TopChanged, Trade, PriceTick, MarketResolved, WindowOpened]
 
+# A grid market's state.
+STREAMING = "STREAMING"  # someone wants it
+LINGERING = "LINGERING"  # nobody does any more; its sockets stop after demand_linger_s
+AVAILABLE = "AVAILABLE"  # not streaming
+
+
+@dataclass(frozen=True)
+class GridMarket:
+    """One available market (asset x timeframe): who uses it and how its feed is doing."""
+
+    asset: str
+    timeframe: str
+    state: str  # STREAMING | LINGERING | AVAILABLE
+    owners: tuple[str, ...]  # who wants it, sorted (empty unless STREAMING)
+    since: float | None  # streaming since (not AVAILABLE)
+    linger_left_s: float | None  # LINGERING: seconds until its sockets stop
+    connections_up: int
+    connections: int
+    served_latency_ms_p50: float | None
+    served_latency_ms_p90: float | None
+    bytes_per_s: float  # over the last 10 whole seconds, every connection together
+    tokens: int  # tokens wanted (0 until its windows are known)
+
 
 @dataclass(frozen=True)
 class MarketDataSnapshot:
@@ -180,6 +203,12 @@ class MarketDataSnapshot:
     gamma_last_error: str | None
     listeners: int
     listener_drops: int
+    grid: dict[str, GridMarket] = field(default_factory=dict)  # every market, grid order
+    assets: tuple[str, ...] = ()
+    timeframes: tuple[str, ...] = ()
+    clob_kib_s: float = 0.0  # market channel, every connection
+    rtds_kib_s: float = 0.0  # reference prices (after decompression)
+    demand_linger_s: float = DEMAND_LINGER_S
 
 
 def shard_name(asset: str, timeframe: str) -> str:
@@ -243,6 +272,7 @@ def merge_shard_status(shards: dict[str, ShardStatus]) -> StreamStatus:
         last_notice=notices[0] if notices else None,
         bytes_total=sum(c.bytes_total for c in conns),
         latency_ms_max=max(maxes) if maxes else None,
+        bytes_per_s=sum(c.bytes_per_s for c in conns),
     )
 
 
@@ -597,7 +627,50 @@ class MarketDataHub:
             gamma_last_error=universe.last_error,
             listeners=len(listeners),
             listener_drops=self._closed_listener_drops + sum(li.dropped for li in listeners),
+            grid=self._grid_markets(now, shards),
+            assets=self.assets,
+            timeframes=self.timeframes,
+            clob_kib_s=clob.bytes_per_s / 1024,
+            rtds_kib_s=self._rtds.bytes_per_s() / 1024,
+            demand_linger_s=self._linger_s,
         )
+
+    def _grid_markets(self, now: float, shards: dict[str, ShardStatus]
+                      ) -> dict[str, GridMarket]:
+        with self._demand_lock:
+            owners_by_market = self._owners
+            released = dict(self._released_at)
+            since = dict(self._since)
+        out: dict[str, GridMarket] = {}
+        for asset, timeframe in self._universe.grid:
+            key = (asset, timeframe)
+            name = shard_name(asset, timeframe)
+            st = shards[name]
+            owners = owners_by_market.get(key, frozenset())
+            linger_left = None
+            if owners:
+                state = STREAMING
+            elif key in released and now - released[key] < self._linger_s:
+                state = LINGERING
+                linger_left = self._linger_s - (now - released[key])
+            else:
+                state = AVAILABLE
+            started = since.get(key) if state != AVAILABLE else None
+            out[name] = GridMarket(
+                asset=asset,
+                timeframe=timeframe,
+                state=state,
+                owners=tuple(sorted(owners)),
+                since=None if started is None else max(started, self._started_at),
+                linger_left_s=linger_left,
+                connections_up=st.connected,
+                connections=len(st.connections),
+                served_latency_ms_p50=st.served_latency_ms_p50,
+                served_latency_ms_p90=st.served_latency_ms_p90,
+                bytes_per_s=st.bytes_per_s,
+                tokens=st.desired,
+            )
+        return out
 
     # --- the hub's loop ----------------------------------------------------------------
 
