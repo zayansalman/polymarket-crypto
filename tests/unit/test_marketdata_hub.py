@@ -132,7 +132,8 @@ async def test_trades_tick_sizes_and_unfollowed_tokens() -> None:
     trade = _events("clob_last_trade_price.json")[0]  # a DOWN buy at 0.19
     hub.handle_clob_event(trade, 2_000)
     events = _drain(listener)
-    assert events == [hub_mod.Trade(DOWN, 0.19, 10.526316, "BUY", 1_789_554_460_868)]
+    assert events == [hub_mod.Trade(DOWN, 0.19, 10.526316, "BUY", 1_789_554_460_868,
+                                    "0x" + "ab" * 32)]
     assert hub.top(DOWN).last_trade_price == 0.19
     tick = cm.TickSizeEvent(MARKET, UP, 0.01, 0.001, 5)
     hub.handle_clob_event(tick, 3_000)

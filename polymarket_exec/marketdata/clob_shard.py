@@ -9,8 +9,9 @@ So busy markets run more than one connection:
   server time, then events applied at that millisecond); an exact tie goes to a
   connection that is clearly faster (recent latency more than 25 ms lower);
 * top changes and trades are pushed once, by whichever connection delivers them first.
-  Nothing behind what was already pushed goes out, and a trade is known by (token,
-  time, price, size, side);
+  Nothing behind what was already pushed goes out. A trade is known by (token, time,
+  price, size, side, transaction hash), and alike trades are counted per connection
+  (one transaction can fill several makers at the same price and size);
 * a connection more than 3 s behind the freshest one is replaced while another fresh
   connection serves. So is a new connection that has applied no book data (not even its
   snapshot) after 3 s, once the freshest one has moved more than 3 s on. If every
@@ -57,10 +58,11 @@ SUPERVISE_S = 0.5
 TIE_MARGIN_MS = 25.0
 LATENCY_WEIGHT = 0.05  # recent-latency smoothing per event
 SERVED_SAMPLES = 512
-TRADE_MEMORY = 512  # recent trade keys remembered per token
+TRADE_MEMORY = 512  # recent trade keys remembered per token (and per connection)
 
 TopKey = tuple[Any, Any, Any, Any]  # best bid, best ask, bid size, ask size
 Freshness = tuple[int, int]
+TradeKey = tuple[int, float, float, str, str]  # time, price, size, side, transaction hash
 
 
 @dataclass(frozen=True)
@@ -82,7 +84,7 @@ class ShardStatus:
 class _Conn:
     __slots__ = ("index", "stream", "books", "newest_ms", "session_seen", "latency_ms",
                  "stalled", "stall_episodes", "recycles", "pending_session", "opened_at",
-                 "opened_front")
+                 "opened_front", "trades_seen")
 
     def __init__(self, index: int, stream: ClobMarketStream) -> None:
         self.index = index
@@ -97,6 +99,8 @@ class _Conn:
         self.pending_session: int | None = None  # replacement requested for this session
         self.opened_at: float | None = None  # when this session was first noticed
         self.opened_front: int | None = None  # the freshest connection's time by then
+        # token -> trade key -> times this session delivered it
+        self.trades_seen: dict[str, dict[TradeKey, int]] = {}
 
 
 class ClobShard:
@@ -145,8 +149,7 @@ class ClobShard:
         self._tops: dict[str, TopOfBook] = {}
         self._served_books: dict[str, OrderBook] = {}
         self._pushed: dict[str, tuple[Freshness, TopKey]] = {}
-        self._trade_keys: dict[str, set[tuple]] = {}
-        self._trade_order: dict[str, deque[tuple]] = {}
+        self._trades_pushed: dict[str, dict[TradeKey, int]] = {}  # token -> key -> pushes
         self._served_latency: deque[int] = deque(maxlen=SERVED_SAMPLES)
         self._newest_served_ms: int | None = None
         self._leader_switches = 0
@@ -205,10 +208,11 @@ class ClobShard:
         self._wanted = wanted
         for conn in self._conns:
             conn.stream.set_tokens(wanted)
-            for token in [t for t in conn.books if t not in wanted]:
-                del conn.books[token]
+            for held in (conn.books, conn.trades_seen):
+                for token in [t for t in held if t not in wanted]:
+                    del held[token]
         for served in (self._leader, self._tops, self._served_books, self._pushed,
-                       self._trade_keys, self._trade_order):
+                       self._trades_pushed):
             for token in [t for t in served if t not in wanted]:
                 served.pop(token, None)
 
@@ -250,7 +254,7 @@ class ClobShard:
             if book is not None:
                 book.record_trade(event.price, event.size, event.side, event.ts_ms, received_ms)
                 self._after_apply(conn, book, event.ts_ms, received_ms)
-                self._push_trade(event)
+                self._push_trade(conn, event)
         elif isinstance(event, TickSizeEvent):
             book = self._book_for(conn, event.asset_id)
             if (book is not None and book.set_tick_size(event.new_tick_size)
@@ -263,6 +267,7 @@ class ClobShard:
         """``conn`` is a new connection: forget what the previous one applied."""
         conn.session_seen = conn.stream.session
         conn.newest_ms = None
+        conn.trades_seen = {}  # there is no replay: its trades are all new
         conn.opened_at = self._time_fn()
         conn.opened_front = self._front()
 
@@ -324,21 +329,28 @@ class ClobShard:
         if pushed is None or key != pushed[1]:
             self._on_top(token, top)
 
-    def _push_trade(self, event: LastTradeEvent) -> None:
+    def _push_trade(self, conn: _Conn, event: LastTradeEvent) -> None:
+        """Push the n-th delivery of a trade key by ``conn`` unless some connection
+        already pushed that key n times."""
         token = event.asset_id
-        key = (event.ts_ms, event.price, event.size, event.side)
-        keys = self._trade_keys.get(token)
-        if keys is None:
-            keys = self._trade_keys[token] = set()
-            self._trade_order[token] = deque()
-        if key in keys:
+        key = (event.ts_ms, event.price, event.size, event.side, event.transaction_hash)
+        seen = conn.trades_seen.get(token)
+        if seen is None:
+            seen = conn.trades_seen[token] = {}
+        count = seen.get(key, 0) + 1
+        self._remember(seen, key, count)
+        pushed = self._trades_pushed.get(token)
+        if pushed is None:
+            pushed = self._trades_pushed[token] = {}
+        if count <= pushed.get(key, 0):
             return
-        order = self._trade_order[token]
-        keys.add(key)
-        order.append(key)
-        if len(order) > self._trade_memory:
-            keys.discard(order.popleft())
+        self._remember(pushed, key, count)
         self._on_trade(event)
+
+    def _remember(self, counts: dict[TradeKey, int], key: TradeKey, count: int) -> None:
+        counts[key] = count  # keys keep their first-seen order
+        if len(counts) > self._trade_memory:
+            del counts[next(iter(counts))]
 
     # --- supervision (more than one connection) ------------------------------------------
 

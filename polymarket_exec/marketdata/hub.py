@@ -91,6 +91,7 @@ class Trade:
     size: float
     side: str  # the taker's side
     ts_ms: int
+    transaction_hash: str = ""  # tells apart trades that are otherwise alike
 
 
 @dataclass(frozen=True)
@@ -466,7 +467,8 @@ class MarketDataHub:
         self._emit(TopChanged(token_id, top))
 
     def _on_trade(self, event: LastTradeEvent) -> None:
-        self._emit(Trade(event.asset_id, event.price, event.size, event.side, event.ts_ms))
+        self._emit(Trade(event.asset_id, event.price, event.size, event.side, event.ts_ms,
+                         event.transaction_hash))
 
     def _on_other_event(self, event: ClobEvent) -> None:
         if isinstance(event, NewMarketEvent):

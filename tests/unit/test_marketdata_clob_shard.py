@@ -34,12 +34,14 @@ def _trade(token: str, price: float, size: float, side: str, ts: int) -> cm.Last
 class Recorder:
     def __init__(self) -> None:
         self.pushed: list[tuple] = []
+        self.trades: list[cm.LastTradeEvent] = []
         self.other: list = []
 
     def on_top(self, token: str, top) -> None:
         self.pushed.append(("top", token, top.best_bid, top.best_ask, top.bid_size, top.ask_size))
 
     def on_trade(self, trade: cm.LastTradeEvent) -> None:
+        self.trades.append(trade)
         self.pushed.append(("trade", trade.asset_id, trade.price, trade.size, trade.side,
                             trade.ts_ms))
 
@@ -205,7 +207,41 @@ def test_trade_memory_is_bounded() -> None:
         shard.handle_event(0, _trade(UP, 0.5, 1.0, "BUY", ts), ts)
     shard.handle_event(1, _trade(UP, 0.5, 1.0, "BUY", 9), 20)  # remembered: dropped
     assert len([p for p in rec.pushed if p[0] == "trade"]) == 10
-    assert len(shard._trade_keys[UP]) == 4 and len(shard._trade_order[UP]) == 4
+    assert len(shard._trades_pushed[UP]) == 4
+    assert len(shard._conns[0].trades_seen[UP]) == 4
+
+
+def test_distinct_trades_that_look_alike_are_all_pushed() -> None:
+    # Live on 2026-09-16, one socket: two trades on one token in the same millisecond,
+    # both 5 shares at 0.22 bought, with different transaction hashes.
+    first = cm.LastTradeEvent("m", UP, 0.22, 5.0, "BUY", 1_000, "0xc08d")
+    second = cm.LastTradeEvent("m", UP, 0.22, 5.0, "BUY", 1_000, "0x48b6")
+    single, alone = _shard(n=1)
+    hedged, pair = _shard(n=2)
+    for event in (first, second):
+        single.handle_event(0, event, 1_050)
+        hedged.handle_event(0, event, 1_050)
+    for event in (first, second):
+        hedged.handle_event(1, event, 1_090)  # the hedge delivers both, later
+    assert [t.transaction_hash for t in alone.trades] == ["0xc08d", "0x48b6"]
+    assert [t.transaction_hash for t in pair.trades] == ["0xc08d", "0x48b6"]
+
+
+def test_identical_fills_count_per_connection() -> None:
+    # One transaction can fill several makers at the same price and size.
+    fill = cm.LastTradeEvent("m", UP, 0.5, 5.0, "BUY", 2_000, "0xaa")
+    shard, rec = _shard()
+    shard.handle_event(1, fill, 2_040)  # connection 1 is ahead: two fills
+    shard.handle_event(1, fill, 2_041)
+    shard.handle_event(0, fill, 2_090)  # connection 0 delivers the same two
+    shard.handle_event(0, fill, 2_091)
+    assert len(rec.trades) == 2
+    shard.handle_event(0, fill, 2_092)  # a third, seen first on connection 0
+    shard.handle_event(1, fill, 2_093)
+    assert len(rec.trades) == 3
+    shard._conns[1].stream.session += 1  # replaced: no replay, so its counts start over
+    shard.handle_event(1, _book(UP, 0.5, 0.6, 2_100), 2_140)
+    assert shard._conns[1].trades_seen == {}
 
 
 def test_status_reports_served_latency_staleness_and_connections() -> None:

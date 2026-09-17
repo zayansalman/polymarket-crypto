@@ -119,7 +119,10 @@ The default is two for btc 5m, 15m and 1h and one for everything else (27 connec
   to a connection whose smoothed latency is more than 25 ms lower.
 - `TopChanged` and `Trade` are pushed once, by whichever connection delivers first.
   Nothing behind what was already pushed goes out. Trades are known by (token, time,
-  price, size, side). `MarketResolved` and `WindowOpened` go out once per market.
+  price, size, side, transaction hash), and alike trades are counted per connection:
+  live, one socket delivered two trades in one millisecond at the same price, size and
+  side (different hashes), and one transaction can fill several makers alike. `Trade`
+  carries the hash. `MarketResolved` and `WindowOpened` go out once per market.
 - A connection more than 3 s behind the freshest connection of its group is replaced,
   but only while another connection of the group is up and within 1 s of the front.
   So is a new connection that has applied no book data (not even its snapshot) after
