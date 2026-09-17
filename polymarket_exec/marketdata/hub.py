@@ -55,7 +55,7 @@ from polymarket_exec.marketdata.clob_messages import (
     TickSizeEvent,
 )
 from polymarket_exec.marketdata.clob_shard import ClobShard, ShardStatus
-from polymarket_exec.marketdata.clob_stream import StreamStatus, pause
+from polymarket_exec.marketdata.clob_stream import StreamStatus, pause, run_until_stopped
 from polymarket_exec.marketdata.order_book import Level, TopOfBook
 from polymarket_exec.marketdata.rtds_stream import PricePoint, RtdsPriceStream, SourceStatus
 from polymarket_exec.marketdata.universe import (
@@ -451,15 +451,17 @@ class MarketDataHub:
             await pause(stop_event, self._refresh_s)
 
     async def _lookup_forever(self, stop_event: asyncio.Event) -> None:
-        """Look up the tokens of windows not announced yet, then follow them."""
+        """Look up the tokens of windows not announced yet, then follow them. A stop
+        cancels the lookups in flight (Gamma can take up to 10 s a read)."""
         while not stop_event.is_set():
             try:
-                update = await self._universe.refresh()
+                await run_until_stopped(self._lookup_once(), stop_event)
             except Exception as exc:  # noqa: BLE001 — keep following what we have
                 log.warning("marketdata.refresh_failed", error=f"{type(exc).__name__}: {exc}")
-            else:
-                self._apply_update(update)
             await pause(stop_event, self._refresh_s)
+
+    async def _lookup_once(self) -> None:
+        self._apply_update(await self._universe.refresh())
 
     def _apply_update(self, update: UniverseUpdate) -> None:
         self._apply_groups(update.groups)

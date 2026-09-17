@@ -164,7 +164,7 @@ activity.
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. |
 | `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. `select()` rolls windows over from the tokens already known (no I/O); the hub runs it every 2 s apart from the lookups, so a slow Gamma read never holds up a window that starts. |
 | `clob_shard.py` | `ClobShard`: one asset x timeframe's N connections, per-connection books, the freshest served, events pushed once, lagging connections replaced. |
-| `hub.py` | `MarketDataHub`: the public API; one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status. |
+| `hub.py` | `MarketDataHub`: the public API; one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status. A stop cancels Gamma lookups in flight, so `run` returns within ~1 s. |
 
 ## API (`polymarket_exec/marketdata/hub.py`)
 

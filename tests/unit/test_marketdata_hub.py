@@ -375,6 +375,31 @@ async def test_windows_roll_on_time_while_a_lookup_hangs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_does_not_wait_for_gamma_lookups() -> None:
+    asked = asyncio.Event()
+
+    async def hanging_gamma(request: httpx.Request) -> httpx.Response:
+        asked.set()
+        await asyncio.sleep(3600)  # the real client waits up to 10 s per read
+        raise AssertionError("unreachable")
+
+    hub = hub_mod.MarketDataHub(
+        ("btc", "eth"), ("5m", "15m", "1h", "1d"), hedge={}, clob_connect=Connector(),
+        rtds_connect=Connector(), time_fn=lambda: T0,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(hanging_gamma)))
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    await asyncio.wait_for(asked.wait(), timeout=2)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    stop.set()
+    await asyncio.wait_for(task, timeout=3)
+    assert loop.time() - began < 1.0
+    assert hub.snapshot().gamma_lookups == 4  # four were in flight
+    assert hub._universe._client is None  # and the HTTP client was closed
+
+
+@pytest.mark.asyncio
 async def test_market_resolved_names_the_window() -> None:
     clock = {"t": T0}
     hub = _hub(clock)
