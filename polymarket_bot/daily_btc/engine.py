@@ -39,6 +39,15 @@ DISPLAY_NAMES = {tsinghua_kronos_btc_24h.STRATEGY_ID: tsinghua_kronos_btc_24h.DI
 _market_cache: dict[int, market.DayMarket] = {}
 
 
+def current_window_start(now: int) -> int:
+    """The reference (noon-ET) start of the window ``now`` falls in — the uniform
+    per-engine window accessor ``paper.py`` uses to match an open row to its own current
+    window (Claude, 2026-09-17, generalizing branch-review finding
+    5m-stop-depends-on-hourly-discovery for two engines).
+    """
+    return market.current_window(now).reference_ts
+
+
 def reset_caches() -> None:
     _market_cache.clear()
 

@@ -64,6 +64,7 @@ from polymarket_exec.execution.gate import (
     RiskGate,
     build_gate_from_config,
 )
+from polymarket_bot.daily_btc import engine as daily_btc_engine
 from polymarket_bot.hourly import engine as hourly_engine
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
@@ -80,8 +81,17 @@ log = get_logger("paper")
 # Live executor for the current run loop. None means pure paper mode.
 _live_executor: LiveExecutor | None = None
 
-# Market timeframe pinned at Start ("5m" legacy loop, "1h" hourly strategies).
+# Market timeframe pinned at Start ("5m" legacy loop, "1h" hourly strategies, "1d" daily
+# BTC strategies).
 _timeframe: str = "5m"
+
+# Strategy engines by timeframe (Claude, 2026-09-16). The loop runs the engine of the
+# timeframe pinned at Start, and every run settles due rows of all the other engines, so an
+# open position from a timeframe not currently selected still gets flattened and settled.
+_STRATEGY_ENGINES = {
+    hourly_engine.TIMEFRAME: hourly_engine,
+    daily_btc_engine.TIMEFRAME: daily_btc_engine,
+}
 
 # Shared risk gate for the current run loop (issue #64). In paper mode this
 # is a standalone RiskGate; in live mode it is the LiveExecutor's gate (same
@@ -554,42 +564,57 @@ async def paper_tick_once() -> PaperSnapshot:
     # an operator change applies without a restart, same as the gate above.
     await _knobs.refresh_cache()
     async with _make_settlement_client() as client:
-        if _timeframe == hourly_engine.TIMEFRAME:
-            await _close_due_5m_rows_during_1h_run(client)
-            return await hourly_engine.tick(client, allow_entries=not kill_active)
+        engine = _STRATEGY_ENGINES.get(_timeframe)
+        if engine is not None:
+            await _close_due_5m_rows_during_strategy_run(client)
+            snapshot = await engine.tick(client, allow_entries=not kill_active)
+            await _settle_other_engines(client, snapshot, skip=engine)
+            return snapshot
         snapshot = await _build_snapshot(client)
         await _log_tick(snapshot)
         # A paper run never closes live rows: that would book their loss on the paper leg and
         # mark real tokens flat (Claude, 2026-09-16, review of the merged branch).
         await _close_due_positions(snapshot, client, include_live_rows=_live_executor is not None)
-        # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
-        # boot adopts open 1h rows into their slots whatever timeframe runs, so a 5m run
-        # settles them from the Binance candle too, before any new entry. A failure there
-        # never fails the 5m tick (Claude, 2026-09-16, review of the merged branch).
-        try:
-            await hourly_engine.settle_due(client, snapshot, _now())
-        except Exception as e:  # noqa: BLE001 — retried on the next tick
-            log.warning("paper_tick.hourly_settlement_failed_during_5m_run",
-                        error=f"{type(e).__name__}: {e}")
+        await _settle_other_engines(client, snapshot, skip=None)
         if not kill_active:
             await _maybe_open_position(snapshot)
         await _record_and_settle_shadow(snapshot, client)
     return snapshot
 
 
-async def _close_due_5m_rows_during_1h_run(client: httpx.AsyncClient) -> None:
-    """Run the 5m exit and settlement path for open 5m rows while the loop runs 1h.
+async def _settle_other_engines(
+    client: httpx.AsyncClient, snapshot: PaperSnapshot, *, skip: Any
+) -> None:
+    """Settle due rows of every strategy engine except ``skip`` (a failure never blocks the tick).
+
+    Boot adopts open strategy rows into their live slots whatever timeframe runs, so every
+    run settles them from Binance (Claude, 2026-09-15, branch-review finding
+    other-timeframe-live-rows-never-settled; extended to the daily BTC engine by Claude,
+    2026-09-16). A failed settlement is retried on the next tick, whichever engine runs it.
+    """
+    for timeframe, engine in _STRATEGY_ENGINES.items():
+        if engine is skip:
+            continue
+        try:
+            await engine.settle_due(client, snapshot, _now())
+        except Exception as e:  # noqa: BLE001 — retried on the next tick
+            log.warning("paper_tick.strategy_settlement_failed", timeframe=timeframe,
+                        error=f"{type(e).__name__}: {e}")
+
+
+async def _close_due_5m_rows_during_strategy_run(client: httpx.AsyncClient) -> None:
+    """Run the 5m exit and settlement path for open 5m rows while the loop runs 1h or 1d.
 
     Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
-    boot adopts open 5m rows into the account slot whatever timeframe runs, so a 1h
-    run settles them (and books their PnL) before the hourly tick. The 5m market is
-    only read when such a row exists, and a failed read is logged so the hourly tick
+    boot adopts open 5m rows into the account slot whatever timeframe runs, so a 1h or 1d
+    run settles them (and books their PnL) before the strategy tick. The 5m market is
+    only read when such a row exists, and a failed read is logged so the strategy tick
     still runs; the row is retried on the next tick.
 
     Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled
     (review follow-up): without a live executor, live 5m rows are left open, the same
-    as ``hourly_engine.settle_due`` and ``force_close_open_positions`` do. A paper close
-    would book their loss on the paper leg and mark real tokens flat; they settle in
+    as a strategy engine's ``settle_due`` and ``force_close_open_positions`` do. A paper
+    close would book their loss on the paper leg and mark real tokens flat; they settle in
     the next live run.
     """
     include_live_rows = _live_executor is not None
@@ -598,8 +623,8 @@ async def _close_due_5m_rows_during_1h_run(client: httpx.AsyncClient) -> None:
     try:
         snapshot = await _build_snapshot(client)
         await _close_due_positions(snapshot, client, include_live_rows=include_live_rows)
-    except Exception as e:  # noqa: BLE001 — never block the hourly tick
-        log.warning("paper_tick.5m_rows_close_failed_during_1h_run",
+    except Exception as e:  # noqa: BLE001 — never block the strategy tick
+        log.warning("paper_tick.5m_rows_close_failed_during_strategy_run",
                     error=f"{type(e).__name__}: {e}")
 
 
@@ -629,15 +654,21 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
         positions = [p for p in positions if p.get("mode") != "live"]
     if not positions:
         return 0
-    hourly = [p for p in positions if p.get("market_timeframe") == hourly_engine.TIMEFRAME]
-    legacy = [p for p in positions if p.get("market_timeframe") != hourly_engine.TIMEFRAME]
+    by_timeframe: dict[str, list[dict[str, Any]]] = {tf: [] for tf in _STRATEGY_ENGINES}
+    legacy: list[dict[str, Any]] = []
+    for pos in positions:
+        timeframe = pos.get("market_timeframe")
+        if timeframe in by_timeframe:
+            by_timeframe[timeframe].append(pos)
+        else:
+            legacy.append(pos)
     closed = 0
     legacy_error: Exception | None = None
     async with _make_settlement_client() as client:
         if legacy:
             # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled:
-            # a failed 5m read or sell must not skip selling this hour's 1h rows below;
-            # the error is raised after both kinds of row were tried.
+            # a failed 5m read or sell must not skip selling a strategy's rows below; the
+            # error is raised after both kinds of row were tried.
             try:
                 snapshot = await _build_snapshot(client)
                 for pos in legacy:
@@ -648,63 +679,70 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
             except Exception as e:  # noqa: BLE001 — re-raised below
                 log.warning("force_close.5m_rows_failed", error=f"{type(e).__name__}: {e}")
                 legacy_error = e
-        if hourly:
-            closed += await _force_close_hourly_rows(client, hourly, exit_reason)
+        for timeframe, engine in _STRATEGY_ENGINES.items():
+            rows = by_timeframe[timeframe]
+            if rows:
+                closed += await _force_close_strategy_rows(client, engine, rows, exit_reason)
     if legacy_error is not None:
         raise legacy_error
     return closed
 
 
-async def _force_close_hourly_rows(
-    client: httpx.AsyncClient, rows: list[dict[str, Any]], exit_reason: str
+async def _force_close_strategy_rows(
+    client: httpx.AsyncClient, engine: Any, rows: list[dict[str, Any]], exit_reason: str
 ) -> int:
-    """Sell this hour's 1h rows at their bid; returns how many closed.
+    """Sell this strategy engine's rows for the CURRENT window at their bid; how many closed.
 
-    Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery:
-    Stop reads the hourly market only when a current-hour 1h row is open, rows are
-    matched to the current hour by ``window_start_ts`` (two ET hours share a slug on
-    the DST fall-back day), and a failed hourly read is logged instead of raised so
-    the count of 5m rows already closed still reaches the caller. Every row left
-    open settles from the Binance candle on the next 1h start.
+    Generalizes the hourly engine's original ``_force_close_hourly_rows`` (Claude,
+    2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery) to any strategy
+    engine via its uniform ``current_window_start``/``build_snapshot``/``TIMEFRAME``
+    interface (Claude, 2026-09-17): rows are matched to the current window by
+    ``window_start_ts`` (two ET hours share a slug on the DST fall-back day), and a failed
+    market read is logged instead of raised so the count of 5m/other-engine rows already
+    closed still reaches the caller. Every row left open settles from Binance on the next
+    tick of any run.
 
     Claude, 2026-09-15, branch-review finding 5m-stop-depends-on-hourly-discovery
-    (review follow-up): the timeframe that last ran is not checked. It resets to 5m
-    on restart, and a 5m live run adopts open 1h live rows, so its final flatten
-    must still be able to sell them.
+    (review follow-up): the timeframe that last ran is not checked. It resets to 5m on
+    restart, and a 5m live run adopts open 1h/1d live rows, so its final flatten must
+    still be able to sell them — whatever the currently pinned ``_timeframe`` is.
     """
     now = _now()
-    start = hourly_engine.market.hour_start(now)
+    start = engine.current_window_start(now)
     sellable: list[dict[str, Any]] = []
     for pos in rows:
         if pos.get("window_start_ts") != start:
-            log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
-                        window_slug=pos["window_slug"], reason="past_hour")
+            log.warning("force_close.strategy_row_left_for_settlement", timeframe=engine.TIMEFRAME,
+                        position_id=pos["position_id"], window_slug=pos["window_slug"],
+                        reason="past_window")
             continue
         sellable.append(pos)
     if not sellable:
         return 0
     try:
-        snapshot = await hourly_engine.build_snapshot(client, now)
+        snapshot = await engine.build_snapshot(client, now)
     except Exception as e:  # noqa: BLE001 — the rows stay open and settle later
-        log.warning("force_close.hourly_snapshot_failed", error=f"{type(e).__name__}: {e}",
-                    positions_left_open=len(sellable))
+        log.warning("force_close.strategy_snapshot_failed", timeframe=engine.TIMEFRAME,
+                    error=f"{type(e).__name__}: {e}", positions_left_open=len(sellable))
         return 0
     closed = 0
     for pos in sellable:
         bid = _current_price_for_side(snapshot, pos["side"])
-        # Rows were matched to this hour by start time above, never by slug (branch-review
-        # finding dst-fallback-slug-collision).
+        # Rows were matched to the current window by start time above, never by slug
+        # (branch-review finding dst-fallback-slug-collision).
         if bid is None:
-            log.warning("force_close.hourly_left_for_settlement", position_id=pos["position_id"],
-                        window_slug=pos["window_slug"], reason="no_bid")
+            log.warning("force_close.strategy_row_left_for_settlement", timeframe=engine.TIMEFRAME,
+                        position_id=pos["position_id"], window_slug=pos["window_slug"],
+                        reason="no_bid")
             continue
         if await _close_position(pos, snapshot, bid, exit_reason):
             closed += 1
     return closed
 
 
-# The 5m loop's rows (strategy-less legacy slot). Hourly strategy rows own their own slots.
-_LEGACY_ROWS_SQL = "(market_timeframe IS NULL OR market_timeframe != '1h')"
+# The 5m loop's rows (strategy-less legacy slot). Hourly and daily BTC strategy rows own
+# their own slots (Claude, 2026-09-16: extended from '1h' only to also exclude '1d').
+_LEGACY_ROWS_SQL = "(market_timeframe IS NULL OR market_timeframe NOT IN ('1h', '1d'))"
 # Claude, 2026-09-15, branch-review finding other-timeframe-live-rows-never-settled
 # (review follow-up): appended when a run without a live executor must skip live rows.
 _NOT_LIVE_ROWS_SQL = " AND (mode IS NULL OR mode != 'live')"
@@ -1928,6 +1966,17 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
             f"Decisions: {snapshot.reason}\n"
             f"{_feed_label(snapshot.feed_source)}"
         )
+    if _timeframe == daily_btc_engine.TIMEFRAME:
+        # Daily BTC strategies (Tsinghua-Kronos BTC 24h): same shape as the hourly line,
+        # for the noon-ET window instead of the hour (Claude, 2026-09-17).
+        return header + (
+            f"Day: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
+            f"Binance spot: ${snapshot.spot_price:,.2f} vs noon-ET reference "
+            f"${snapshot.reference_price:,.2f}\n"
+            f"Up ask: {_fmt3(snapshot.up_best_ask)}; Down ask: {_fmt3(snapshot.down_best_ask)}\n"
+            f"Decisions: {snapshot.reason}\n"
+            f"{_feed_label(snapshot.feed_source)}"
+        )
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
@@ -1954,6 +2003,10 @@ _FEED_SOURCE_LABELS = {
     # REST, the hour's open from the Binance 1h kline, no volatility input.
     "binance_rest": "Binance REST",
     "binance_kline": "Binance 1h kline",
+    # Daily BTC loop (Tsinghua-Kronos BTC 24h, Claude, 2026-09-17): the reference is the
+    # Binance 1-minute close at noon ET; "pending" until that minute's print is readable.
+    "binance_1m": "Binance 1m close",
+    "pending": "waiting for the noon-ET print",
     "none": "not used",
     "clob": "CLOB",
     "unavailable": "unavailable",
@@ -1998,6 +2051,10 @@ def _feed_label(feed_source: str) -> str:
         # Hourly BTC markets settle on the Binance BTCUSDT 1h candle, so Binance is the
         # settlement source there, not a risk (Claude, 2026-09-16, paper smoke run).
         line += " (settles on the Binance 1h candle)"
+    elif ref_src in ("binance_1m", "pending"):
+        # Daily BTC markets (Tsinghua-Kronos BTC 24h) settle on the Binance 1-minute close
+        # at noon ET, so Binance is the settlement source there too (Claude, 2026-09-17).
+        line += " (settles on the Binance 1-minute close)"
     elif spot_src.startswith("chainlink") and ref_src.startswith("chainlink"):
         line += " (settlement-aligned)"
     elif not spot_src.startswith("chainlink"):

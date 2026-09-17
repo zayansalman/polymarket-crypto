@@ -250,7 +250,7 @@ async def request_start() -> BtcBotStatus:
     if not selection.loop_supported:
         detail = (
             f"Start refused: the loop is not wired for {selection.asset.upper()} "
-            f"{selection.timeframe} yet. Select BTC 5m or BTC 1h."
+            f"{selection.timeframe} yet. Select BTC 5m, BTC 1h or BTC 1d."
         )
         await set_config("polymarket_bot.state", "stopped")
         await set_config("polymarket_bot.updated_at", now)

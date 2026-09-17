@@ -19,6 +19,11 @@ _UPDOWN_SLUG = re.compile(r"^([a-z]+)-updown-(5m|15m|1h)-\d+$")
 _HOURLY_SLUG = re.compile(
     r"^(bitcoin|ethereum|solana|xrp|dogecoin|bnb)-up-or-down-[a-z]+-\d+-\d{4}-\d{1,2}(am|pm)-et$"
 )
+# Daily BTC market (Tsinghua-Kronos BTC 24h): "bitcoin-up-or-down-on-<month>-<day>-<year>",
+# named by the day it ends (Claude, 2026-09-16).
+_DAILY_SLUG = re.compile(
+    r"^(bitcoin|ethereum|solana|xrp|dogecoin|bnb)-up-or-down-on-[a-z]+-\d+-\d{4}$"
+)
 _LONG_TO_ASSET = {"bitcoin": "btc", "ethereum": "eth", "solana": "sol", "xrp": "xrp",
                   "dogecoin": "doge", "bnb": "bnb"}
 
@@ -98,9 +103,15 @@ def open_market_pnl(
         slug = str(p.get("window_slug") or "")
         m = _UPDOWN_SLUG.match(slug)
         hourly = None if m else _HOURLY_SLUG.match(slug)
-        if not m and not hourly:
+        daily = None if (m or hourly) else _DAILY_SLUG.match(slug)
+        if not m and not hourly and not daily:
             continue
-        key = (m.group(1), m.group(2)) if m else (_LONG_TO_ASSET[hourly.group(1)], "1h")
+        if m:
+            key = (m.group(1), m.group(2))
+        elif hourly:
+            key = (_LONG_TO_ASSET[hourly.group(1)], "1h")
+        else:
+            key = (_LONG_TO_ASSET[daily.group(1)], "1d")
         mark = (
             s.side_mid(tick, p["side"])
             if tick and p.get("window_slug") == cur_window
