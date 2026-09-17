@@ -179,9 +179,12 @@ Reads are safe from any thread: they return frozen objects that are replaced who
 uses `call_soon_threadsafe`; a listener more than `maxsize` (2048) events behind loses
 its oldest events, and `snapshot().listener_drops` counts them.
 
-The universe follows an ended window for 30 s, and until its `market_resolved` arrives
-(at most 300 s after the end), so `MarketResolved` is not missed.
-`MarketUniverse(await_resolution_s=0)` drops every ended window after the 30 s.
+The universe follows an ended window for 30 s, and until its `market_resolved` arrives,
+so `MarketResolved` is not missed (the server only sends it for subscribed tokens). The
+wait is capped at 5 min for 5m/15m and 45 min for 1h/1d: measured on 2026-09-17 from the
+window end, the resolution reached the socket after ~2.5 min for 5m/15m, 12-28 min for
+1h and ~15 min for 1d. `MarketUniverse(await_resolution_s=0)` drops every ended window
+after the 30 s; a mapping (e.g. `{"1h": 600}`) sets the wait per timeframe.
 
 ## FEEDS card
 

@@ -323,6 +323,54 @@ async def test_ended_windows_wait_for_resolution_then_drop() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("timeframe", "latest_measured_s", "wait_s"), [
+    # Window end to the socket's market_resolved, measured 2026-09-17: Gamma closedTime
+    # came 87 s (5m/15m), 675-1576 s (1h) and 812-824 s (1d) after the end, and the
+    # resolution frame ~68 s after closedTime.
+    ("15m", 87 + 68, 300),
+    ("1h", 1576 + 68, 2700),
+    ("1d", 824 + 68, 2700),
+])
+async def test_hour_and_day_windows_wait_longer_for_their_resolution(
+    timeframe: str, latest_measured_s: int, wait_s: int
+) -> None:
+    gamma = Gamma()
+    clock = {"t": T0}
+    universe = _universe(gamma, clock, timeframes=(timeframe,))
+    try:
+        await universe.refresh()
+        ended = universe.market("btc", timeframe)
+        clock["t"] = ended.window_end + latest_measured_s
+        assert ended.up_token in (await universe.refresh()).tokens
+        assert universe.window_for_token(ended.down_token) == (ended, "down")
+        clock["t"] = ended.window_end + wait_s
+        assert ended.up_token in (await universe.refresh()).tokens
+        clock["t"] = ended.window_end + wait_s + 1
+        assert ended.up_token not in (await universe.refresh()).tokens
+    finally:
+        await universe.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolution_waits_can_be_set_per_timeframe() -> None:
+    gamma = Gamma()
+    clock = {"t": T0}
+    universe = _universe(gamma, clock, timeframes=("5m", "1h"),
+                         await_resolution_s={"1h": 600.0})
+    try:
+        await universe.refresh()
+        five, hour = universe.market("btc", "5m"), universe.market("btc", "1h")
+        clock["t"] = five.window_end + 300  # 5m keeps its default wait
+        assert five.up_token in (await universe.refresh()).tokens
+        clock["t"] = hour.window_end + 600
+        assert hour.up_token in (await universe.refresh()).tokens
+        clock["t"] = hour.window_end + 601
+        assert hour.up_token not in (await universe.refresh()).tokens
+    finally:
+        await universe.aclose()
+
+
+@pytest.mark.asyncio
 async def test_without_a_resolution_wait_ended_windows_go_after_30_seconds() -> None:
     gamma = Gamma()
     clock = {"t": T0}

@@ -15,15 +15,17 @@ Token ids come from ``new_market`` announcements (Up/Down markets are announced 
 retried at most every 30 s). This is metadata, not price polling.
 
 A window that has ended stays followed for 30 s, and until its ``market_resolved``
-arrives (at most 300 s after the end; resolution comes ~2 min after a 5m window ends
-and is only sent for subscribed tokens). ``await_resolution_s=0`` drops every ended
-window after the 30 s.
+arrives, which the server only sends for subscribed tokens. The wait is capped per
+timeframe (``AWAIT_RESOLUTION_S``): 5 min for 5m/15m, 45 min for 1h/1d. Measured on
+2026-09-17 from the window end, the resolution reached the socket after ~2.5 min for
+5m/15m, 12-28 min for 1h and ~15 min for 1d. ``await_resolution_s=0`` drops every
+ended window after the 30 s.
 """
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from datetime import time as dtime
@@ -46,7 +48,9 @@ REFRESH_S = 2.0
 LOOKUP_CONCURRENCY = 4
 NEGATIVE_RETRY_S = 30.0
 DROP_AFTER_END_S = 30.0
-AWAIT_RESOLUTION_S = 300.0
+# Longest wait for an ended window's market_resolved, by timeframe (see the docstring).
+AWAIT_RESOLUTION_S: Mapping[str, float] = {"5m": 300.0, "15m": 300.0,
+                                           "1h": 2700.0, "1d": 2700.0}
 ANNOUNCED_CAP = 4096  # about 1.6 days of announcements for the default grid
 HTTP_TIMEOUT_S = 10.0
 
@@ -129,9 +133,11 @@ class MarketUniverse:
         lookup_concurrency: int = LOOKUP_CONCURRENCY,
         negative_retry_s: float = NEGATIVE_RETRY_S,
         drop_after_end_s: float = DROP_AFTER_END_S,
-        await_resolution_s: float = AWAIT_RESOLUTION_S,
+        await_resolution_s: float | Mapping[str, float] | None = None,
         announced_cap: int = ANNOUNCED_CAP,
     ) -> None:
+        """``await_resolution_s``: one wait for every timeframe, or waits by timeframe
+        (timeframes not named keep ``AWAIT_RESOLUTION_S``)."""
         self.assets = tuple(dict.fromkeys(assets))
         self.timeframes = tuple(dict.fromkeys(timeframes))
         self._client_factory = client_factory or _default_client
@@ -141,7 +147,13 @@ class MarketUniverse:
         self._concurrency = max(1, lookup_concurrency)
         self._negative_retry_s = negative_retry_s
         self._drop_after_end_s = drop_after_end_s
-        self._await_resolution_s = await_resolution_s
+        if await_resolution_s is None or isinstance(await_resolution_s, Mapping):
+            waits = {**AWAIT_RESOLUTION_S, **(await_resolution_s or {})}
+            self._resolution_waits = waits
+            self._resolution_wait_default = max(waits.values())
+        else:
+            self._resolution_waits = {}
+            self._resolution_wait_default = float(await_resolution_s)
         self._announced_cap = max(1, announced_cap)
         self._last_error: str | None = None
         self._grid = self._valid_grid()
@@ -297,7 +309,8 @@ class MarketUniverse:
         ended_for = now - ref.window_end
         if ended_for <= self._drop_after_end_s:
             return True
-        return ref.slug not in self._resolved and ended_for <= self._await_resolution_s
+        wait = self._resolution_waits.get(ref.timeframe, self._resolution_wait_default)
+        return ref.slug not in self._resolved and ended_for <= wait
 
     async def _lookup_all(self, slugs: Iterable[str]) -> None:
         slugs = list(slugs)
