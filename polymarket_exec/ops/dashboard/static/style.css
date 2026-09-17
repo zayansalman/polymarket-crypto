@@ -128,6 +128,19 @@ body {
 .feeds-role { color: var(--muted); }
 .feeds-delay { text-align: right; }
 .feeds-delay.warn { color: var(--warn); }
+.feeds-conn { color: var(--muted); }
+.feed.linger { color: var(--muted); background: var(--bg); outline: 1px dashed var(--border-strong); outline-offset: -1px; }
+/* the market grid under "Polymarket books": assets x timeframes, one chip per market.
+   Scoped under .feeds-tbl so the outer table's cell, stripe and hover rules don't apply. */
+.feeds-tbl tr.feeds-grid-row > td { padding: 2px 8px 8px; }
+.feeds-tbl tr.feeds-grid-row:hover > td { background: inherit; }
+.feeds-tbl .feeds-grid { border-collapse: collapse; margin-left: 12px; }
+.feeds-tbl .feeds-grid th, .feeds-tbl .feeds-grid td { padding: 2px 3px; border-bottom: 0; text-align: center; }
+.feeds-tbl .feeds-grid th { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .5px; color: var(--label); font-weight: 500; }
+.feeds-tbl .feeds-grid tbody th { text-align: left; padding-right: 8px; }
+.feeds-tbl .feeds-grid tbody tr:nth-child(even), .feeds-tbl .feeds-grid tr:hover td { background: none; }
+.feeds-tbl .feeds-grid .feed { display: inline-block; min-width: 76px; }
+.feeds-tbl .feeds-grid .feeds-grid-none { color: var(--label); }
 .card-h .win.warn { color: var(--warn); }
 
 /* ── stat blocks ── */
