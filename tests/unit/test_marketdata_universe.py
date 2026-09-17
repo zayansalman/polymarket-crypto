@@ -291,6 +291,47 @@ async def test_lookups_run_at_most_four_at_a_time() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_boundary_switches_windows_before_slow_lookups_finish() -> None:
+    gamma = Gamma()
+    clock = {"t": T0}
+    universe = _universe(gamma, clock)
+    try:
+        await universe.refresh()
+        old, nxt = universe.market("btc", "5m"), universe.market("btc", "5m", "next")
+        gamma.delay_s = 0.5  # the window after the next one is slow to look up
+        clock["t"] = old.window_end + 1
+        refreshing = asyncio.create_task(universe.refresh())
+        await asyncio.sleep(0.05)
+        assert not refreshing.done()
+        assert universe.market("btc", "5m") == nxt  # switched already
+        assert universe.market("btc", "5m", "next") is None  # still being looked up
+        assert {old.up_token, nxt.up_token} <= universe.tokens()
+        update = await refreshing
+        assert [r.slug for r in update.opened] == [nxt.slug]  # once
+        assert universe.market("btc", "5m", "next").slug == "btc-updown-5m-1789641000"
+        assert len(update.tokens) == 6
+    finally:
+        await universe.aclose()
+
+
+def test_select_publishes_known_windows_without_lookups() -> None:
+    clock = {"t": T0}
+    universe = _universe(Gamma(), clock)
+    assert universe.select() == uv.UniverseUpdate(frozenset(), (), {})
+    for slug in ("btc-updown-5m-1789640400", "btc-updown-5m-1789640700"):
+        universe.observe(cm.NewMarketEvent("m", slug, "q", ("Up", "Down"),
+                                           (f"{slug}:u", f"{slug}:d"), "c", True, 0.01,
+                                           None, 0))
+    update = universe.select()
+    assert [r.slug for r in update.opened] == ["btc-updown-5m-1789640400"]
+    assert len(update.tokens) == 4 and universe.select().opened == ()
+    clock["t"] = 1_789_640_700.5
+    rolled = universe.select()
+    assert [r.slug for r in rolled.opened] == ["btc-updown-5m-1789640700"]
+    assert universe.market("btc", "5m", "next") is None and len(rolled.tokens) == 4
+
+
+@pytest.mark.asyncio
 async def test_ended_windows_wait_for_resolution_then_drop() -> None:
     gamma = Gamma()
     clock = {"t": T0}

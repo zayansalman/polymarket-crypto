@@ -343,6 +343,38 @@ async def test_reads_say_when_no_connection_serves_them() -> None:
 
 
 @pytest.mark.asyncio
+async def test_windows_roll_on_time_while_a_lookup_hangs() -> None:
+    clock = {"t": T0}
+    release = asyncio.Event()
+
+    async def gamma(request: httpx.Request) -> httpx.Response:
+        if "15m" in request.url.params["slug"]:
+            await release.wait()  # Gamma hangs on the 15-minute windows
+        return _gamma(request)
+
+    hub = hub_mod.MarketDataHub(
+        ("btc",), ("5m", "15m"), hedge={}, clob_connect=Connector(), rtds_connect=Connector(),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(gamma)),
+        time_fn=lambda: clock["t"], refresh_s=0.01)
+    listener = hub.listen()
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        await until(lambda: hub.market("btc", "5m", "next") is not None)
+        assert hub.market("btc", "15m") is None
+        clock["t"] = 1_789_554_600 + 1  # the next 5m window starts
+        await until(lambda: hub.market("btc", "5m").slug == NEXT)
+        assert {UP, f"{NEXT}:up", f"{NEXT}:down"} <= hub._shards["btc-5m"].desired
+        opened = [e.market.slug for e in _drain(listener)
+                  if isinstance(e, hub_mod.WindowOpened)]
+        assert opened == [CURRENT, NEXT]
+    finally:
+        release.set()
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
 async def test_market_resolved_names_the_window() -> None:
     clock = {"t": T0}
     hub = _hub(clock)

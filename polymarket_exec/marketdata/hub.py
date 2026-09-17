@@ -2,8 +2,10 @@
 
 ``MarketDataHub.run`` holds the CLOB market-channel connections (order books, trades,
 resolutions for the followed Up/Down windows), one RTDS connection (Chainlink, Chainlink
-60 s TWAP and Binance prices) and the universe refresher (which windows to follow, every
-2 s). The dashboard lifespan starts it and registers it with ``set_current``.
+60 s TWAP and Binance prices) and the universe (which windows to follow). Every 2 s one
+loop rolls windows over from the tokens already known and another looks up the tokens
+still missing, so a slow Gamma lookup never holds up a window that starts. The
+dashboard lifespan starts it and registers it with ``set_current``.
 
 Each asset x timeframe has its own market-channel socket group (``clob_shard.ClobShard``).
 Live on 2026-09-16, all 96 tokens on one socket (~2,100 frames/s, ~1.2 MiB/s) fell
@@ -63,6 +65,7 @@ from polymarket_exec.marketdata.universe import (
     TIMEFRAMES,
     MarketRef,
     MarketUniverse,
+    UniverseUpdate,
 )
 
 log = get_logger("marketdata.hub")
@@ -426,7 +429,8 @@ class MarketDataHub:
         tasks = [asyncio.ensure_future(shard.run(stop_event))
                  for shard in self._shards.values()]
         tasks.append(asyncio.ensure_future(self._rtds.run(stop_event)))
-        tasks.append(asyncio.ensure_future(self._refresh_forever(stop_event)))
+        tasks.append(asyncio.ensure_future(self._roll_forever(stop_event)))
+        tasks.append(asyncio.ensure_future(self._lookup_forever(stop_event)))
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -437,17 +441,30 @@ class MarketDataHub:
             for listener in self._listeners:
                 listener.close()
 
-    async def _refresh_forever(self, stop_event: asyncio.Event) -> None:
+    async def _roll_forever(self, stop_event: asyncio.Event) -> None:
+        """Switch windows on time, from the tokens already known (no I/O)."""
+        while not stop_event.is_set():
+            try:
+                self._apply_update(self._universe.select())
+            except Exception as exc:  # noqa: BLE001 — keep following what we have
+                log.warning("marketdata.refresh_failed", error=f"{type(exc).__name__}: {exc}")
+            await pause(stop_event, self._refresh_s)
+
+    async def _lookup_forever(self, stop_event: asyncio.Event) -> None:
+        """Look up the tokens of windows not announced yet, then follow them."""
         while not stop_event.is_set():
             try:
                 update = await self._universe.refresh()
             except Exception as exc:  # noqa: BLE001 — keep following what we have
                 log.warning("marketdata.refresh_failed", error=f"{type(exc).__name__}: {exc}")
             else:
-                self._apply_groups(update.groups)
-                for ref in update.opened:
-                    self._emit(WindowOpened(ref))
+                self._apply_update(update)
             await pause(stop_event, self._refresh_s)
+
+    def _apply_update(self, update: UniverseUpdate) -> None:
+        self._apply_groups(update.groups)
+        for ref in update.opened:
+            self._emit(WindowOpened(ref))
 
     def _apply_groups(self, groups: dict[tuple[str, str], frozenset[str]]) -> None:
         """Give each group its tokens; each group drops the books it no longer follows."""
