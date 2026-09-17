@@ -7,6 +7,16 @@ loop rolls windows over from the tokens already known and another looks up the t
 still missing, so a slow Gamma lookup never holds up a window that starts. The
 dashboard lifespan starts it and registers it with ``set_current``.
 
+Markets are streamed on demand. The grid (assets x timeframes) is what is available;
+nothing comes from the market channel until someone calls ``want(asset, timeframe,
+owner)`` (any thread; idempotent per owner and market). The first owner starts the
+market's sockets (current and next window); ``release`` (or ``Demand.release``) lets it
+go, and a market nobody wants keeps streaming for ``demand_linger_s`` (60 s) before its
+sockets stop and its books are dropped, so an owner that re-registers every tick causes
+no churn. Reads for a market that is not streaming return None, never an old book.
+``pinned`` demand is fixed at construction. The RTDS prices are always on (a few KiB/s,
+and strategies need their history warm).
+
 Each asset x timeframe has its own market-channel socket group (``clob_shard.ClobShard``).
 Live on 2026-09-16, all 96 tokens on one socket (~2,100 frames/s, ~1.2 MiB/s) fell
 seconds behind and the server dropped it with 1013 "slow consumer: send buffer full"
@@ -39,7 +49,8 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Union
 
 import httpx
@@ -55,7 +66,7 @@ from polymarket_exec.marketdata.clob_messages import (
     TickSizeEvent,
 )
 from polymarket_exec.marketdata.clob_shard import ClobShard, ShardStatus
-from polymarket_exec.marketdata.clob_stream import StreamStatus, pause, run_until_stopped
+from polymarket_exec.marketdata.clob_stream import StreamStatus, run_until_stopped
 from polymarket_exec.marketdata.order_book import Level, TopOfBook
 from polymarket_exec.marketdata.rtds_stream import PricePoint, RtdsPriceStream, SourceStatus
 from polymarket_exec.marketdata.universe import (
@@ -75,6 +86,33 @@ LISTENER_MAXSIZE = 2048
 # (asset, timeframe), "asset-timeframe" or an asset (all its timeframes).
 DEFAULT_HEDGE: dict[Any, int] = {"btc-5m": 2, "btc-15m": 2, "btc-1h": 2}
 RESOLVED_MEMORY = 512
+# A market nobody wants any more keeps streaming this long, so an owner that lets go
+# and takes it again (e.g. every tick) does not open and close sockets each time.
+DEMAND_LINGER_S = 60.0
+
+Pair = tuple[str, str]  # (asset, timeframe)
+
+
+@dataclass(frozen=True)
+class Demand:
+    """One owner's use of one market (``MarketDataHub.want``).
+
+    ``release()``, or leaving a ``with`` block, gives it up; releasing twice is harmless.
+    """
+
+    asset: str
+    timeframe: str
+    owner: str
+    hub: MarketDataHub = field(repr=False, compare=False)
+
+    def release(self) -> None:
+        self.hub.release(self.owner, self.asset, self.timeframe)
+
+    def __enter__(self) -> Demand:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.release()
 
 
 @dataclass(frozen=True)
@@ -214,6 +252,18 @@ def slowest_shard(shards: dict[str, ShardStatus]) -> str | None:
     return max(timed)[1] if timed else None
 
 
+async def _nap(stop_event: asyncio.Event, wake: asyncio.Event, delay: float) -> None:
+    """Sleep ``delay`` seconds, or less if ``stop_event`` or ``wake`` is set first."""
+    if stop_event.is_set() or wake.is_set():
+        return
+    waiters = [asyncio.ensure_future(stop_event.wait()), asyncio.ensure_future(wake.wait())]
+    try:
+        await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+
+
 def _token_of(event: ClobEvent) -> str | None:
     if isinstance(event, (BookEvent, LastTradeEvent, TickSizeEvent)):
         return event.asset_id
@@ -321,11 +371,31 @@ class MarketDataHub:
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
         time_fn: Callable[[], float] = time.time,
         refresh_s: float = REFRESH_S,
+        pinned: Iterable[tuple[str, str, str]] = (),
+        demand_linger_s: float = DEMAND_LINGER_S,
     ) -> None:
+        """``pinned``: (asset, timeframe, owner) demand that is always there and cannot be
+        released. ``demand_linger_s``: how long a market nobody wants keeps streaming."""
         self._time_fn = time_fn
         self._refresh_s = refresh_s
         self._universe = MarketUniverse(assets, timeframes, client_factory=client_factory,
-                                        time_fn=time_fn)
+                                        time_fn=time_fn, wanted=())
+        self._grid = frozenset(self._universe.grid)
+        self._linger_s = max(0.0, float(demand_linger_s))
+        # Demand: written under the lock from any thread; _owners is swapped whole.
+        self._demand_lock = threading.Lock()
+        self._owners: dict[Pair, frozenset[str]] = {}
+        self._released_at: dict[Pair, float] = {}  # nobody wants it since (lingering)
+        self._since: dict[Pair, float] = {}  # streaming since (wanted or lingering)
+        pins = [(asset, timeframe, owner) for asset, timeframe, owner in pinned]
+        for asset, timeframe, owner in pins:
+            self._check_market(asset, timeframe, owner)
+        self._pinned = frozenset(pins)
+        for asset, timeframe, owner in pins:
+            self._add_owner((asset, timeframe), owner, time_fn())
+        self._universe.set_wanted(self._owners)
+        self._loop: asyncio.AbstractEventLoop | None = None  # the running hub's loop
+        self._wakes: tuple[asyncio.Event, ...] = ()
         hedge = DEFAULT_HEDGE if hedge is None else hedge
         self._shards = {
             shard_name(asset, timeframe): ClobShard(
@@ -351,21 +421,129 @@ class MarketDataHub:
     def timeframes(self) -> tuple[str, ...]:
         return self._universe.timeframes
 
+    @property
+    def grid(self) -> tuple[Pair, ...]:
+        """Every market that can be wanted: (asset, timeframe), in grid order."""
+        return self._universe.grid
+
+    @property
+    def demand_linger_s(self) -> float:
+        return self._linger_s
+
+    # --- demand (any thread) ----------------------------------------------------------
+
+    def want(self, asset: str, timeframe: str, owner: str) -> Demand:
+        """Stream ``asset``/``timeframe`` for ``owner`` until it is released.
+
+        Idempotent per (owner, asset, timeframe). The market's first owner starts its
+        sockets (current and next window); until they deliver, reads return None.
+        """
+        key = self._check_market(asset, timeframe, owner)
+        with self._demand_lock:
+            added = self._add_owner(key, owner, self._time_fn())
+        if added:
+            self._poke()
+        return Demand(asset, timeframe, owner, self)
+
+    def release(self, owner: str, asset: str | None = None, timeframe: str | None = None
+                ) -> int:
+        """Drop ``owner``'s demand: all of it, or only one asset, timeframe or market.
+
+        Returns how many markets it let go (pinned demand stays). A market nobody wants
+        keeps streaming for ``demand_linger_s``; then its sockets stop and its books go.
+        """
+        now = self._time_fn()
+        dropped = 0
+        with self._demand_lock:
+            owners_by_market = dict(self._owners)
+            for key, owners in self._owners.items():
+                if owner not in owners or (*key, owner) in self._pinned:
+                    continue
+                if (asset is not None and key[0] != asset) or (
+                        timeframe is not None and key[1] != timeframe):
+                    continue
+                dropped += 1
+                rest = owners - {owner}
+                if rest:
+                    owners_by_market[key] = rest
+                else:
+                    del owners_by_market[key]
+                    self._released_at[key] = now
+            if dropped:
+                self._owners = owners_by_market
+        if dropped:
+            self._poke()
+        return dropped
+
+    def wanted(self) -> Mapping[Pair, frozenset[str]]:
+        """Owners by (asset, timeframe) for the markets wanted now (a read-only view)."""
+        return MappingProxyType(self._owners)
+
+    def _check_market(self, asset: str, timeframe: str, owner: str) -> Pair:
+        if not isinstance(owner, str) or not owner.strip():
+            raise ValueError("a demand needs an owner name")
+        key = (asset, timeframe)
+        if key not in self._grid:
+            raise ValueError(f"{asset} {timeframe} is not an available market")
+        return key
+
+    def _add_owner(self, key: Pair, owner: str, now: float) -> bool:
+        """Add ``owner`` to a market's demand (lock held); False if it was there."""
+        owners = self._owners.get(key, frozenset())
+        if owner in owners:
+            return False
+        if not owners:
+            released = self._released_at.pop(key, None)
+            if released is None or now - released >= self._linger_s:
+                self._since[key] = now  # it was not streaming: a new period starts
+        self._owners = {**self._owners, key: owners | {owner}}
+        return True
+
+    def _poke(self) -> None:
+        """Have the hub's loops apply a demand change now (callable from any thread)."""
+        loop = self._loop
+        if loop is None:
+            return  # not running: run() applies the demand when it starts
+        try:
+            loop.call_soon_threadsafe(self._wake)
+        except RuntimeError:  # the hub's loop has closed
+            pass
+
+    def _wake(self) -> None:
+        for event in self._wakes:
+            event.set()
+
+    def _apply_demand(self, now: float | None = None) -> frozenset[Pair]:
+        """Tell the universe which markets to stream: the wanted ones, and those released
+        less than ``demand_linger_s`` ago (the hub's loop)."""
+        now = self._time_fn() if now is None else now
+        with self._demand_lock:
+            for key, released in list(self._released_at.items()):
+                if now - released >= self._linger_s:
+                    del self._released_at[key]
+                    self._since.pop(key, None)
+            streaming = frozenset(self._owners).union(self._released_at)
+        self._universe.set_wanted(streaming)
+        return streaming
+
     # --- reads (any thread) ---------------------------------------------------------
 
     def top(self, token_id: str) -> TopOfBook | None:
-        """The top of the freshest connection's book for a followed token
-        (``live=False``: no connection that is up serves it; the last values seen)."""
+        """The top of the freshest connection's book for a streamed token (``live=False``:
+        no connection that is up serves it; the last values seen). None for a token of a
+        market that is not streaming, or before its book arrives."""
         shard = self._shard_by_token.get(token_id)
         return shard.top(token_id) if shard is not None else None
 
-    def levels(self, token_id: str, side: str = "bid", n: int = 10) -> tuple[Level, ...]:
-        """The best ``n`` levels of ``side`` ("bid" | "ask"), from the freshest connection."""
+    def levels(self, token_id: str, side: str = "bid", n: int = 10
+               ) -> tuple[Level, ...] | None:
+        """The best ``n`` levels of ``side`` ("bid" | "ask"), from the freshest connection;
+        None for a token of a market that is not streaming."""
         shard = self._shard_by_token.get(token_id)
-        return shard.levels(token_id, side, n) if shard is not None else ()
+        return shard.levels(token_id, side, n) if shard is not None else None
 
     def market(self, asset: str, timeframe: str, which: str = CURRENT) -> MarketRef | None:
-        """The followed ``"current"`` or ``"next"`` window of ``asset``/``timeframe``."""
+        """The ``"current"`` or ``"next"`` window of a streaming ``asset``/``timeframe``."""
         return self._universe.market(asset, timeframe, which)
 
     def quote(self, asset: str, timeframe: str, which: str = CURRENT) -> MarketQuote | None:
@@ -424,16 +602,20 @@ class MarketDataHub:
     # --- the hub's loop ----------------------------------------------------------------
 
     async def run(self, stop_event: asyncio.Event) -> None:
-        """Follow the markets and prices until ``stop_event``."""
+        """Stream the wanted markets and the prices until ``stop_event``."""
         self._started_at = self._time_fn()
+        roll_wake, lookup_wake = asyncio.Event(), asyncio.Event()
+        self._wakes = (roll_wake, lookup_wake)
+        self._loop = asyncio.get_running_loop()
         tasks = [asyncio.ensure_future(shard.run(stop_event))
                  for shard in self._shards.values()]
         tasks.append(asyncio.ensure_future(self._rtds.run(stop_event)))
-        tasks.append(asyncio.ensure_future(self._roll_forever(stop_event)))
-        tasks.append(asyncio.ensure_future(self._lookup_forever(stop_event)))
+        tasks.append(asyncio.ensure_future(self._roll_forever(stop_event, roll_wake)))
+        tasks.append(asyncio.ensure_future(self._lookup_forever(stop_event, lookup_wake)))
         try:
             await asyncio.gather(*tasks)
         finally:
+            self._loop = None
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -441,26 +623,34 @@ class MarketDataHub:
             for listener in self._listeners:
                 listener.close()
 
-    async def _roll_forever(self, stop_event: asyncio.Event) -> None:
-        """Switch windows on time, from the tokens already known (no I/O)."""
+    async def _roll_forever(self, stop_event: asyncio.Event, wake: asyncio.Event) -> None:
+        """Apply demand changes and switch windows on time, from the tokens already known
+        (no I/O): every ``refresh_s``, and at once when demand changes."""
         while not stop_event.is_set():
+            wake.clear()
             try:
-                self._apply_update(self._universe.select())
+                self._roll_once()
             except Exception as exc:  # noqa: BLE001 — keep following what we have
                 log.warning("marketdata.refresh_failed", error=f"{type(exc).__name__}: {exc}")
-            await pause(stop_event, self._refresh_s)
+            await _nap(stop_event, wake, self._refresh_s)
 
-    async def _lookup_forever(self, stop_event: asyncio.Event) -> None:
-        """Look up the tokens of windows not announced yet, then follow them. A stop
-        cancels the lookups in flight (Gamma can take up to 10 s a read)."""
+    async def _lookup_forever(self, stop_event: asyncio.Event, wake: asyncio.Event) -> None:
+        """Look up the tokens of wanted windows not announced yet, then follow them. A
+        stop cancels the lookups in flight (Gamma can take up to 10 s a read)."""
         while not stop_event.is_set():
+            wake.clear()
             try:
                 await run_until_stopped(self._lookup_once(), stop_event)
             except Exception as exc:  # noqa: BLE001 — keep following what we have
                 log.warning("marketdata.refresh_failed", error=f"{type(exc).__name__}: {exc}")
-            await pause(stop_event, self._refresh_s)
+            await _nap(stop_event, wake, self._refresh_s)
+
+    def _roll_once(self) -> None:
+        self._apply_demand()
+        self._apply_update(self._universe.select())
 
     async def _lookup_once(self) -> None:
+        self._apply_demand()
         self._apply_update(await self._universe.refresh())
 
     def _apply_update(self, update: UniverseUpdate) -> None:
