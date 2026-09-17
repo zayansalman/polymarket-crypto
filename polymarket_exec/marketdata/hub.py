@@ -16,7 +16,10 @@ freshest. A window's two tokens always share a group, because each ``price_chang
 carries both outcomes.
 
 Reads are safe from any thread (the BTC loop runs on its own thread and event loop):
-they return frozen objects that are swapped in whole, never mutated.
+they return frozen objects that are swapped in whole, never mutated. A top (and a
+quote) says ``live=False`` while no connection that is up serves its token: the socket
+dropped, or a new one has not delivered its snapshot yet. The values are then the last
+ones seen, and ``levels`` returns the last levels seen.
 
 Event-driven code calls ``listen()`` on its own event loop and iterates the listener:
 ``TopChanged`` (best bid/ask or their sizes moved), ``Trade``, ``PriceTick`` (a new
@@ -76,6 +79,7 @@ class MarketQuote:
     market: MarketRef
     up: TopOfBook | None
     down: TopOfBook | None
+    live: bool = False  # both tops are there and live
 
 
 @dataclass(frozen=True)
@@ -347,7 +351,8 @@ class MarketDataHub:
     # --- reads (any thread) ---------------------------------------------------------
 
     def top(self, token_id: str) -> TopOfBook | None:
-        """The top of the freshest connection's book for a followed token."""
+        """The top of the freshest connection's book for a followed token
+        (``live=False``: no connection that is up serves it; the last values seen)."""
         shard = self._shard_by_token.get(token_id)
         return shard.top(token_id) if shard is not None else None
 
@@ -364,7 +369,9 @@ class MarketDataHub:
         ref = self._universe.market(asset, timeframe, which)
         if ref is None:
             return None
-        return MarketQuote(ref, self.top(ref.up_token), self.top(ref.down_token))
+        up, down = self.top(ref.up_token), self.top(ref.down_token)
+        live = up is not None and down is not None and up.live and down.live
+        return MarketQuote(ref, up, down, live)
 
     def price(self, source: str, asset: str) -> PricePoint | None:
         """Newest print from ``source`` (chainlink | chainlink_twap60 | binance)."""

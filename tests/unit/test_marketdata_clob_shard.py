@@ -309,6 +309,60 @@ def test_a_connection_three_seconds_behind_is_recycled_while_the_other_serves(
     assert shard.status().stall_episodes == (0, 1) and shard.status().recycles == 1
 
 
+def test_reads_say_whether_a_connection_that_is_up_serves_them() -> None:
+    shard, rec = _shard(n=1)
+    shard.handle_event(0, _book(UP, 0.5, 0.6, 1_000), 1_050)
+    shard.handle_event(0, _book(DOWN, 0.4, 0.5, 1_000), 1_050)
+    assert shard.top(UP).live is False  # the connection is not up
+    _up(shard, 0)
+    assert shard.top(UP).live is True
+    # A sweep in one millisecond: two fills, then the book change the socket never got.
+    shard.handle_event(0, _trade(UP, 0.6, 1.0, "BUY", 1_500), 1_550)
+    shard.handle_event(0, _trade(UP, 0.6, 2.0, "BUY", 1_500), 1_550)
+    _up(shard)  # the socket drops: the last values stay, marked as not live
+    top = shard.top(UP)
+    assert (top.live, top.best_bid, top.best_ask) == (False, 0.5, 0.6)
+    _up(shard, 0)
+    shard._conns[0].stream.session += 1  # a new connection, nothing received yet
+    assert shard.top(UP).live is False
+    shard.handle_event(0, _book(UP, 0.5, 0.7, 1_500), 1_600)  # its snapshot, for UP only
+    assert (shard.top(UP).live, shard.top(UP).best_ask) == (True, 0.7)
+    assert rec.pushed[-1] == ("top", UP, 0.5, 0.7, 10.0, 10.0)  # the new top is news
+    assert shard.book(0, DOWN) is None  # the old connection's books are gone
+    assert (shard.top(DOWN).live, shard.top(DOWN).best_bid) == (False, 0.4)
+    assert shard.levels(DOWN, "bid", 3) == ((0.4, 10.0),)  # the last levels seen
+    shard.handle_event(0, _book(DOWN, 0.3, 0.5, 1_500), 1_600)
+    assert (shard.top(DOWN).live, shard.top(DOWN).best_bid) == (True, 0.3)
+    assert shard.leader(UP) == shard.leader(DOWN) == 0
+
+
+def test_a_connection_that_drops_hands_its_tokens_to_one_that_is_up() -> None:
+    shard, rec = _shard()
+    _up(shard, 0, 1)
+    shard.handle_event(0, _book(UP, 0.5, 0.6, 1_000), 1_050)
+    shard.handle_event(1, _book(UP, 0.5, 0.6, 1_000), 1_080)
+    shard.handle_event(0, _change(UP, 0.5, 7.0, "BUY", 1_100), 1_150)
+    assert shard.leader(UP) == 0 and shard.top(UP).live
+    _up(shard, 1)  # connection 0 drops before connection 1 got that change
+    assert shard.top(UP).live is False and shard.top(DOWN).live is False
+    shard._check()
+    assert shard.leader(UP) == 1 and shard.leader(DOWN) is None  # 1 has no DOWN book yet
+    assert (shard.top(UP).live, shard.top(UP).bid_size) == (True, 10.0)  # live, behind
+    shard.handle_event(1, _change(UP, 0.5, 7.0, "BUY", 1_100), 1_160)  # it catches up
+    assert shard.top(UP).bid_size == 7.0 and shard.top(DOWN).live is True
+    assert rec.pushed.count(("top", UP, 0.5, 0.6, 7.0, 10.0)) == 1  # pushed once only
+    shard._conns[0].stream.session += 1  # connection 0 comes back
+    _up(shard, 0, 1)
+    shard._check()
+    assert shard.book(0, UP) is None and shard.leader(UP) == 1
+    shard.handle_event(0, _book(UP, 0.5, 0.6, 1_100, bid_size=7.0), 1_190)  # its snapshot
+    assert shard.leader(UP) == 1 and shard.top(UP).live  # a tie: 1 keeps serving
+    _up(shard)
+    shard._check()  # nothing is up: no connection serves, the values stay
+    assert shard.leader(UP) is None
+    assert (shard.top(UP).live, shard.top(UP).bid_size) == (False, 7.0)
+
+
 ANNOUNCEMENT = cm.NewMarketEvent("0xm", "some-new-market", "q", ("Yes", "No"), ("y", "n"),
                                  "0xm", True, 0.01, None, 1)
 

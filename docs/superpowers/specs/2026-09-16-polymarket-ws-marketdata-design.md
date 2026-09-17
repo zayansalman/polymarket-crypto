@@ -112,6 +112,9 @@ So an asset x timeframe can run N connections (`clob_shard.ClobShard`;
 The default is two for btc 5m, 15m and 1h and one for everything else (27 connections).
 
 - Every connection keeps its own books; events are never applied across connections.
+  A new connection starts with none and rebuilds from its snapshot. When the serving
+  connection drops or is replaced, its tokens move to the freshest connection that is
+  still up; with none, reads keep the last values and say `live=False`.
 - Reads serve the connection furthest along the event stream: its newest server time,
   then the number of events applied at that millisecond. Both connections receive the
   same events in the same order, and a trade's sweep sends several top-changing
@@ -168,10 +171,10 @@ activity.
 ```python
 hub = hub_module.current()          # set by the dashboard lifespan
                                     # (MarketDataHub(hedge={"btc-5m": 2, ...}) to build one)
-hub.top(token_id)                   # TopOfBook | None
+hub.top(token_id)                   # TopOfBook | None (.live: see below)
 hub.levels(token_id, "bid", 10)     # ((price, size), ...) best first
 hub.market("btc", "5m", "next")     # MarketRef | None
-hub.quote("btc", "5m")              # MarketQuote(market, up, down) | None
+hub.quote("btc", "5m")              # MarketQuote(market, up, down, live) | None
 hub.price("chainlink_twap60", "btc")        # PricePoint | None
 hub.prices("binance", "btc", seconds=60)    # (PricePoint, ...)
 
@@ -182,6 +185,9 @@ listener.close()
 ```
 
 Reads are safe from any thread: they return frozen objects that are replaced whole.
+`TopOfBook.live` is False while no connection that is up serves the token (the socket
+dropped, or a new one has not delivered its snapshot yet): the values are the last ones
+seen, and `levels` returns the last levels seen. `MarketQuote.live` needs both tops live.
 `TopChanged` fires only when the best bid/ask or their sizes move. Listener delivery
 uses `call_soon_threadsafe`; a listener more than `maxsize` (2048) events behind loses
 its oldest events, and `snapshot().listener_drops` counts them.

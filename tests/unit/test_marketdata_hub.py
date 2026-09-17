@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 from polymarket_exec.marketdata import clob_messages as cm
 from polymarket_exec.marketdata import clob_shard as sh
@@ -55,15 +56,19 @@ class FakeWs:
         self.sent.append(text)
 
     async def recv(self) -> str:
-        return await self.incoming.get()
+        item = await self.incoming.get()
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 class Connector:
-    def __init__(self) -> None:
+    def __init__(self, sockets: list[FakeWs] | None = None) -> None:
         self.made: list[FakeWs] = []
+        self.sockets = list(sockets or [])
 
     def __call__(self, url: str) -> FakeWs:
-        self.made.append(FakeWs())
+        self.made.append(self.sockets.pop(0) if self.sockets else FakeWs())
         return self.made[-1]
 
 
@@ -298,6 +303,43 @@ async def test_run_wires_the_universe_both_streams_and_the_listeners() -> None:
     assert len(resolved_events) == 1 and resolved_events[0].market.slug == CURRENT
     assert listener.closed is True  # the hub closes its listeners when it stops
     assert hub.snapshot().clob.connected is False
+
+
+@pytest.mark.asyncio
+async def test_reads_say_when_no_connection_serves_them() -> None:
+    first, second = FakeWs(), FakeWs()
+    clob = Connector([first, second])
+    hub = _hub(clob_connect=clob, hedge={})
+    stream = hub._shards["btc-5m"]._conns[0].stream
+    stream._backoff = cs.Backoff(0.05, 0.05, lambda: 0.5)
+    snapshot = (FIXTURES / "clob_book_snapshot_array.json").read_text()
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        await until(lambda: first.sent)
+        first.incoming.put_nowait(snapshot)
+        await until(lambda: hub.top(UP) is not None)
+        quote = hub.quote("btc", "5m")
+        assert quote.live and quote.up.live and quote.down.live
+        assert hub.quote("btc", "5m", "next").live is False  # no books yet
+        first.incoming.put_nowait(ConnectionClosedError(None, None))  # the socket drops
+        await until(lambda: not stream.connected)
+        stale = hub.quote("btc", "5m")
+        assert stale.live is False and stale.up.live is False and stale.down.live is False
+        assert (stale.up.best_bid, stale.up.best_ask) == (0.8, 0.82)  # the last values
+        await until(lambda: second.sent)  # a new connection, before its snapshot
+        assert hub.top(UP).live is False and hub.quote("btc", "5m").live is False
+        books = json.loads(snapshot)
+        for book in books:
+            if book["asset_id"] == UP:
+                book["bids"].append({"price": "0.81", "size": "5"})  # a better bid
+        second.incoming.put_nowait(json.dumps(books))
+        await until(lambda: hub.top(UP).live)
+        fresh = hub.quote("btc", "5m")
+        assert fresh.live and (fresh.up.best_bid, fresh.up.bid_size) == (0.81, 5.0)
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
 
 
 @pytest.mark.asyncio

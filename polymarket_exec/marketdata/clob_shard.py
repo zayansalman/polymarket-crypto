@@ -8,6 +8,9 @@ So busy markets run more than one connection:
 * reads serve the connection whose book is furthest along the event stream (newest
   server time, then events applied at that millisecond); an exact tie goes to a
   connection that is clearly faster (recent latency more than 25 ms lower);
+* a new connection starts with no books (it rebuilds from its snapshot). When the
+  serving connection drops or is replaced, its tokens move to the freshest connection
+  that is still up; with none, reads keep the last values with ``live=False``;
 * top changes and trades are pushed once, by whichever connection delivers them first.
   Nothing behind what was already pushed goes out. A trade is known by (token, time,
   price, size, side, transaction hash), and alike trades are counted per connection
@@ -27,7 +30,7 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
@@ -62,6 +65,7 @@ TRADE_MEMORY = 512  # recent trade keys remembered per token (and per connection
 
 TopKey = tuple[Any, Any, Any, Any]  # best bid, best ask, bid size, ask size
 Freshness = tuple[int, int]
+NOTHING_PUSHED: Freshness = (-1, 0)
 TradeKey = tuple[int, float, float, str, str]  # time, price, size, side, transaction hash
 
 
@@ -166,9 +170,22 @@ class ClobShard:
     # --- reads (any thread) ------------------------------------------------------------
 
     def top(self, token_id: str) -> TopOfBook | None:
-        return self._tops.get(token_id)
+        """The served top; ``live`` is False while no connection that is up serves it."""
+        top = self._tops.get(token_id)
+        if top is None or self.live(token_id):
+            return top
+        return replace(top, live=False)
+
+    def live(self, token_id: str) -> bool:
+        """The token is served by a connection that is up, from data it received."""
+        conn = self._leader.get(token_id)
+        if conn is None or not conn.stream.connected or conn.session_seen != conn.stream.session:
+            return False
+        book = conn.books.get(token_id)
+        return book is not None and book is self._served_books.get(token_id)
 
     def levels(self, token_id: str, side: str, n: int) -> tuple[Level, ...]:
+        """The served book's levels (the last ones seen when ``live`` is False)."""
         book = self._served_books.get(token_id)
         return book.levels(side, n) if book is not None else ()
 
@@ -267,9 +284,36 @@ class ClobShard:
         """``conn`` is a new connection: forget what the previous one applied."""
         conn.session_seen = conn.stream.session
         conn.newest_ms = None
+        conn.books = {}  # swapped whole: it rebuilds from its snapshot
         conn.trades_seen = {}  # there is no replay: its trades are all new
         conn.opened_at = self._time_fn()
         conn.opened_front = self._front()
+        for token in [t for t, leader in self._leader.items() if leader is conn]:
+            self._hand_over(token)
+
+    @staticmethod
+    def _serves(conn: _Conn, token: str) -> bool:
+        """``conn`` is up and holds a book for ``token`` from its current connection."""
+        return (conn.stream.connected and conn.session_seen == conn.stream.session
+                and token in conn.books)
+
+    def _hand_over(self, token: str) -> None:
+        """The serving connection dropped or was replaced: serve the freshest connection
+        that is still up. With none, the last values stay (reads say they are not live)
+        and the next connection with data serves; its first top counts as news."""
+        best: tuple[_Conn, OrderBook] | None = None
+        for conn in self._conns:
+            book = conn.books.get(token) if self._serves(conn, token) else None
+            if book is not None and (best is None or book.freshness > best[1].freshness):
+                best = (conn, book)
+        if best is None:
+            self._leader.pop(token, None)
+            pushed = self._pushed.get(token)
+            if pushed is not None:
+                self._pushed[token] = (NOTHING_PUSHED, pushed[1])
+            return
+        self._take_over(token, *best)
+        self._publish(best[1], None, None)
 
     def _front(self) -> int | None:
         """The newest server time applied by any connection, in its current session."""
@@ -303,18 +347,29 @@ class ClobShard:
         ts = book.server_ts_ms
         if ts is not None and (conn.newest_ms is None or ts > conn.newest_ms):
             conn.newest_ms = ts
-        fresh = book.freshness
         leader = self._leader.get(token)
         if leader is not conn:
-            held = leader.books.get(token) if leader is not None else None
+            held = (leader.books.get(token)
+                    if leader is not None and leader.session_seen == leader.stream.session
+                    else None)
             if held is not None:
-                ahead = held.freshness
+                fresh, ahead = book.freshness, held.freshness
                 if fresh < ahead or (fresh == ahead and not self._clearly_faster(conn, leader)):
                     return
-            if leader is not None:
-                self._leader_switches += 1
-            self._leader[token] = conn
-            self._served_books[token] = book
+            self._take_over(token, conn, book)
+        self._publish(book, sample_ts, received_ms)
+
+    def _take_over(self, token: str, conn: _Conn, book: OrderBook) -> None:
+        if token in self._leader:
+            self._leader_switches += 1
+        self._leader[token] = conn
+        self._served_books[token] = book
+
+    def _publish(self, book: OrderBook, sample_ts: int | None, received_ms: int | None) -> None:
+        """Serve ``book``'s top; push it if it is new."""
+        token = book.token_id
+        ts = book.server_ts_ms
+        fresh = book.freshness
         top = book.top()
         self._tops[token] = top
         key = (top.best_bid, top.best_ask, top.bid_size, top.ask_size)
@@ -324,7 +379,7 @@ class ClobShard:
         self._pushed[token] = (fresh, key)
         if ts is not None and (self._newest_served_ms is None or ts > self._newest_served_ms):
             self._newest_served_ms = ts
-        if sample_ts is not None:
+        if sample_ts is not None and received_ms is not None:
             self._served_latency.append(received_ms - sample_ts)
         if pushed is None or key != pushed[1]:
             self._on_top(token, top)
@@ -374,6 +429,8 @@ class ClobShard:
         for conn in conns:  # notice a new connection before (or without) its first event
             if conn.session_seen != conn.stream.session:
                 self._start_session(conn)
+        for token in [t for t, leader in self._leader.items() if not self._serves(leader, t)]:
+            self._hand_over(token)  # its connection dropped
         front = self._front()
         for conn in conns:
             if conn.opened_at is None:

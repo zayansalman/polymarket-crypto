@@ -26,6 +26,9 @@ class TopOfBook:
     last_trade_price: float | None
     server_ts_ms: int | None  # newest server timestamp applied to this book
     received_ms: int | None  # when that update arrived, on our clock
+    # False when the hub has no connection up serving this token: the values are the
+    # last ones seen and no longer update.
+    live: bool = True
 
     @property
     def crossed(self) -> bool:
