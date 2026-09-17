@@ -15,8 +15,11 @@ Protocol rules this client follows (live-checked 2026-09-16):
 * The server closes with 1000 once every subscribed token has resolved. Any close while
   tokens are wanted means reconnect (backoff 1 s doubling to 30 s, with jitter; reset
   once a connection has delivered data).
-* A subscription can go silent. No data for 45 s means unsubscribe and subscribe again
-  (fresh snapshots); still nothing 45 s later means a new connection.
+* A subscription can go silent. No event for the followed tokens for 45 s means
+  unsubscribe and subscribe again (fresh snapshots); still nothing 45 s later means a new
+  connection. The platform-wide ``new_market`` broadcast (0.6-1.4 a second on every
+  socket) and events we can't read don't count: they would hide a dead subscription.
+  They don't reset the reconnect backoff either.
 * A connection can also fall behind when the network can't carry the flow; the server
   only drops it (1013 "slow consumer", or a reset) 20-30 s later. When the median
   latency of the last 64 events is more than 10 s above this connection's best, the
@@ -47,6 +50,7 @@ from polymarket_exec.marketdata.clob_messages import (
     BookEvent,
     ClobEvent,
     LastTradeEvent,
+    MarketResolvedEvent,
     PriceChangeEvent,
     TextFrame,
     TickSizeEvent,
@@ -74,15 +78,19 @@ LAG_FRESH_S = 5.0  # the lag check only runs while events are flowing
 # (event, received_ms) — called synchronously for every event in every frame.
 EventHandler = Callable[[ClobEvent, int], None]
 
+# Events about the subscribed tokens: proof that the subscription is alive.
+TOKEN_EVENTS = (BookEvent, PriceChangeEvent, LastTradeEvent, BestBidAskEvent, TickSizeEvent,
+                MarketResolvedEvent)
+
 
 @dataclass(frozen=True)
 class StreamStatus:
     connected: bool
     connected_since: float | None  # start of the current connection
-    last_frame_at: float | None  # newest data frame (not PONG / notices)
+    last_frame_at: float | None  # newest frame with events for the followed tokens
     last_pong_at: float | None
-    frames_total: int
-    frames_per_s: float  # data frames over the last 10 whole seconds
+    frames_total: int  # JSON frames, announcements included (not PONG / notices)
+    frames_per_s: float  # those frames over the last 10 whole seconds
     latency_ms_p50: float | None  # receive time minus event time, last 512 frames
     latency_ms_p90: float | None
     reconnects: int
@@ -507,36 +515,41 @@ class ClobMarketStream:
         now = self._time_fn()
         received_ms = int(now * 1000)
         self._bytes_total += len(frame)
-        data = False
+        parsed = False  # a JSON frame: traffic
+        alive = False  # it held an event for the followed tokens
         sample: int | None = None
         for event in parse_frame(frame):
             if isinstance(event, TextFrame):
                 self._on_text(event, now)
                 continue
-            data = True
+            parsed = True
             if isinstance(event, Unknown):
                 self._unknown += 1
                 continue
-            if sample is None:
-                sample = _live_ts(event)
+            if isinstance(event, TOKEN_EVENTS):
+                alive = True
+                if sample is None:
+                    sample = _live_ts(event)
             try:
                 self._on_event(event, received_ms)
             except Exception as exc:  # noqa: BLE001 — a consumer bug must not drop the feed
                 self._handler_errors += 1
                 if self._handler_errors <= 5:
                     log.warning("marketdata.clob_handler_failed", error=describe_error(exc))
-        if not data:
+        if not parsed:
             return
-        self._session_had_data = True
         self._frames_total += 1
-        self._last_frame_at = now
-        self._quiet_since = now
         second = int(now)
         buckets = self._buckets
         if buckets and buckets[-1][0] == second:
             buckets[-1][1] += 1
         else:
             buckets.append([second, 1])
+        if not alive:
+            return  # announcements and unreadable events don't prove the subscription
+        self._session_had_data = True
+        self._last_frame_at = now
+        self._quiet_since = now
         if sample is not None:
             latency_ms = received_ms - sample
             self._latency.append(latency_ms)

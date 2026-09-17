@@ -330,6 +330,59 @@ async def test_watchdog_resubscribes_then_reconnects() -> None:
     assert json.loads(second.sent[0])["type"] == "market"
 
 
+NEW_MARKET = (FIXTURES / "clob_new_market.json").read_text()
+
+
+@pytest.mark.asyncio
+async def test_announcements_are_not_book_data_for_the_watchdog() -> None:
+    # Every socket gets the platform-wide new_market broadcast (0.6-1.4/s live), so it
+    # must not hide a subscription that stopped sending data for its own tokens.
+    clock = Clock()
+    first, second = FakeWs(), FakeWs()
+    conn = Connector([first, second])
+    events: list = []
+    stream = _stream(conn, clock, events)
+    stream.set_tokens({"a"})
+    async with running(stream):
+        await until(lambda: first.sent)
+        first.push(_trade(1_000_000))
+        await until(lambda: stream.status().frames_total == 1)
+        for step in range(1, 4):  # every 15 s an announcement and an unknown event, only
+            clock.t += 15
+            first.push(NEW_MARKET)
+            first.push('{"event_type": "brand_new_thing"}')
+            await until(lambda: stream.status().frames_total == 1 + 2 * step)
+        await until(lambda: stream.status().resyncs == 1)
+        st = stream.status()
+        assert st.last_frame_at == 1_000.0  # the time of the last book data
+        assert st.frames_total == 7  # announcements are still counted as traffic
+        for _ in range(3):
+            clock.t += 15
+            first.push(NEW_MARKET)
+        await until(lambda: second.sent)
+        assert "even after a resubscribe" in (stream.status().last_error or "")
+    assert any(isinstance(ev, cm.NewMarketEvent) for ev, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_a_connection_with_only_announcements_does_not_reset_the_backoff() -> None:
+    quiet = FakeWs([NEW_MARKET, ConnectionClosedOK(Close(1000, "bye"), None)])
+    good = FakeWs([_trade(1), ConnectionClosedOK(Close(1000, "bye"), None)])
+    conn = Connector([Refused(OSError("a")), quiet, good, Refused(OSError("b"))])
+    stream = _stream(conn, initial_backoff_s=1.0, max_backoff_s=30.0)
+    delays: list[float] = []
+
+    async def pause(stop_event: asyncio.Event, delay: float) -> None:
+        delays.append(delay)
+        if len(delays) == 4:
+            stop_event.set()
+
+    stream._pause = pause
+    stream.set_tokens({"a"})
+    await asyncio.wait_for(stream.run(asyncio.Event()), timeout=2)
+    assert delays == [1.0, 2.0, 1.0, 2.0]  # only the connection with a trade resets it
+
+
 @pytest.mark.asyncio
 async def test_data_after_a_resubscribe_keeps_the_connection() -> None:
     clock = Clock()

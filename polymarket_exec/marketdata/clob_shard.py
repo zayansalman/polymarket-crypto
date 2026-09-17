@@ -12,8 +12,10 @@ So busy markets run more than one connection:
   Nothing behind what was already pushed goes out, and a trade is known by (token,
   time, price, size, side);
 * a connection more than 3 s behind the freshest one is replaced while another fresh
-  connection serves. If every connection is 10 s behind its own best, one is replaced
-  at a time. A connection is never replaced while no other one is up.
+  connection serves. So is a new connection that has applied no book data (not even its
+  snapshot) after 3 s, once the freshest one has moved more than 3 s on. If every
+  connection is 10 s behind its own best, one is replaced at a time. A connection is
+  never replaced while no other one is up.
 
 With one connection nothing changes: the stream's own rule (replace when 10 s behind
 its best) applies and every top change and trade is pushed.
@@ -79,7 +81,8 @@ class ShardStatus:
 
 class _Conn:
     __slots__ = ("index", "stream", "books", "newest_ms", "session_seen", "latency_ms",
-                 "stalled", "stall_episodes", "recycles", "pending_session")
+                 "stalled", "stall_episodes", "recycles", "pending_session", "opened_at",
+                 "opened_front")
 
     def __init__(self, index: int, stream: ClobMarketStream) -> None:
         self.index = index
@@ -92,6 +95,8 @@ class _Conn:
         self.stall_episodes = 0
         self.recycles = 0
         self.pending_session: int | None = None  # replacement requested for this session
+        self.opened_at: float | None = None  # when this session was first noticed
+        self.opened_front: int | None = None  # the freshest connection's time by then
 
 
 class ClobShard:
@@ -222,8 +227,7 @@ class ClobShard:
         """Apply one event delivered by connection ``index`` (its stream's callback)."""
         conn = self._conns[index]
         if conn.session_seen != conn.stream.session:  # a replacement connection's data
-            conn.session_seen = conn.stream.session
-            conn.newest_ms = None
+            self._start_session(conn)
         if isinstance(event, PriceChangeEvent):
             self._observe_latency(conn, received_ms - event.ts_ms)
             for change in event.changes:
@@ -254,6 +258,19 @@ class ClobShard:
                 self._tops[event.asset_id] = book.top()
         else:
             self._on_other(event)
+
+    def _start_session(self, conn: _Conn) -> None:
+        """``conn`` is a new connection: forget what the previous one applied."""
+        conn.session_seen = conn.stream.session
+        conn.newest_ms = None
+        conn.opened_at = self._time_fn()
+        conn.opened_front = self._front()
+
+    def _front(self) -> int | None:
+        """The newest server time applied by any connection, in its current session."""
+        known = [c.newest_ms for c in self._conns
+                 if c.newest_ms is not None and c.session_seen == c.stream.session]
+        return max(known) if known else None
 
     def _book_for(self, conn: _Conn, token: str) -> OrderBook | None:
         book = conn.books.get(token)
@@ -341,8 +358,16 @@ class ClobShard:
                 conn.pending_session = None
         if len(conns) < 2:
             return
-        known = [c.newest_ms for c in conns if c.newest_ms is not None]
-        front = max(known) if known else None
+        now = self._time_fn()
+        for conn in conns:  # notice a new connection before (or without) its first event
+            if conn.session_seen != conn.stream.session:
+                self._start_session(conn)
+        front = self._front()
+        for conn in conns:
+            if conn.opened_at is None:
+                conn.opened_at = now
+            if conn.opened_front is None:
+                conn.opened_front = front
         current = [c for c in conns
                    if c.newest_ms is not None and c.session_seen == c.stream.session]
         fresh = [c for c in current
@@ -366,6 +391,12 @@ class ClobShard:
                     self._recycle(conn, lag, "behind the freshest connection")
                     pending = True
                     continue
+            else:
+                moved = self._moved_on_without(conn, front, now)
+                if moved is not None and others_fresh:
+                    self._recycle(conn, moved, "without book data since it connected")
+                    pending = True
+                    continue
             if pending:
                 continue
             behind = conn.stream.behind_best_ms()
@@ -373,6 +404,19 @@ class ClobShard:
                     and any(o is not conn and o.stream.connected for o in conns)):
                 self._recycle(conn, behind, "behind its own best")
                 pending = True
+
+    def _moved_on_without(self, conn: _Conn, front: int | None, now: float) -> int | None:
+        """How far (ms) the freshest connection moved on while ``conn``, a connection with
+        no book data yet, waited: only once that and the wait itself exceed the recycle
+        lag. Our clock gives the snapshot time to arrive; a jump of the front (a stale
+        snapshot stamp followed by a live event) alone is not enough."""
+        if front is None or conn.opened_front is None or conn.opened_at is None:
+            return None
+        moved = front - conn.opened_front
+        waited_ms = (now - conn.opened_at) * 1000
+        if moved > self._recycle_lag_ms and waited_ms > self._recycle_lag_ms:
+            return moved
+        return None
 
     def _recycle(self, conn: _Conn, lag_ms: float, reason: str) -> None:
         conn.pending_session = conn.stream.session

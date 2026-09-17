@@ -273,6 +273,67 @@ def test_a_connection_three_seconds_behind_is_recycled_while_the_other_serves(
     assert shard.status().stall_episodes == (0, 1) and shard.status().recycles == 1
 
 
+ANNOUNCEMENT = cm.NewMarketEvent("0xm", "some-new-market", "q", ("Yes", "No"), ("y", "n"),
+                                 "0xm", True, 0.01, None, 1)
+
+
+@pytest.mark.parametrize("replacement_gets", ["nothing", "only announcements"])
+def test_a_replacement_without_book_data_is_recycled(replacement_gets: str) -> None:
+    clock = {"t": 100.0}
+    shard, rec = _shard(time_fn=lambda: clock["t"])
+    _up(shard, 0, 1)
+    for conn in (0, 1):
+        shard.handle_event(conn, _book(UP, 0.5, 0.6, 20_000), 20_050)
+    shard._conns[1].stream.session += 1  # connection 1 was replaced
+    shard._check()
+    reasons = []
+    for k in range(1, 7):  # connection 0 keeps serving, one event a second
+        clock["t"] += 1
+        ts = 20_000 + k * 1_000
+        shard.handle_event(0, _change(UP, 0.5, float(k), "BUY", ts), ts + 50)
+        if replacement_gets == "only announcements":
+            shard.handle_event(1, ANNOUNCEMENT, ts + 60)
+        shard._check()
+        reasons.append(shard._conns[1].stream._reconnect_reason)
+    assert reasons[:3] == [None, None, None]  # 3 s is allowed for the snapshot
+    assert reasons[3] == "recycled: 4.0s without book data since it connected"
+    assert shard.status().recycles == 1 and shard._conns[0].stream._reconnect_reason is None
+    assert rec.other.count(ANNOUNCEMENT) == (6 if replacement_gets != "nothing" else 0)
+
+
+def test_a_replacement_is_given_time_even_when_the_front_jumps() -> None:
+    clock = {"t": 100.0}
+    shard, _ = _shard(time_fn=lambda: clock["t"])
+    _up(shard, 0, 1)
+    shard.handle_event(0, _book(UP, 0.5, 0.6, 10_000), 20_050)  # a snapshot: an old stamp
+    shard.handle_event(1, _book(UP, 0.5, 0.6, 10_000), 20_050)
+    shard._conns[1].stream.session += 1
+    shard._check()
+    clock["t"] += 0.5
+    shard.handle_event(0, _change(UP, 0.5, 2.0, "BUY", 20_000), 20_050)  # 10 s ahead at once
+    shard._check()
+    assert shard._conns[1].stream._reconnect_reason is None
+    clock["t"] += 0.2
+    shard.handle_event(1, _book(UP, 0.5, 0.6, 20_000, bid_size=2.0), 20_060)  # its snapshot
+    for _ in range(10):
+        clock["t"] += 1
+        shard._check()
+    assert shard._conns[1].stream._reconnect_reason is None and shard.status().recycles == 0
+
+
+def test_a_replacement_without_data_stays_while_no_other_connection_serves() -> None:
+    clock = {"t": 100.0}
+    shard, _ = _shard(time_fn=lambda: clock["t"])
+    _up(shard, 1)  # connection 0, the one with data, is down
+    shard.handle_event(0, _book(UP, 0.5, 0.6, 20_000), 20_050)
+    shard._conns[1].stream.session += 1
+    for k in range(1, 7):
+        clock["t"] += 1
+        shard.handle_event(0, _change(UP, 0.5, float(k), "BUY", 20_000 + k * 1_000), 1)
+        shard._check()
+    assert shard._conns[1].stream._reconnect_reason is None and shard.status().recycles == 0
+
+
 def test_nothing_is_recycled_without_another_fresh_connection() -> None:
     shard, _ = _shard()
     shard.handle_event(0, _book(UP, 0.5, 0.6, 20_000), 1)

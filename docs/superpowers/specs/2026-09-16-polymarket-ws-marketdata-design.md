@@ -91,8 +91,10 @@ Every subscribe frame still carries `custom_feature_enabled`, so each socket als
 receives the platform-wide `new_market` broadcast: measured at 0.6-1.4 events/s
 (1.4-3.3 KiB/s) per socket, so roughly 35-80 KiB/s across 24 sockets. A later option
 is to keep the flag on one "lifecycle" socket (ended windows plus one unresolved
-anchor) and turn it off on the others. A check on 2026-09-16 showed that
-`market_resolved` also reaches a socket that subscribed after the window ended
+anchor) and turn it off on the others. The announcements are not data for the followed
+tokens: they don't reset the 45 s silence watchdog or the reconnect backoff, or a socket
+whose subscription went quiet would never be resubscribed. A check on 2026-09-16 showed
+that `market_resolved` also reaches a socket that subscribed after the window ended
 (116-126 s after the end).
 
 ## Hedged connections for the busiest markets
@@ -120,6 +122,8 @@ The default is two for btc 5m, 15m and 1h and one for everything else (27 connec
   price, size, side). `MarketResolved` and `WindowOpened` go out once per market.
 - A connection more than 3 s behind the freshest connection of its group is replaced,
   but only while another connection of the group is up and within 1 s of the front.
+  So is a new connection that has applied no book data (not even its snapshot) after
+  3 s on our clock, once the front has moved more than 3 s on.
   If all are 10 s behind their own best, one is replaced at a time. Each replacement is
   logged (`marketdata.clob_recycle`, with the group and the lag). With one connection,
   the stream's own rule (10 s behind its best) applies as before.
@@ -150,7 +154,7 @@ activity.
 |---|---|
 | `clob_messages.py` | Pure `parse_frame(text) -> [event]`; unknown or malformed objects become `Unknown`. |
 | `order_book.py` | `OrderBook` per token; `top()` is O(1) and returns a frozen `TopOfBook`. |
-| `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s. |
+| `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog on the followed tokens' events (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s. |
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. |
 | `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. |
 | `clob_shard.py` | `ClobShard`: one asset x timeframe's N connections, per-connection books, the freshest served, events pushed once, lagging connections replaced. |
