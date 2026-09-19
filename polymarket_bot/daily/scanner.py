@@ -18,6 +18,7 @@ import httpx
 import config as _config
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategies as _strategies
 from polymarket_bot import strategy as _strategy
 from polymarket_bot.daily import ledger as _ledger
 from polymarket_bot.daily import market as _market
@@ -108,6 +109,13 @@ async def scan_once(client: httpx.AsyncClient) -> None:
 
 async def _enter_best(client: httpx.AsyncClient) -> None:
     """Score every tracked asset and open at most one position this tick."""
+    # Operator switch (STRATEGIES card): off stops NEW entries only. It
+    # deliberately gates this half alone — _settle_due above runs whatever
+    # the switch says, so turning the scanner off can never strand an open
+    # window (the #245 failure, reached by a different route).
+    if not await _strategies.enabled("daily_altcoin"):
+        return
+
     markets = await _market.discover_daily_markets(client)
     if not markets:
         log.warning("daily_scan.no_markets_found")

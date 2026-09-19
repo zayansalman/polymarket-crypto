@@ -42,7 +42,6 @@ COLUMNS = 6
 
 # Who consumes a feed today: components, not files.
 BOT_LOOP = "bot loop"
-SHADOW = "shadow roster"
 TICKET = "order ticket"
 SCANNER = "daily scanner"
 HUB = "market hub"
@@ -91,17 +90,17 @@ class FeedRow:
 # The feed monitor's WebSocket row.
 _WS_NAME, _WS_ROLE, _WS_SOURCE = "Chainlink BTC/USD", "spot · vol", "RTDS · crypto_prices_chainlink"
 _WS_CONNECTION = "WebSocket · RTDS"
-_WS_USED_BY = _by(BOT_LOOP, SHADOW, FEEDS_CHECK)
+_WS_USED_BY = _by(BOT_LOOP, FEEDS_CHECK)
 
 # (probe key, name, used for, endpoint, used by) — order is the card's row order.
 # The monitor checks each one every interval_s, as the loop would call it.
 _REST_FEEDS = (
     (fm.CHAINLINK_REST, "Chainlink BTC/USD", "window open", "crypto-price API",
-     _by(BOT_LOOP, SHADOW, FEEDS_CHECK)),
+     _by(BOT_LOOP, FEEDS_CHECK)),
     (fm.GAMMA, "Polymarket Gamma", "market lookup", "Gamma /markets",
      _by(BOT_LOOP, TICKET, SCANNER, HUB, FEEDS_CHECK)),
     (fm.CLOB_BOOK, "Polymarket book", "UP/DOWN quotes", "CLOB /book",
-     _by(BOT_LOOP, SHADOW, TICKET, LIVE_EXECUTOR, FEEDS_CHECK)),
+     _by(BOT_LOOP, TICKET, LIVE_EXECUTOR, FEEDS_CHECK)),
     (fm.BINANCE, "Binance BTCUSDT 1s", "vol backup", "Binance /api/v3/klines 1s",
      _by(BOT_LOOP, FEEDS_CHECK)),
 )

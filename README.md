@@ -1,8 +1,8 @@
 # Polymarket Crypto — a binary-markets trading lab
 
 A local research and execution stack for Polymarket crypto binary markets: a pricing
-model, a paper/live execution stack, a shadow forward-tester for candidate strategies,
-and a validated tick-replay backtester. Originally built around BTC 5-minute Up/Down
+model and a paper/live execution stack. Every strategy it runs is visible in the
+dashboard. Originally built around BTC 5-minute Up/Down
 markets; that line closed 2026-08-29 (#182) after a shadow copy-trade/maker-quoting
 research phase came back net negative. Next chapter (daily/hourly/longer-horizon
 markets) is not yet chosen or built — see Status below.
@@ -40,7 +40,8 @@ polymarket_bot/           # the live loop + signal math
 ├── controller.py         #   start/stop, watchdog, silent-stop detector
 ├── strategy.py           #   pricing-model math + executable-edge signal (pure)
 ├── params.py             #   operator-tunable runtime params
-├── shadow/                #   the closed BTC-only model race (see docs/archive/ for its verdict)
+├── fees.py               #   canonical Polymarket taker-fee math (live + paper)
+├── daily/                #   daily altcoin Up/Down scanner (paper only)
 └── pairarb/               #   two-sided maker quoting + copy-trade research, shadow only, closed (#182)
 
 polymarket_exec/          # execution / connectors / ops

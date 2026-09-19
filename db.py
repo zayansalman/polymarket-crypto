@@ -117,35 +117,10 @@ CREATE INDEX IF NOT EXISTS idx_live_orders_created
 CREATE INDEX IF NOT EXISTS idx_live_orders_status
   ON live_orders(status);
 
-CREATE TABLE IF NOT EXISTS model_shadow_positions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at TEXT,
-  window_slug TEXT,
-  model_id TEXT,
-  side TEXT,
-  entry_price REAL,
-  notional_usd REAL,
-  shares REAL,
-  fair_prob REAL,
-  edge REAL,
-  confidence REAL,
-  reason TEXT,
-  state TEXT,
-  outcome TEXT,
-  settlement_price REAL,
-  resolved_at TEXT,
-  realized_pnl_usd REAL,
-  quote_source TEXT,
-  feed_source TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_model_shadow_positions_window_model
-  ON model_shadow_positions(window_slug, model_id);
-
--- Issue #185: daily (24h-window) altcoin Up/Down shadow scanner. A separate
--- table from model_shadow_positions on purpose: it tracks ONE asset-scan
--- decision per day-window (not several competing models per window), and a
--- window_slug already uniquely identifies one (asset, day) pair for this
--- market family, so the idempotency key is window_slug alone.
+-- Issue #185: daily (24h-window) altcoin Up/Down scanner. It tracks ONE
+-- asset-scan decision per day-window, and a window_slug already uniquely
+-- identifies one (asset, day) pair for this market family, so the
+-- idempotency key is window_slug alone.
 CREATE TABLE IF NOT EXISTS daily_shadow_positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
@@ -269,17 +244,6 @@ LIVE_ORDERS_COLUMN_MIGRATIONS = {
     "placement_status": "TEXT",
 }
 
-# Issue #122: capture the market state at decision time on each shadow row so
-# the regime-attribution instrument (tools/regime_attribution.py) can stratify
-# by volatility and basis, not just time-of-day and edge. Additive + nullable —
-# rows recorded before this migration stay NULL and are skipped for those axes.
-SHADOW_COLUMN_MIGRATIONS = {
-    "spot_at_decision": "REAL",
-    "reference_at_decision": "REAL",
-    "sigma_per_second": "REAL",
-    "drift_per_second": "REAL",
-}
-
 POSITION_COLUMN_MIGRATIONS = {
     "market_question": "TEXT",
     "exit_price": "REAL",
@@ -333,7 +297,6 @@ _TABLE_RENAMES = {
     "btc_paper_ticks": "paper_ticks",
     "btc_paper_positions": "paper_positions",
     "btc_live_orders": "live_orders",
-    "btc_model_shadow_positions": "model_shadow_positions",
 }
 
 # Config-key namespace prefixes renamed under #185. Deliberately excludes the
@@ -400,9 +363,6 @@ async def init_db() -> None:
         await _migrate_columns(db, "paper_positions", POSITION_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "paper_ticks", TICK_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "live_orders", LIVE_ORDERS_COLUMN_MIGRATIONS)
-        await _migrate_columns(
-            db, "model_shadow_positions", SHADOW_COLUMN_MIGRATIONS
-        )
         await _backfill_position_mode(db)
         await _backfill_live_order_mode(db)
         await _backfill_placement_status(db)

@@ -23,7 +23,7 @@ import db as _db
 from polymarket_bot.daily import scanner as _scanner
 from polymarket_bot.daily.ledger import record_signal
 from polymarket_bot.daily.types import DailyMarketView, DailySignal
-from polymarket_bot.shadow.fees import net_pnl_per_share
+from polymarket_bot.fees import net_pnl_per_share
 
 
 @pytest_asyncio.fixture

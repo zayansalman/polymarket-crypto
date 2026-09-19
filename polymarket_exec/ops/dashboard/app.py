@@ -969,6 +969,26 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
             "value": {"asset": sel.asset, "timeframe": sel.timeframe},
             "loop_supported": sel.loop_supported,
         }
+    if key == "strategy":
+        from polymarket_bot import strategies as _strategies
+
+        value = (body or {}).get("value") or {}
+        if not isinstance(value, dict):
+            return {"status": "error", "detail": "value must be {name, enabled}"}
+        name = str(value.get("name", ""))
+        try:
+            is_on = await _strategies.set_enabled(name, bool(value.get("enabled")))
+        except ValueError as e:
+            return {"status": "error", "detail": str(e)}
+        label = _strategies.STRATEGIES[name].label
+        await notify(
+            "runtime_config",
+            f"Operator turned {label} {'ON' if is_on else 'OFF'} "
+            f"({'may open new positions' if is_on else 'no new entries; open positions still settle'})",
+            {"key": key, "value": {"name": name, "enabled": is_on}},
+        )
+        log.info("btc.runtime_config_set", key=key, strategy=name, enabled=is_on)
+        return {"status": "ok", "key": key, "value": {"name": name, "enabled": is_on}}
     # Generic dashboard-editable knobs (#206) — everything registered in
     # ``runtime_knobs.KNOBS`` (paper strategy, live risk limits, auto-pause,
     # daily scanner) is validated and persisted through one shared path

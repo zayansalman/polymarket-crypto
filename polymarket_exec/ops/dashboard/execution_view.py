@@ -31,6 +31,7 @@ from polymarket_exec.ops.dashboard.panels import (
     performance,
     ribbon,
     settings as settings_panel,
+    strategies as strategies_panel,
     tca,
 )
 
@@ -154,6 +155,10 @@ async def execution_view_html() -> str:
         macro.snapshot() if macro is not None else None,
         market_data.snapshot() if market_data is not None else None,
     )
+    # Sits directly under FEEDS: what data arrives, then what is done with it.
+    from polymarket_bot import strategies as _strategies
+
+    strategies_html = strategies_panel.render(enabled=await _strategies.enabled_map())
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
@@ -176,6 +181,7 @@ async def execution_view_html() -> str:
         + "<div class='execution-grid'>"
         + feeds_html
         + controls_html
+        + strategies_html
         + market_html
         + decision_html
         + performance_html

@@ -1,10 +1,10 @@
-"""Unit tests for the shadow forward-tester's Polymarket taker-fee math."""
+"""Unit tests for the canonical Polymarket taker-fee math."""
 
 from __future__ import annotations
 
 import pytest
 
-from polymarket_bot.shadow.fees import (
+from polymarket_bot.fees import (
     breakeven_winrate,
     net_pnl_per_share,
     taker_fee_per_share,

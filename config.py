@@ -104,10 +104,6 @@ BOT_MODE = _env_choice("BOT_MODE", "paper", {"paper", "live"})
 # soaked -$7.87 in 70 minutes under honest fills (median hold 8s, paying the
 # spread every round trip); kept only for experiments.
 EXIT_STYLE = _env_choice("EXIT_STYLE", "settle", {"settle", "scalp"})
-# Shadow forward-tester: log candidate strategies' would-be trades in parallel
-# with the live strategy (no real orders placed). "off" disables it entirely.
-SHADOW_ENABLED = _env_choice("SHADOW_ENABLED", "on", {"on", "off"})
-
 # --- Live trading (Polymarket CLOB) ---------------------------------------
 POLYMARKET_CLOB_API = os.getenv("POLYMARKET_CLOB_API", "https://clob.polymarket.com")
 POLYMARKET_CHAIN_ID = _env_int("POLYMARKET_CHAIN_ID", 137)  # Polygon mainnet
@@ -158,9 +154,9 @@ HISTORY_CSV_PATH = Path(
     )
 ).expanduser()
 
-# --- Daily altcoin Up/Down shadow strategy (issue #185) ---------------------
+# --- Daily altcoin Up/Down scanner (issue #185) -----------------------------
 # Paper-only, no live gate. Scans the daily (24h-window) Up/Down family across
-# several thinner altcoin markets and shadow-trades a fixed-size position on
+# several thinner altcoin markets and paper-trades a fixed-size position on
 # whichever asset currently shows the strongest signal.
 DAILY_ASSETS = [
     a.strip().lower()

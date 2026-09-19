@@ -14,7 +14,7 @@ from polymarket_bot.daily.ledger import (
     record_signal,
     settle,
 )
-from polymarket_bot.shadow.fees import net_pnl_per_share
+from polymarket_bot.fees import net_pnl_per_share
 
 
 @pytest_asyncio.fixture

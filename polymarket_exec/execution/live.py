@@ -59,7 +59,7 @@ from db import (  # type: ignore[import-untyped]
     notify,
 )
 from logging_setup import get_logger  # type: ignore[import-untyped]
-from polymarket_bot.shadow.fees import taker_fee_per_share  # canonical venue fee math
+from polymarket_bot.fees import taker_fee_per_share  # canonical venue fee math
 from polymarket_exec.execution.gate import EntryRequest, GateConfig, RiskGate
 
 log = get_logger("live")

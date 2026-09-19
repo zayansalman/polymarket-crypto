@@ -48,6 +48,7 @@ from config import (
 )
 import config as _config
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategies as _strategies
 from db import connect, get_config, journal_live_order, notify, set_config
 from logging_setup import get_logger
 from polymarket_exec.connectors.chainlink_settlement import (
@@ -65,10 +66,7 @@ from polymarket_exec.execution.gate import (
     build_gate_from_config,
 )
 from polymarket_exec.marketdata import hub as _marketdata_hub
-from polymarket_bot.shadow import ledger as shadow_ledger
-from polymarket_bot.shadow import runner as shadow_runner
 from polymarket_bot.strategy import (
-    StrategyParams,
     drift_per_second,
     fair_up_probability,
     sigma_per_second,
@@ -143,33 +141,6 @@ _MIN_CHAINLINK_SIGMA_POINTS = 30
 
 BINANCE_API = BINANCE_API_BASE
 FIVE_MINUTES = MARKET_TIMEFRAME_MINUTES * 60
-
-
-def _strategy_params() -> StrategyParams:
-    """StrategyParams for the shadow forward-tester's candidate roster.
-
-    Entry thresholds are the archived v0 defaults from ``config`` — the trading
-    loop itself no longer reads them. Sizing reads the in-memory knob cache
-    (``runtime_knobs.cached``), refreshed once per tick by ``paper_tick_once``,
-    so this stays a plain sync function.
-    """
-    # Operator runtime per-trade cap (#50): when the dashboard control is set,
-    # it governs the sizing ceiling too (unified with the gate's effective cap),
-    # so the clip actually changes without a restart. Unset → knob default, i.e.
-    # fully backward-compatible. The gate refreshed this value earlier this tick.
-    override = _risk_gate.runtime_max_trade_usd if _risk_gate is not None else None
-    max_trade_usd = (
-        override if override is not None else _knobs.cached("paper_max_trade_usd")
-    )
-    return StrategyParams(
-        min_trade_usd=_knobs.cached("paper_min_trade_usd"),
-        max_trade_usd=max_trade_usd,
-        entry_edge_min=_config.PAPER_ENTRY_EDGE_MIN,
-        min_confidence=_config.PAPER_MIN_CONFIDENCE,
-        entry_min_remaining_seconds=_config.PAPER_ENTRY_MIN_REMAINING_SECONDS,
-        entry_edge_max=_config.PAPER_ENTRY_EDGE_MAX,
-        min_entry_price=_config.PAPER_MIN_ENTRY_PRICE,
-    )
 
 
 @dataclass(frozen=True)
@@ -322,8 +293,8 @@ def _loss_halt_stop_detail(gate: Any, mode: str) -> str | None:
 
     LIVE mode only (#146): a breached PAPER line never hard-stops the loop —
     its entries are already blocked per tick by the gate's ``block_reason``,
-    and stopping would also kill the shadow-race recorder and settlement on a
-    line that risks zero capital (which silently froze the race on 07-02).
+    and stopping would kill settlement too, on a line that risks zero
+    capital (which silently froze the paper book on 07-02).
     ``_notify_paper_halt_pause`` surfaces the paused state instead.
     """
     if gate is None or not gate.loss_halt_breached():
@@ -360,8 +331,8 @@ async def _notify_paper_halt_pause(gate: Any, mode: str) -> None:
         "paper_halt_pause",
         f"Paper loss halt hit (realized {gate.halt_pnl:+.2f} at/below trailing "
         f"floor {gate.loss_halt_floor:+.2f}): paper entries paused until the "
-        "daily window rolls or the halt is reset — the loop keeps running and "
-        "shadow logging continues (#146).",
+        "daily window rolls or the halt is reset — the loop keeps running "
+        "and open positions still settle (#146).",
         {"halt_pnl": gate.halt_pnl, "floor": gate.loss_halt_floor},
     )
     log.warning(
@@ -473,8 +444,8 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
                 log.warning("paper_loop.loss_halt_stop", detail=stop_detail)
                 await notify("loss_halt_stop", stop_detail)
                 break
-            # Paper breach (#146): entries pause, the loop and the shadow
-            # race keep running — notify once per episode.
+            # Paper breach (#146): entries pause, the loop keeps running —
+            # notify once per episode.
             await _notify_paper_halt_pause(_risk_gate, mode)
             _beat()  # #147: iteration completed (even a failed tick beats)
             await _sleep_interruptible(stop_event, float(_knobs.cached('paper_tick_seconds')))
@@ -559,7 +530,6 @@ async def paper_tick_once() -> PaperSnapshot:
         await _close_due_positions(snapshot, client)
         if not kill_active:
             await _maybe_open_position(snapshot)
-        await _record_and_settle_shadow(snapshot, client)
     return snapshot
 
 
@@ -898,8 +868,8 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
     # Edge against the EXECUTABLE price: a BUY of side X pays X's best ask.
     # A degraded feed pins fair_up at 0.5, so any "edge" against a lopsided
     # book would be an artifact — journal no edge at all in that state.
-    # Journaled as market observations for the dashboard and the shadow
-    # roster; nothing on the trading path acts on them.
+    # Journaled as market observations for the dashboard; nothing on the
+    # trading path acts on them.
     if degraded_reason is None:
         edge_up = fair_up - up_book.best_ask if up_book.buyable else None
         edge_down = (1.0 - fair_up) - down_book.best_ask if down_book.buyable else None
@@ -1232,6 +1202,11 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
 
 
 async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
+    # Operator switch (STRATEGIES card): off gates ENTRIES only. Start/Stop
+    # still owns the loop itself, and every exit/settlement path below runs
+    # regardless, so switching off never strands an open position.
+    if not await _strategies.enabled("btc_updown"):
+        return
     if not snapshot.signal_side or snapshot.notional_usd <= 0:
         return
     async with connect() as db:
@@ -1546,60 +1521,6 @@ def _window_start_from_slug(slug: str) -> int | None:
         return int(str(slug).rsplit("-", 1)[-1])
     except (TypeError, ValueError):
         return None
-
-
-async def _settle_due_shadows(
-    client: httpx.AsyncClient, current_slug: str | None
-) -> None:
-    """Settle every resolvable OPEN shadow window via the Chainlink connector.
-
-    Resolves the ABSOLUTE window winner (Up/Down) — reusing the same settlement
-    read as live positions — so candidates that opened on windows the live bot
-    never traded are still settled. The in-progress window is skipped; the
-    connector returns ``None`` for windows not yet settleable, which we skip.
-    """
-    async with connect() as db:
-        async with db.execute(
-            "SELECT DISTINCT window_slug FROM model_shadow_positions "
-            "WHERE state = 'open'"
-        ) as cur:
-            slugs = [str(row["window_slug"]) for row in await cur.fetchall()]
-    for slug in slugs:
-        if slug == current_slug:
-            continue
-        start_ts = _window_start_from_slug(slug)
-        if start_ts is None:
-            continue
-        connector = _make_settlement_connector(client, slug)
-        try:
-            up_won = await connector.settle_window(start_ts)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("shadow.settle_read_failed", window_slug=slug, error=str(exc))
-            continue
-        if up_won is None:
-            continue
-        await shadow_ledger.settle_open_shadow(
-            window_slug=slug,
-            outcome_side="Up" if up_won else "Down",
-            settlement_price=1.0,
-            resolved_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        )
-
-
-async def _record_and_settle_shadow(
-    snapshot: PaperSnapshot, client: httpx.AsyncClient
-) -> None:
-    """Run the shadow forward-tester, fully isolated so it can never break the
-    live trading loop. Records each candidate's would-be trade for this window
-    and settles any now-resolvable shadow windows."""
-    if _config.SHADOW_ENABLED != "on":
-        return
-    try:
-        params = _strategy_params()
-        await shadow_runner.record_shadow(snapshot, params)
-        await _settle_due_shadows(client, snapshot.window_slug)
-    except Exception as exc:  # noqa: BLE001 — never let the harness break the loop
-        log.warning("shadow.harness_error", error=str(exc))
 
 
 async def _close_position(
