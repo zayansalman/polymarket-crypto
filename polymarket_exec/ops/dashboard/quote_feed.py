@@ -95,7 +95,7 @@ def _follow(market: tuple[str, str] | None) -> None:
     if market is None:
         return
     try:
-        md_hub.want(market[0], market[1], OWNER)
+        md_hub.want(market[0], market[1], OWNER, hot=True)
     except ValueError as e:  # a selection the hub does not carry: REST still prices it
         log.warning("quote_feed.market_not_streamed", asset=market[0],
                     timeframe=market[1], error=str(e))

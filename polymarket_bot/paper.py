@@ -449,8 +449,9 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
     log.info("paper_loop.started", mode=mode)
 
     # Stream this market's books while the loop runs, so _fetch_clob_book reads
-    # them instead of polling the venue. No-op without a dashboard hub.
-    _marketdata_hub.want("btc", "5m", "bot loop")
+    # them instead of polling the venue. hot=True also races a REST read against
+    # the sockets on this window. No-op without a dashboard hub.
+    _marketdata_hub.want("btc", "5m", "bot loop", hot=True)
 
     # Set when the daily loss halt trips (#76): the loop stops the bot and the
     # finally surfaces this as LAST DETAIL instead of the generic stop line.

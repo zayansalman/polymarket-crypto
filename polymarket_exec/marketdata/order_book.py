@@ -34,6 +34,9 @@ class TopOfBook:
     # last ones seen and no longer update.
     live: bool = True
     source: str = STREAM  # STREAM | REST
+    # The venue's hash of this book, as the event that last changed it carried it.
+    # Two reads with the same hash hold the same book, whatever their stamps say.
+    book_hash: str | None = None
 
     @property
     def crossed(self) -> bool:
@@ -66,7 +69,7 @@ def _items(levels: dict[float, float]) -> list[Level]:
 class OrderBook:
     __slots__ = (
         "token_id", "bids", "asks", "tick_size", "last_trade_price", "last_trade",
-        "server_ts_ms", "events_at_ts", "received_ms", "_best_bid", "_best_ask",
+        "server_ts_ms", "events_at_ts", "received_ms", "book_hash", "_best_bid", "_best_ask",
     )
 
     def __init__(self, token_id: str) -> None:
@@ -79,6 +82,7 @@ class OrderBook:
         self.server_ts_ms: int | None = None
         self.events_at_ts = 0  # events applied with exactly ``server_ts_ms``
         self.received_ms: int | None = None
+        self.book_hash: str | None = None  # the venue's hash after the last event
         self._best_bid: float | None = None
         self._best_ask: float | None = None
 
@@ -90,6 +94,7 @@ class OrderBook:
         last_trade_price: float | None = None,
         ts_ms: int | None = None,
         received_ms: int | None = None,
+        book_hash: str | None = None,
     ) -> None:
         """Replace every level. Levels may come in any order; empty ones are skipped.
 
@@ -105,6 +110,8 @@ class OrderBook:
             self.tick_size = tick_size
         if last_trade_price is not None:
             self.last_trade_price = last_trade_price
+        if book_hash:
+            self.book_hash = book_hash
         self._stamp(ts_ms, received_ms)
 
     def apply(
@@ -114,6 +121,7 @@ class OrderBook:
         size: float,
         ts_ms: int | None = None,
         received_ms: int | None = None,
+        book_hash: str | None = None,
     ) -> None:
         """Set the absolute ``size`` at ``price`` (``side`` BUY = bids, SELL = asks)."""
         if side == BUY:
@@ -134,6 +142,8 @@ class OrderBook:
                 self._best_bid = max(levels) if levels else None
             elif side == SELL and price == self._best_ask:
                 self._best_ask = min(levels) if levels else None
+        if book_hash:
+            self.book_hash = book_hash
         self._stamp(ts_ms, received_ms)
 
     def record_trade(
@@ -174,6 +184,7 @@ class OrderBook:
             last_trade_price=self.last_trade_price,
             server_ts_ms=self.server_ts_ms,
             received_ms=self.received_ms,
+            book_hash=self.book_hash,
         )
 
     def levels(self, side: str, n: int) -> tuple[Level, ...]:

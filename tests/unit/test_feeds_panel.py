@@ -9,6 +9,7 @@ import config as _config
 from polymarket_exec.marketdata import clob_shard as sh
 from polymarket_exec.marketdata import clob_stream as cs
 from polymarket_exec.marketdata import hub as md_hub
+from polymarket_exec.marketdata import rest_poll as rp
 from polymarket_exec.marketdata import rtds_stream as rs
 from polymarket_exec.ops import feed_monitor as fm
 from polymarket_exec.ops import flow_recorder as fr
@@ -337,7 +338,7 @@ def _src(**kw) -> rs.SourceStatus:
 def _market(name: str, state: str = STREAMING, *, conns: tuple | None = None,
             owners: tuple[str, ...] = ("bot loop",), since: float = HT - 300,
             p50: float | None = 48.0, p90: float | None = 90.0, kib_s: float = 12.0,
-            tokens: int = 4, left: float | None = None
+            tokens: int = 4, left: float | None = None, hot: bool = False
             ) -> tuple[md_hub.GridMarket, sh.ShardStatus]:
     """One grid market and its socket group's status (the defaults: in use and healthy)."""
     asset, timeframe = name.split("-")
@@ -348,7 +349,7 @@ def _market(name: str, state: str = STREAMING, *, conns: tuple | None = None,
     up = sum(1 for c in conns if c.connected)
     market = md_hub.GridMarket(
         asset, timeframe, state, owners if state == STREAMING else (), since, left, up,
-        len(conns), p50, p90, kib_s * 1024, tokens)
+        len(conns), p50, p90, kib_s * 1024, tokens, hot)
     shard = sh.ShardStatus(
         name=name, connections=tuple(conns), connected=up, desired=tokens,
         served_latency_ms_p50=p50, served_latency_ms_p90=p90, served_latency_ms_max=p90,
@@ -359,7 +360,8 @@ def _market(name: str, state: str = STREAMING, *, conns: tuple | None = None,
 
 def _md(*entries: tuple[md_hub.GridMarket, sh.ShardStatus], prices: dict | None = None,
         ages: dict | None = None, started_at: float = HT - 600, gamma_errors: int = 0,
-        gamma_last_error: str | None = None) -> md_hub.MarketDataSnapshot:
+        gamma_last_error: str | None = None,
+        rest_poll: rp.PollStatus | None = None) -> md_hub.MarketDataSnapshot:
     """A hub snapshot of the default grid: the markets given, every other one AVAILABLE."""
     given = {f"{m.asset}-{m.timeframe}": (m, s) for m, s in entries}
     grid: dict[str, md_hub.GridMarket] = {}
@@ -378,7 +380,7 @@ def _md(*entries: tuple[md_hub.GridMarket, sh.ShardStatus], prices: dict | None 
         tokens=sum(m.tokens for m in grid.values()), subscribed=clob.subscribed,
         gamma_lookups=60, gamma_errors=gamma_errors, gamma_last_error=gamma_last_error,
         listeners=0, listener_drops=0, grid=grid, assets=ASSETS, timeframes=TIMEFRAMES,
-        clob_kib_s=clob.bytes_per_s / 1024, rtds_kib_s=3.0,
+        clob_kib_s=clob.bytes_per_s / 1024, rtds_kib_s=3.0, rest_poll=rest_poll,
     )
 
 
@@ -448,6 +450,24 @@ CARD_COLUMNS = [
     ("Fed calendar", "REST · hourly", "FOMC · speeches", "macro recorder"),
     ("ForexFactory week", "REST · hourly", "forecasts · claims", "macro recorder"),
 ]
+
+
+def test_the_fresh_rest_poll_shows_on_the_books_hover_and_on_its_markets() -> None:
+    poll = rp.PollStatus(tokens=4, polls=600, errors=2, ahead=150, behind=440, same=10,
+                         ahead_ms_p50=120.0, rtt_ms_p50=201.0, rate_hz=2.0,
+                         last_error="HTTPStatusError: 429")
+    md = _md(_market("btc-5m", hot=True), _market("eth-1h"), rest_poll=poll)
+    row = _md_rows(md)["Polymarket books"]
+    assert "fresh REST poll on 4 tokens, 2/s" in row.source
+    assert "ahead of the sockets 25% of reads (by 120ms)" in row.source
+    assert "round trip 201ms" in row.source and "2 failed" in row.source
+    cells = {c.market: c for _asset, row_cells in row.grid.rows
+             for c in row_cells if c}
+    assert "fresh REST poll" in cells["btc-5m"].title
+    assert "fresh REST poll" not in cells["eth-1h"].title
+    # No poll running (nothing hot): nothing about it on the hover.
+    quiet = _md(_market("btc-5m"))
+    assert _md_rows(quiet)["Polymarket books"].source == feeds.BOOKS_SOURCE
 
 
 def test_every_row_says_how_it_connects_what_it_is_for_and_who_uses_it() -> None:

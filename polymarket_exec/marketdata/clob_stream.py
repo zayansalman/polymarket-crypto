@@ -296,6 +296,18 @@ async def pause(stop_event: asyncio.Event, delay: float) -> None:
     await wait_set(stop_event, delay)
 
 
+async def nap(stop_event: asyncio.Event, wake: asyncio.Event, delay: float) -> None:
+    """Sleep ``delay`` seconds, or less if ``stop_event`` or ``wake`` is set first."""
+    if stop_event.is_set() or wake.is_set():
+        return
+    waiters = [asyncio.ensure_future(stop_event.wait()), asyncio.ensure_future(wake.wait())]
+    try:
+        await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+
+
 class Backoff:
     """Reconnect delays: doubling from ``initial_s`` to ``max_s`` with +/-20% jitter.
 

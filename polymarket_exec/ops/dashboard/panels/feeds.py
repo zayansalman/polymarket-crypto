@@ -332,6 +332,24 @@ def _named(problems: list[tuple[str, _Health]]) -> str:
     return f"{name}: {health.detail}{more}"
 
 
+def _poll_note(md: md_hub.MarketDataSnapshot) -> str:
+    """The fresh REST poll racing the sockets, for the Connection hover."""
+    poll = md.rest_poll
+    if poll is None or not poll.tokens:
+        return ""
+    judged = poll.ahead + poll.behind + poll.same
+    note = f" · fresh REST poll on {poll.tokens} tokens, {poll.rate_hz:g}/s"
+    if judged:
+        note += f", ahead of the sockets {100 * poll.ahead / judged:.0f}% of reads"
+    if poll.ahead_ms_p50 is not None:
+        note += f" (by {_ms(poll.ahead_ms_p50)})"
+    if poll.rtt_ms_p50 is not None:
+        note += f" · round trip {_ms(poll.rtt_ms_p50)}"
+    if poll.errors:
+        note += f" · {poll.errors} failed"
+    return note
+
+
 def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
     markets = list(md.grid.values())
     in_use = [m for m in markets if m.state == md_hub.STREAMING]
@@ -340,10 +358,11 @@ def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
     owners = sorted({owner for m in in_use for owner in m.owners})
     used_by = _by(*owners) if owners else NO_OWNER
     grid = _market_grid(md)
+    source = BOOKS_SOURCE + _poll_note(md)
 
     def row(delay: str, status: str, level: str, warn: bool = False,
             detail: str | None = None) -> FeedRow:
-        return FeedRow(BOOKS_NAME, role, BOOKS_SOURCE, delay, status, level, warn,
+        return FeedRow(BOOKS_NAME, role, source, delay, status, level, warn,
                        detail[:200] if detail else None, BOOKS_CONNECTION, used_by, grid)
 
     if not in_use:
@@ -389,6 +408,8 @@ def _grid_cell(md: md_hub.MarketDataSnapshot, market: md_hub.GridMarket) -> Grid
              f"p50 {_opt_ms(market.served_latency_ms_p50)} · "
              f"p90 {_opt_ms(market.served_latency_ms_p90)} · "
              f"{market.bytes_per_s / 1024:.1f} KiB/s")
+    if market.hot:
+        stats += " · fresh REST poll"
     if market.state == md_hub.LINGERING:
         left = _secs(market.linger_left_s) if market.linger_left_s is not None else "a moment"
         return GridCell(name, market.state, "lingering", "linger",

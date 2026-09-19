@@ -11,6 +11,8 @@ import pytest
 from websockets.exceptions import ConnectionClosedError
 
 from polymarket_exec.marketdata import hub as hub_mod
+from polymarket_exec.marketdata import rest_poll
+from polymarket_exec.marketdata.order_book import REST
 
 # Captured before the autouse conftest fixture swaps ``run`` for an offline stub.
 _REAL_RUN = hub_mod.MarketDataHub.run
@@ -67,9 +69,10 @@ def _hub(clock: dict, **kw) -> hub_mod.MarketDataHub:
     kw.setdefault("clob_connect", Connector())
     kw.setdefault("rtds_connect", Connector())
     kw.setdefault("hedge", {})
+    kw.setdefault("client_factory",
+                  lambda: httpx.AsyncClient(transport=httpx.MockTransport(_gamma)))
     return hub_mod.MarketDataHub(
         assets=("btc",), timeframes=("5m",), pinned=[("btc", "5m", "test")],
-        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(_gamma)),
         time_fn=lambda: clock["t"], **kw,
     )
 
@@ -166,6 +169,92 @@ async def test_the_module_level_helpers_do_nothing_without_a_hub() -> None:
     assert await hub_mod.wait_ready("btc", "5m", 0.01) is False
 
 
+# --- the fresh REST poll on the markets in use ----------------------------------------
+
+@pytest.fixture
+def fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lift the poll-rate cap so these tests finish in milliseconds."""
+    monkeypatch.setattr(rest_poll, "MAX_POLL_HZ", 500.0)
+
+
+class Venue:
+    """Gamma windows and CLOB books from one transport, with the /book reads counted."""
+
+    def __init__(self, ts_ms: int = 1_789_554_461_000, book_hash: str = "rest") -> None:
+        self.books: list[str] = []
+        self.ts_ms = ts_ms
+        self.hash = book_hash
+
+    def client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/book"):
+            token = request.url.params["token_id"]
+            self.books.append(token)
+            return httpx.Response(200, json={
+                "asset_id": token, "timestamp": str(self.ts_ms), "hash": self.hash,
+                "bids": [{"price": "0.55", "size": "9"}],
+                "asks": [{"price": "0.56", "size": "8"}],
+            })
+        return _gamma(request)
+
+
+@pytest.mark.asyncio
+async def test_only_hot_wanted_markets_are_polled_over_rest(fast: None) -> None:
+    venue = Venue()
+    hub = _hub({"t": T0}, client_factory=venue.client, poll_hz=200.0)
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        await until(lambda: hub.market("btc", "5m") is not None)
+        await asyncio.sleep(0.05)
+        assert hub.snapshot().rest_poll.tokens == 0  # wanted, but nobody trades it
+        assert venue.books == []
+        hub.want("btc", "5m", "bot loop", hot=True)
+        await until(lambda: set(venue.books) == {UP, DOWN})
+        assert hub.hot() == frozenset({("btc", "5m")})
+        assert hub.snapshot().grid["btc-5m"].hot is True
+        hub.release("bot loop")
+        await until(lambda: hub.snapshot().rest_poll.tokens == 0)
+        seen = len(venue.books)
+        await asyncio.sleep(0.05)
+        assert len(venue.books) == seen  # the poll stopped with the demand
+        assert hub.book_top(UP) is None  # and its read went with it
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_book_top_falls_back_to_the_rest_read_when_the_sockets_drop(
+    fast: None,
+) -> None:
+    clock = {"t": T0}
+    first, second = FakeWs(), FakeWs()
+    venue = Venue(ts_ms=1_789_554_470_000)  # later than the snapshot's stamp
+    hub = _hub(clock, clob_connect=Connector([first, second]), client_factory=venue.client,
+               poll_hz=200.0)
+    stream = hub._shards["btc-5m"]._conns[0].stream
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        hub.want("btc", "5m", "bot loop", hot=True)
+        await until(lambda: first.sent)
+        first.incoming.put_nowait(SNAPSHOT)
+        await until(lambda: venue.books and hub.top(UP) is not None)
+        first.incoming.put_nowait(ConnectionClosedError(None, None))
+        await until(lambda: not stream.connected)
+        top = hub.book_top(UP)
+        assert top is not None and top.source == REST
+        assert (top.best_bid, top.best_ask) == (0.55, 0.56)
+        assert hub.snapshot().reads.from_rest >= 1
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert hub.snapshot().rest_poll.ahead >= 1
+
+
 # --- the BTC loop's book reads (polymarket_bot/paper.py) ------------------------------
 
 def _clob_rest(calls: list[str], bids: str = "0.70", asks: str = "0.75") -> httpx.AsyncClient:
@@ -235,7 +324,8 @@ async def test_the_loop_wants_its_market_while_it_runs(
     await _db.init_db()
     paper.set_shared_chainlink_feed(object())  # no WS feed of its own for this run
     demand: list[tuple] = []
-    monkeypatch.setattr(hub_mod, "want", lambda *a: demand.append(("want", *a)))
+    monkeypatch.setattr(hub_mod, "want",
+                        lambda *a, **k: demand.append(("want", *a, k.get("hot"))))
     monkeypatch.setattr(hub_mod, "release", lambda *a: demand.append(("release", *a)))
     stop = threading.Event()
     stop.set()  # one pass through the loop's setup and teardown
@@ -243,7 +333,8 @@ async def test_the_loop_wants_its_market_while_it_runs(
         await paper.run_paper_loop(stop, mode="paper")
     finally:
         paper.set_shared_chainlink_feed(None)
-    assert demand == [("want", "btc", "5m", "bot loop"), ("release", "bot loop")]
+    assert demand == [("want", "btc", "5m", "bot loop", True),
+                      ("release", "bot loop")]
 
 
 def test_the_module_level_helpers_use_the_registered_hub() -> None:
