@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS copy_trades (
   real_fee      REAL,
   real_cost_usd REAL,
   real_slippage REAL,
+  real_pnl      REAL,
   requoted_at   INTEGER
 );
 -- Every fill considered, including the ones we declined and why. A copier that
@@ -81,7 +82,7 @@ async def init() -> None:
         await conn.executescript(SCHEMA)
         # Columns added after the table first shipped.
         for col, decl in (
-            ("their_size", "REAL"),
+            ("their_size", "REAL"), ("real_pnl", "REAL"),
             ("real_price", "REAL"), ("real_fee", "REAL"),
             ("real_cost_usd", "REAL"), ("real_slippage", "REAL"),
             ("requoted_at", "INTEGER"),
@@ -201,12 +202,20 @@ async def settled_rows(limit: int = 200) -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
-async def settle(row_id: int, *, won: bool, pnl: float, now: int) -> None:
+async def settle(row_id: int, *, won: bool, pnl: float, real_pnl: float | None,
+                 now: int) -> None:
+    """Close a copy with BOTH results.
+
+    ``pnl`` is the optimistic paper fill. ``real_pnl`` is the same position at
+    the price a real order would have got, and is exactly 0 when the book was
+    gone — an order that never filled neither wins nor loses, and counting it as
+    a win is the single biggest way a paper ledger lies.
+    """
     async with _db.connect() as conn:
         await conn.execute(
-            "UPDATE copy_trades SET state='settled', won=?, pnl=?, settled_at=? "
-            "WHERE id=? AND state='open'",
-            (1 if won else 0, pnl, now, row_id),
+            "UPDATE copy_trades SET state='settled', won=?, pnl=?, real_pnl=?, "
+            "settled_at=? WHERE id=? AND state='open'",
+            (1 if won else 0, pnl, real_pnl, now, row_id),
         )
         await conn.commit()
 
@@ -219,11 +228,10 @@ async def summary() -> dict:
                       COUNT(*)                                   AS n,
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END)     AS wins,
                       SUM(pnl)                                   AS pnl,
+                      SUM(real_pnl)                              AS real_pnl,
                       SUM(cost_usd)                              AS staked,
                       SUM(real_cost_usd)                         AS real_staked,
                       AVG(real_slippage)                         AS real_slip,
-                      SUM(CASE WHEN their_size IS NOT NULL AND size > their_size * 1.05
-                               THEN 1 ELSE 0 END)                  AS upsized,
                       SUM(size)                                  AS shares,
                       AVG(slippage)                              AS slip
                FROM copy_trades WHERE state='settled'
@@ -233,7 +241,9 @@ async def summary() -> dict:
         cur = await conn.execute(
             """SELECT COUNT(*) AS n,
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END) AS wins,
-                      SUM(pnl) AS pnl, SUM(cost_usd) AS staked, SUM(size) AS shares,
+                      SUM(pnl) AS pnl, SUM(real_pnl) AS real_pnl,
+                      SUM(cost_usd) AS staked, SUM(size) AS shares,
+                      SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END) AS never_filled,
                       SUM(real_cost_usd) AS real_staked,
                       AVG(real_slippage) AS real_slip
                FROM copy_trades WHERE state='settled'"""
@@ -257,7 +267,9 @@ async def summary() -> dict:
                       SUM(CASE WHEN real_price IS NOT NULL THEN real_cost_usd ELSE 0 END)
                           AS filled_real,
                       SUM(CASE WHEN real_price IS NULL THEN cost_usd ELSE 0 END)
-                          AS lost_to_unfilled
+                          AS lost_to_unfilled,
+                      SUM(CASE WHEN their_size IS NOT NULL AND size > their_size * 1.05
+                               THEN 1 ELSE 0 END) AS upsized
                FROM copy_trades WHERE requoted_at IS NOT NULL"""
         )
         execq = dict(await cur.fetchone() or {})

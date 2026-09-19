@@ -260,7 +260,18 @@ async def settle_due(client: httpx.AsyncClient) -> int:
             won = str(r["outcome"]) == winner
             payout = r["size"] if won else 0.0
             pnl = payout - (r["cost_usd"] or 0.0)
-            await _ledger.settle(r["id"], won=won, pnl=pnl, now=now)
+            # The realistic result. A row whose book was gone at re-quote never
+            # filled, so it is flat — not a winner. Rows not yet re-quoted have
+            # no realistic price to settle against and stay null rather than
+            # silently inheriting the optimistic one.
+            if r.get("requoted_at") is None:
+                real_pnl = None
+            elif r.get("real_price") is None:
+                real_pnl = 0.0
+            else:
+                real_pnl = payout - (r["real_cost_usd"] or 0.0)
+            await _ledger.settle(r["id"], won=won, pnl=pnl,
+                                 real_pnl=real_pnl, now=now)
             settled += 1
             log.info(
                 "copytrade.settled", target=r["target_label"],

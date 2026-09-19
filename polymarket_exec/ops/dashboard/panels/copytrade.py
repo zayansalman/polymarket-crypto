@@ -205,7 +205,10 @@ def _results_html(summary: dict) -> str:
             f"<span class='{cls}'>${pnl:+,.2f}</span>"
             "</div>"
         )
-    if not rows:
+    # Key the empty state off the settled COUNT, not off whether the per-target
+    # breakdown happens to be populated — otherwise a real total (and the
+    # realistic P&L beside it) disappears behind "nothing settled yet".
+    if not n:
         openp = summary.get("open") or {}
         return (
             "<div class='copy-results'><div class='gr-toggle-hint'>"
@@ -217,6 +220,21 @@ def _results_html(summary: dict) -> str:
     tw = total.get("wins") or 0
     openp = summary.get("open") or {}
     cls = "copy-good" if tp > 0 else "copy-bad"
+    # The same positions at the price a real order would have got. A copy whose
+    # book was gone never filled, so it is flat — counting it as a win is the
+    # single biggest way a paper ledger flatters itself.
+    rp = total.get("real_pnl")
+    nf = total.get("never_filled") or 0
+    real_row = ""
+    if rp is not None:
+        rcls = "copy-good" if rp > 0 else "copy-bad"
+        real_row = (
+            "<div class='copy-result copy-result-total'>"
+            "<span><b>same trades, realistic fills</b></span>"
+            f"<span>{nf} never filled</span>"
+            f"<span class='{rcls}'><b>${rp:+,.2f}</b></span>"
+            "</div>"
+        )
     return (
         "<div class='copy-results'>"
         "<div class='copy-results-h'>PAPER RESULTS</div>"
@@ -227,7 +245,8 @@ def _results_html(summary: dict) -> str:
         f"<span>${total.get('staked') or 0:,.2f} staked</span>"
         f"<span>{openp.get('n') or 0} open</span>"
         f"<span class='{cls}'><b>${tp:+,.2f}</b></span>"
-        "</div></div>"
+        "</div>"
+        f"{real_row}</div>"
     )
 
 

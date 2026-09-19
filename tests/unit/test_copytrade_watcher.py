@@ -333,3 +333,16 @@ def test_copies_larger_than_the_target_bet_are_flagged() -> None:
                "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
     html = panel.render(state=state, target=None, summary=summary)
     assert "larger than the target" in html and "4 of 10" in html
+
+
+def test_results_show_the_realistic_pnl_beside_the_paper_one() -> None:
+    """A paper ledger's biggest lie is counting a never-filled order as a win."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {"total": {"n": 10, "wins": 4, "pnl": -2.82, "real_pnl": -5.10,
+                         "staked": 45.57, "never_filled": 3},
+               "per_target": [], "open": {"n": 4, "staked": 65.94},
+               "execution": {}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "same trades, realistic fills" in html
+    assert "3 never filled" in html
+    assert "$-5.10" in html and "$-2.82" in html
