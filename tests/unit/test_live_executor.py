@@ -231,25 +231,42 @@ def test_size_rounds_down_to_two_decimals() -> None:
 
 
 @pytest.mark.asyncio
-async def test_entry_places_gtc_buy_at_best_ask(journal_db, tmp_path: Path) -> None:
+async def test_entry_rests_below_the_ask_and_never_at_it(journal_db, tmp_path: Path) -> None:
     client = _mock_client()
     executor = _executor(client, tmp_path)
 
     result = await executor.submit_entry(UP_TOKEN, 0.58, 3.0, window_slug="w1")
 
     assert result.ok and result.status == "SUBMITTED"
-    assert result.order_id == "0xORDER1"
     args = client.create_and_post_order.call_args.args[0]
     assert args.token_id == UP_TOKEN
     assert args.side == "BUY"
-    assert args.price == 0.57  # best ask from the book, not the gamma price
-    assert args.size == 5.26  # floor(3.0 / 0.57, 2dp)
+    # 3.00 USD only supports one rung at the venue minimum, so the ladder
+    # collapses to its nearest rung: 5c under the 0.57 ask, never at it.
+    assert args.price == 0.52
+    assert args.size == 5.76  # floor(3.0 / 0.52, 2dp)
     rows = await _journal_rows(journal_db)
     assert len(rows) == 1
     assert rows[0]["status"] == "SUBMITTED"
     assert rows[0]["intent"] == "ENTRY"
     assert rows[0]["order_type"] == "GTC"
-    assert rows[0]["clob_order_id"] == "0xORDER1"
+
+
+@pytest.mark.asyncio
+async def test_a_funded_entry_rests_every_rung_below_the_ask(
+    journal_db, tmp_path: Path
+) -> None:
+    client = _mock_client()
+    executor = _executor(client, tmp_path, max_trade=200.0, bankroll=1000.0)
+
+    result = await executor.submit_entry(UP_TOKEN, 0.58, 200.0, window_slug="w1")
+
+    assert result.ok
+    posted = [c.args[0] for c in client.create_and_post_order.call_args_list]
+    assert len(posted) == 5
+    assert [a.price for a in posted] == [0.52, 0.49, 0.47, 0.44, 0.42]
+    assert all(a.side == "BUY" for a in posted)
+    assert all(a.price < 0.57 for a in posted)
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,12 @@ from db import (  # type: ignore[import-untyped]
 from logging_setup import get_logger  # type: ignore[import-untyped]
 from polymarket_bot.shadow.fees import taker_fee_per_share  # canonical venue fee math
 from polymarket_exec.execution.gate import EntryRequest, GateConfig, RiskGate
+from polymarket_exec.execution.ladder import (
+    LadderRung,
+    LadderSpec,
+    LadderState,
+    build_ladder,
+)
 
 log = get_logger("live")
 
@@ -353,6 +359,7 @@ class LiveExecutor:
         # USDC taker fee charged at entry on the placement-crossed portion
         # (0.07·p·(1−p) per share); 0 for maker fills. Booked at realization.
         self._entry_taker_fee_usd: float = 0.0
+        self._ladder: LadderState | None = None
         self._position_open = False
         # Exit order tracking — only set while an exit SELL might still rest.
         self._exit_order_id: Optional[str] = None
@@ -761,7 +768,10 @@ class LiveExecutor:
             EntryRequest(
                 notional_usd=notional_usd,
                 position_open=self._position_open,
-                entry_order_resting=self._entry_order_id is not None,
+                entry_order_resting=(
+                    self._entry_order_id is not None
+                    or (self._ladder is not None and self._ladder.any_resting)
+                ),
                 side_price=side_price,
                 best_ask=best_ask,
             )
@@ -866,69 +876,125 @@ class LiveExecutor:
                 price=best_ask, notional_usd=notional_usd, mode="live",
             )
             return LiveOrderResult(ok=False, status="BLOCKED", reason=blocked)
-        raw_price = best_ask if best_ask is not None else side_price
-        price = _round_price_to_tick(raw_price, tick)
-        size = _round_size_down(notional_usd / price)
-        if size < min_size:
-            # Auto-bump (#87): round a sub-minimum clip UP to exactly the venue
-            # minimum so a small configured size still places. The per-trade cap is
-            # a target the venue minimum may exceed — bounded by MAX_AUTO_BUMP_SHARES
-            # so an abnormally large minimum blocks instead of overspending.
-            if min_size > MAX_AUTO_BUMP_SHARES:
-                reason = (
-                    f"venue minimum {min_size:.2f} shares exceeds the auto-bump "
-                    f"ceiling {MAX_AUTO_BUMP_SHARES:.2f} at price {price:.4f} "
-                    f"(would cost {min_size * price:.2f} USD)"
-                )
-                await self._journal_blocked(
-                    intent="ENTRY", side=BUY, reason=reason,
-                    window_slug=window_slug, token_id=token_id,
-                    price=price, size=size, notional_usd=notional_usd, mode="live",
-                )
-                return LiveOrderResult(ok=False, status="BLOCKED", reason=reason)
-            log.info(
-                "live_executor.entry_bumped_to_min",
-                requested_size=round(size, 2), bumped_size=min_size,
-                price=price, requested_notional=round(notional_usd, 2),
-                bumped_notional=round(min_size * price, 2),
-            )
-            size = min_size
-
-        result = await self._place_order(
-            intent="ENTRY", token_id=token_id, side=BUY,
-            price=price, size=size, window_slug=window_slug,
+        reference_price = best_ask if best_ask is not None else side_price
+        ladder = build_ladder(
+            reference_price,
+            notional_usd,
+            spec=self.ladder_spec,
+            tick=tick,
+            min_size=min_size,
         )
-        if result.ok:
-            self._entry_token_id = token_id
-            # Record the REAL average fill price when the venue matched the order
-            # (makingAmount/takingAmount), not the posted limit — the limit
-            # overstates PnL whenever the order fills better than the ask (#103).
-            self._entry_price = _avg_fill_price(result.raw, BUY, price)
-            self._entry_size = size
-            self._entry_sold_size = 0.0
-            # The venue charges its taker fee, in USDC, on the shares that
-            # crossed at placement; a resting (maker) remainder is fee-free.
-            crossed = _round_size_down(_placement_crossed_shares(result.raw, BUY))
-            self._entry_taker_fee_usd = (
-                round(taker_fee_per_share(self._entry_price) * min(crossed, size), 6)
-                if crossed > 0
-                else 0.0
+        if ladder:
+            return await self._submit_entry_ladder(
+                token_id=token_id,
+                ladder=ladder,
+                reference_price=reference_price,
+                notional_usd=notional_usd,
+                window_slug=window_slug,
             )
-            self._position_open = True
-            await self.gate.record_buy_notional(round(price * size, 4))
-            filled = _round_size_down(_filled_shares(result.raw))
-            if filled >= size:
-                # Fully matched on submission: nothing rests in the book, so
-                # this is NOT a resting entry order. Drop the id so the gate's
-                # `entry_order_resting` stays honest (the open position holds
-                # the max-1 slot) and the next flatten skips a doomed
-                # "matched orders can't be canceled" round trip.
-                self._entry_order_id = None
-                self._entry_matched_size = filled
-            else:
-                self._entry_order_id = result.order_id
-                self._entry_matched_size = None
-        return result
+        # No rung can rest below the reference — too low a price to sit under,
+        # or too thin a notional for the venue minimum. Never fall back to
+        # crossing the spread; a ladder that cannot rest is a no-trade.
+        reason = (
+            f"no ladder rung can rest {self.ladder_spec.min_offset:.2f}-"
+            f"{self.ladder_spec.max_offset:.2f} below {reference_price:.4f} "
+            f"at {notional_usd:.2f} USD (venue minimum {min_size:.2f} shares)"
+        )
+        await self._journal_blocked(
+            intent="ENTRY", side=BUY, reason=reason,
+            window_slug=window_slug, token_id=token_id,
+            price=reference_price, notional_usd=notional_usd, mode="live",
+        )
+        return LiveOrderResult(ok=False, status="BLOCKED", reason=reason)
+
+    async def _submit_entry_ladder(
+        self,
+        *,
+        token_id: str,
+        ladder: list[LadderRung],
+        reference_price: float,
+        notional_usd: float,
+        window_slug: str | None,
+    ) -> LiveOrderResult:
+        """Rest every rung of *ladder* and hold the slot as one logical entry.
+
+        A rung that the venue rejects is skipped rather than abandoning the
+        ladder — the rungs that did rest are a working entry. The slot is held
+        from the moment any rung rests, including before anything fills, so a
+        second entry cannot start while the ladder is still working.
+        """
+        state = LadderState.from_rungs(ladder)
+        first_ok: LiveOrderResult | None = None
+        last_error: LiveOrderResult | None = None
+        for rung_state in state.rungs:
+            rung = rung_state.rung
+            result = await self._place_order(
+                intent="ENTRY", token_id=token_id, side=BUY,
+                price=rung.price, size=rung.size, window_slug=window_slug,
+            )
+            if not result.ok:
+                last_error = result
+                log.warning(
+                    "live_executor.ladder_rung_rejected",
+                    price=rung.price, size=rung.size,
+                    offset=rung.offset, error=result.reason,
+                )
+                continue
+            rung_state.order_id = result.order_id
+            rung_state.matched = _round_size_down(_filled_shares(result.raw))
+            first_ok = first_ok or result
+            log.info(
+                "live_executor.ladder_rung_resting",
+                price=rung.price, size=rung.size, offset=rung.offset,
+                matched=rung_state.matched, reference_price=reference_price,
+            )
+
+        if first_ok is None:
+            # Every rung was rejected. Surface the venue's own failure rather
+            # than a generic one — "not enough balance" is what the operator
+            # needs to see, and each rejection is already journaled by
+            # _place_order.
+            if last_error is not None:
+                return last_error
+            reason = "no ladder rung reached the venue"
+            await self._journal_blocked(
+                intent="ENTRY", side=BUY, reason=reason,
+                window_slug=window_slug, token_id=token_id,
+                price=reference_price, notional_usd=notional_usd, mode="live",
+            )
+            return LiveOrderResult(ok=False, status="BLOCKED", reason=reason)
+
+        self._ladder = state
+        self._entry_token_id = token_id
+        self._entry_size = state.committed_size
+        self._entry_sold_size = 0.0
+        self._entry_matched_size = None
+        # Rungs rest below the touch, so they are maker fills and pay no taker
+        # fee. A rung that somehow crossed would be a bug in the ladder maths,
+        # not a fee to account for.
+        self._entry_taker_fee_usd = 0.0
+        # An unfilled ladder has no entry price: a rung's limit sits deliberately
+        # below the market, so it would flatter every PnL that read it.
+        self._entry_price = state.average_fill_price
+        self._entry_order_id = None
+        self._position_open = True
+        await self.gate.record_buy_notional(
+            round(sum(r.rung.notional_usd for r in state.placed), 4)
+        )
+        log.info(
+            "live_executor.ladder_resting",
+            rungs=len(state.placed), committed_size=state.committed_size,
+            filled_size=state.filled_size, reference_price=reference_price,
+        )
+        return LiveOrderResult(
+            ok=True,
+            status=first_ok.status,
+            price=state.average_fill_price,
+            size=state.filled_size,
+            notional_usd=round(sum(r.rung.notional_usd for r in state.placed), 4),
+            order_id=first_ok.order_id,
+            raw=first_ok.raw,
+        )
 
     async def submit_exit(
         self,
@@ -1110,6 +1176,14 @@ class LiveExecutor:
                 self._exit_price = None
                 await self._register_exit_fill(sold, stale_price or order_price)
 
+        if self._ladder is not None:
+            cancelled.extend(
+                await self._cancel_ladder_rungs(
+                    reason=reason, assume_filled_on_error=assume_filled_on_error
+                )
+            )
+            return cancelled
+
         order_id = self._entry_order_id
         if order_id is None:
             return cancelled
@@ -1135,6 +1209,45 @@ class LiveExecutor:
     # Internals
     # ------------------------------------------------------------------
 
+    async def _cancel_ladder_rungs(
+        self, *, reason: str, assume_filled_on_error: bool
+    ) -> list[str]:
+        """Cancel every rung still resting and credit back what never traded.
+
+        A rung whose cancel fails stays tracked so a later attempt retries it —
+        an orphaned rung is real size live in the book, so it is never silently
+        forgotten.
+        """
+        ladder = self._ladder
+        if ladder is None:
+            return []
+        cancelled: list[str] = []
+        for rung_state in ladder.rungs:
+            if not rung_state.resting or rung_state.order_id is None:
+                continue
+            order_id = rung_state.order_id
+            if not await self._try_cancel(order_id, reason=reason):
+                continue
+            cancelled.append(order_id)
+            matched, _ = await self._order_fill_info(
+                order_id,
+                default_size=(
+                    rung_state.rung.size
+                    if assume_filled_on_error
+                    else rung_state.matched
+                ),
+            )
+            rung_state.matched = matched
+            rung_state.cancelled = True
+            unfilled = max(0.0, rung_state.rung.size - matched)
+            if unfilled > 0:
+                await self.gate.record_buy_notional(
+                    -round(unfilled * rung_state.rung.price, 4)
+                )
+        self._entry_matched_size = ladder.filled_size
+        self._entry_price = ladder.average_fill_price
+        return cancelled
+
     def _clear_position(self) -> None:
         self._entry_order_id = None
         self._entry_token_id = None
@@ -1143,6 +1256,7 @@ class LiveExecutor:
         self._entry_matched_size = None
         self._entry_sold_size = 0.0
         self._entry_taker_fee_usd = 0.0
+        self._ladder = None
         self._position_open = False
         self._exit_order_id = None
         self._exit_price = None
@@ -1164,10 +1278,11 @@ class LiveExecutor:
         if (
             not self._position_open
             and self._entry_order_id is None
+            and self._ladder is None
             and self._exit_order_id is None
         ):
             return False
-        had_entry_order = self._entry_order_id is not None
+        had_entry_order = self._entry_order_id is not None or self._ladder is not None
         if had_entry_order or self._exit_order_id is not None:
             try:
                 await self.cancel_open(reason="LEDGER_FLAT_RESYNC")
@@ -1283,6 +1398,11 @@ class LiveExecutor:
             price = None
         return matched, price
 
+    @property
+    def ladder_spec(self) -> LadderSpec:
+        """Shape of the entry ladder. Global, so paper and live rest the same rungs."""
+        return LadderSpec()
+
     async def _matched_entry_size(self, *, assume_filled_on_error: bool = True) -> float:
         """Matched (filled) share size of the tracked entry order.
 
@@ -1295,6 +1415,21 @@ class LiveExecutor:
         #109). Conservative 0 is correct there — an under-counted winner is
         just a token the operator redeems later, never a fictional PnL.
         """
+        if self._ladder is not None:
+            total = 0.0
+            for rung_state in self._ladder.placed:
+                matched, _ = await self._order_fill_info(
+                    rung_state.order_id,
+                    default_size=(
+                        rung_state.rung.size
+                        if assume_filled_on_error
+                        else rung_state.matched
+                    ),
+                )
+                rung_state.matched = matched
+                total += matched
+            self._entry_price = self._ladder.average_fill_price
+            return _round_size_down(total)
         if self._entry_order_id is None:
             return self._entry_matched_size or 0.0
         matched, _ = await self._order_fill_info(
