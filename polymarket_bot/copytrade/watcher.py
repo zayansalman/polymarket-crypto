@@ -207,7 +207,6 @@ class CopyWatcher:
         # The first poll is a backfill of history; only fills seen after that
         # measure the transport.
         is_backfill = address not in self._polled
-        self._polled.add(address)
         mark = self._watermark.get(address, 0)
         at_mark = self._at_watermark.get(address, set())
         fresh: list[ObservedFill] = []
@@ -244,6 +243,12 @@ class CopyWatcher:
                 )
             )
 
+        if rows:
+            # Only now is this target's history actually known. Marking it on a
+            # failed or empty fetch would leave the watermark at 0, and the next
+            # successful poll would treat every past fill as new.
+            self._polled.add(address)
+
         if fresh:
             newest = max(f.ts for f in fresh)
             if newest > mark:
@@ -259,8 +264,14 @@ class CopyWatcher:
 
         # Copy anything new and followable. Backfill is history — copying it
         # would book positions in markets that already settled.
+        max_age = float(await _knobs.get("copy_max_fill_age_seconds"))
         if not is_backfill:
             for f in fresh:
+                # Belt and braces against any bookkeeping slip: a fill this old
+                # is unfollowable by definition, so never spend a book lookup
+                # or a ledger row on it.
+                if max_age > 0 and f.lag_seconds > max_age:
+                    continue
                 try:
                     if await _trader.consider(client, f, address):
                         self.state.copies_opened += 1

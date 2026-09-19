@@ -259,3 +259,56 @@ async def test_old_fills_are_not_re_examined_after_many_targets_are_polled() -> 
         _strategies.enabled = original
         _watcher._trader.consider = spy_orig
     assert considered == [], "an already-seen fill was re-examined"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_fill_is_never_considered() -> None:
+    """A fill from days ago is unfollowable at any latency.
+
+    Guards against bookkeeping slips re-surfacing history: a target whose first
+    poll returns nothing keeps a watermark of 0, and the next poll would
+    otherwise treat its whole history as new.
+    """
+    import polymarket_bot.strategies as _strategies
+
+    original = _strategies.enabled
+    seen: list[str] = []
+
+    async def _on(_name: str) -> bool:
+        return True
+
+    async def _spy(_c, fill, _a):
+        seen.append(fill.tx)
+        return False
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{
+                "type": "TRADE", "transactionHash": "0xancient",
+                "timestamp": 1, "side": "BUY", "outcome": "Up", "size": 10,
+                "price": 0.5, "title": "t",
+                "slug": "bitcoin-up-or-down-september-1-2026-1am-et",
+                "conditionId": "0xc", "asset": "1",
+            }]
+
+    class _Client:
+        async def get(self, *a, **k):
+            return _Resp()
+
+    _strategies.enabled = _on
+    _watcher._strategies.enabled = _on
+    spy_orig = _watcher._trader.consider
+    _watcher._trader.consider = _spy
+    try:
+        w = _watcher.CopyWatcher()
+        w._polled.update(_targets.TARGETS)   # pretend backfill already happened
+        await w.poll_once(_Client())
+    finally:
+        _strategies.enabled = original
+        _watcher._trader.consider = spy_orig
+    assert seen == [], "a fill from 1970 reached the copier"

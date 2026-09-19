@@ -81,6 +81,13 @@ KNOBS: dict[str, Knob] = {
         "runtime.copy.poll_interval_seconds", 12.0, "float",
         "Target poll interval", 5.0, 600.0, unit="s", group="Copy trade",
     ),
+    # A fill older than this cannot be followed at any latency, so it is never
+    # worth a book lookup or a ledger row. Also a backstop against dedupe slips
+    # re-surfacing history.
+    "copy_max_fill_age_seconds": Knob(
+        "runtime.copy.max_fill_age_seconds", 300.0, "float",
+        "Ignore fills older than", 30.0, 3600.0, unit="s", group="Copy trade",
+    ),
     "copy_observe_limit": Knob(
         "runtime.copy.observe_limit", 100, "int",
         "Fills fetched per poll", 10, 500, group="Copy trade",
