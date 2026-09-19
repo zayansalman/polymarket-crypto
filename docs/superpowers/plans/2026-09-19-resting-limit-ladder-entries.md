@@ -88,6 +88,22 @@ later observed book prints at or below the rung price, capped by the size restin
 there. Same ladder maths, same rung prices, same aggregation — only the fill oracle
 differs (observed book instead of venue confirmations).
 
+### Making adverse selection measurable
+
+The operator has already measured resting bids on these books at about -3.8c of
+adverse selection: they fill preferentially when the outcome is turning against
+you. A ladder rests 5-15c under the touch rather than at it, which is a different
+seat from the top-of-book maker that measurement killed — deep enough to be
+aiming at capital-rotation air pockets rather than competing where informed flow
+is. Whether that seat is any better is a question for the recorded data, not for
+argument.
+
+So the journal records, per rung fill: the offset that filled, the book at fill,
+and the window's outcome. That makes adverse selection measurable *by offset
+depth* against the -3.8c baseline, on the marketdata hub's recorded depth and
+trade prints. No gating, no scoring, no machinery that decides whether the ladder
+is working — just enough recorded to answer the question later.
+
 ## Out of scope for this chunk
 
 Exits keep their current behaviour (`best_bid`, bounded wait, cancel). Making exits

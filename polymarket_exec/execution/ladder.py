@@ -59,6 +59,76 @@ class LadderSpec:
         return [self.min_offset + step * i for i in range(count)]
 
 
+@dataclass
+class RungState:
+    """One rung's life: what was asked for, what the venue did with it."""
+
+    rung: LadderRung
+    order_id: str | None = None
+    matched: float = 0.0
+    cancelled: bool = False
+
+    @property
+    def resting(self) -> bool:
+        """True while this rung still has unfilled size live in the book."""
+        if self.order_id is None or self.cancelled:
+            return False
+        return self.matched < self.rung.size
+
+    @property
+    def unfilled(self) -> float:
+        return max(0.0, self.rung.size - self.matched)
+
+
+@dataclass
+class LadderState:
+    """One logical entry made of several rungs.
+
+    The executor and the paper simulation both drive this; it is what lets a
+    ladder present to the risk gate as the single position the gate expects,
+    with the aggregate derived from the rungs rather than tracked separately.
+    """
+
+    rungs: list[RungState]
+
+    @classmethod
+    def from_rungs(cls, rungs: list[LadderRung]) -> LadderState:
+        return cls(rungs=[RungState(rung=r) for r in rungs])
+
+    @property
+    def placed(self) -> list[RungState]:
+        return [r for r in self.rungs if r.order_id is not None]
+
+    @property
+    def committed_size(self) -> float:
+        """Shares working in the book, whether filled yet or not."""
+        return round(sum(r.rung.size for r in self.placed), 6)
+
+    @property
+    def filled_size(self) -> float:
+        return round(sum(r.matched for r in self.rungs), 6)
+
+    @property
+    def any_resting(self) -> bool:
+        return any(r.resting for r in self.rungs)
+
+    @property
+    def average_fill_price(self) -> float | None:
+        """Size-weighted price of what actually filled, or None if nothing did.
+
+        A rung's limit price is deliberately below the market, so the limit is
+        never a stand-in for the fill — an unfilled ladder has no entry price.
+        """
+        filled = self.filled_size
+        if filled <= 0:
+            return None
+        paid = sum(r.rung.price * r.matched for r in self.rungs)
+        return round(paid / filled, 6)
+
+    def resting_order_ids(self) -> list[str]:
+        return [r.order_id for r in self.rungs if r.resting and r.order_id]
+
+
 def _round_price_to_tick(price: float, tick: float) -> float:
     decimals = max(0, -int(math.floor(math.log10(tick))))
     return round(round(price / tick) * tick, decimals)
