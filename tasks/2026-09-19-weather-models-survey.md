@@ -1,5 +1,7 @@
 # Weather forecasting models — survey notes (parked 2026-09-19)
 
+Backlog issue: #253
+
 Desk research only. **No code, no data, no backtest.** Nothing here has been measured against
 any market. Parked at this point so it is recoverable later.
 
