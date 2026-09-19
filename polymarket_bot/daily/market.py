@@ -1,6 +1,6 @@
 """Daily Up/Down market discovery and per-asset price/spot resolution.
 
-Market discovery constructs today's slug directly
+Market discovery constructs the live market's slug directly
 (``{gamma_name}-up-or-down-on-{month}-{day}-{year}``) and queries Gamma by
 exact slug. Tried the "list everything, then classify" approach first
 (``tools.venue_recorder.discover()``/``classify()``) since it doesn't
@@ -13,6 +13,12 @@ direct ``?slug=`` lookup found instantly. The asset-name mapping below
 relying on it, so a direct construct-and-fetch is the reliable path;
 ``discover()``/``classify()`` remains the fallback for an asset whose direct
 slug 404s (e.g. the naming template changes), not the primary path.
+
+The slug's date is the noon ET the market resolves on — today before noon
+ET, tomorrow from noon on — the same rule the dashboard order ticket uses
+(:func:`polymarket_exec.connectors.updown_quote.window_slug`). The UTC date
+is wrong from noon ET until UTC midnight: it names the market that has just
+resolved, which Gamma no longer lists.
 """
 from __future__ import annotations
 
@@ -25,7 +31,7 @@ import httpx
 import config as _config
 from polymarket_bot.daily.types import DailyMarketView
 from polymarket_bot.pairarb.market_index import parse_market
-from polymarket_exec.connectors.updown_quote import daily_reference_instant
+from polymarket_exec.connectors.updown_quote import daily_reference_instant, window_slug
 from tools.venue_recorder import GAMMA_API, SPOT_SYMBOL, classify, discover
 
 # Short config-facing asset key -> the full name Gamma's slug spells out.
@@ -63,10 +69,6 @@ def _epoch(value: Any) -> int | None:
     return int(dt.timestamp()) if dt is not None else None
 
 
-def _todays_slug(gamma_name: str, now: datetime) -> str:
-    return f"{gamma_name}-up-or-down-on-{now.strftime('%B').lower()}-{now.day}-{now.year}"
-
-
 async def _fetch_by_slug(client: httpx.AsyncClient, slug: str) -> dict[str, Any] | None:
     try:
         resp = await client.get(f"{GAMMA_API}/markets", params={"slug": slug}, timeout=15.0)
@@ -98,9 +100,13 @@ async def _fallback_via_discover(
 
 
 async def discover_daily_markets(
-    client: httpx.AsyncClient, tracked_assets: list[str] | None = None
+    client: httpx.AsyncClient,
+    tracked_assets: list[str] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Return ``{short_asset: raw_gamma_market_dict}`` for today's daily family.
+    """Return ``{short_asset: raw_gamma_market_dict}`` for the daily market
+    each asset is trading at ``now`` (default: the current time) — the one
+    resolving at the next noon ET.
 
     Only assets in ``tracked_assets`` (default: ``config.DAILY_ASSETS``) are
     kept; an asset whose market can't be found (direct slug 404 AND the
@@ -108,13 +114,12 @@ async def discover_daily_markets(
     the caller, not fatal to the other assets' scan.
     """
     tracked = tracked_assets if tracked_assets is not None else _config.DAILY_ASSETS
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     by_asset: dict[str, dict[str, Any]] = {}
     for short in tracked:
-        gamma_name = _GAMMA_ASSET_NAME.get(short)
-        if gamma_name is None:
+        if short not in _GAMMA_ASSET_NAME:
             continue
-        market = await _fetch_by_slug(client, _todays_slug(gamma_name, now))
+        market = await _fetch_by_slug(client, window_slug(short, "1d", now))
         if market is None:
             market = await _fallback_via_discover(client, short)
         if market is not None:
