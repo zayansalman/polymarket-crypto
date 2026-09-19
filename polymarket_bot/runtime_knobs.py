@@ -49,6 +49,23 @@ class Knob:
 
 
 KNOBS: dict[str, Knob] = {
+    # --- Copy trade (polymarket_bot/copytrade/) --------------------------
+    # The target is an enum rather than free text: the candidate set is closed
+    # and each entry carries the measurement that earned it a place
+    # (copytrade/targets.py). A typo'd address would poll a wallet with no
+    # measured edge, which is worse than no copying at all.
+    "copy_target_wallet": Knob(
+        "runtime.copy.target_wallet", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "enum",
+        "Copy target wallet", choices=("0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "0x83e8f2ea25df8e71fcaf2271c9edaae02860b9bc", "0xfcaaa4cbd0a7553ac886eb5456d4806f128c5add", "0xe3164027a2be859579fcd84fce34513f0bc9bcf9", "0xe06cac28c493a2536e5b111e20e5f7a5f3843eb4",), group="Copy trade",
+    ),
+    "copy_poll_interval_seconds": Knob(
+        "runtime.copy.poll_interval_seconds", 30.0, "float",
+        "Target poll interval", 5.0, 600.0, unit="s", group="Copy trade",
+    ),
+    "copy_observe_limit": Knob(
+        "runtime.copy.observe_limit", 100, "int",
+        "Fills fetched per poll", 10, 500, group="Copy trade",
+    ),
     # --- Paper strategy (polymarket_bot/paper.py) -------------------------
     "paper_min_trade_usd": Knob(
         "runtime.paper.min_trade_usd", 1.0, "float", "Min trade size",

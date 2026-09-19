@@ -23,6 +23,7 @@ from polymarket_exec.ops.dashboard.panels import _wallet
 from polymarket_exec.ops.dashboard.panels import (
     blotter,
     controls,
+    copytrade as copytrade_panel,
     daily_altcoin,
     decision_engine,
     feeds,
@@ -172,6 +173,17 @@ async def execution_view_html() -> str:
         scan_interval_seconds=await _knobs.get("daily_scan_interval_seconds"),
         trade_usd=await _knobs.get("daily_trade_usd"),
     )
+    # Copy trade: the watcher keeps its snapshot in memory, so this is a read
+    # of live state rather than a DB load.
+    from polymarket_bot.copytrade import targets as _copy_targets
+    from polymarket_bot.copytrade import watcher as _copy_watcher
+
+    _cw = _copy_watcher.current()
+    _cstate = _cw.state if _cw is not None else None
+    copytrade_html = copytrade_panel.render(
+        state=_cstate,
+        target=_copy_targets.get(_cstate.target) if _cstate else None,
+    )
     settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
     settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)
 
@@ -188,6 +200,7 @@ async def execution_view_html() -> str:
         + tca_html
         + blotter_html
         + daily_altcoin_html
+        + copytrade_html
         + settings_html
         + "</div></div>"
     )

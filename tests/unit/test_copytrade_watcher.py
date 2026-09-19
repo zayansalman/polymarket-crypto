@@ -1,0 +1,119 @@
+"""The copy-trade watcher observes, and is honest about what it observed."""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+from polymarket_bot.copytrade import targets as _targets
+from polymarket_bot.copytrade import watcher as _watcher
+from polymarket_exec.ops.dashboard.panels import copytrade as panel
+
+
+def _fill(**kw):
+    base = dict(
+        tx="0xabc", ts=1000, side="BUY", outcome="Up", size=100.0, price=0.99,
+        title="Silver (XAGUSD) Up or Down on September 18?",
+        slug="xagusd-up-or-down-on-september-18-2026", followed=True,
+    )
+    base.update(kw)
+    return _watcher.ObservedFill(**base)
+
+
+def test_every_target_carries_the_measurement_that_selected_it() -> None:
+    assert _targets.TARGETS
+    for target in _targets.TARGETS.values():
+        assert target.address == target.address.lower()
+        assert target.edge_cents > 0, target.label
+        assert target.t_stat > 0, target.label
+        assert target.markets > 0, target.label
+        # The whole reason these were chosen over the hourly wallets: a copier
+        # arriving late still keeps the edge.
+        assert target.edge_left_30min > 0, target.label
+
+
+def test_the_default_target_is_one_of_the_registered_targets() -> None:
+    assert _targets.get(_targets.DEFAULT_TARGET) is not None
+
+
+def test_backfilled_fills_are_left_out_of_the_lag_median() -> None:
+    """A restart must not make the transport look broken.
+
+    The first poll returns history, so those fills are hours old through no
+    fault of the feed. Counting them would misreport the one number that says
+    whether copying is viable.
+    """
+    now = time.time()
+    state = _watcher.WatcherState()
+    state.fills = [
+        _fill(ts=int(now - 7200), observed_at=now, backfill=True),
+        _fill(ts=int(now - 20), observed_at=now, backfill=False),
+    ]
+    assert state.median_lag == pytest.approx(20, abs=2)
+    assert state.live_fills == 1
+
+
+def test_lag_median_is_zero_before_any_live_fill_arrives() -> None:
+    now = time.time()
+    state = _watcher.WatcherState()
+    state.fills = [_fill(ts=int(now - 9999), observed_at=now, backfill=True)]
+    assert state.median_lag == 0.0
+
+
+def test_fills_outside_the_followed_markets_are_kept_not_dropped() -> None:
+    """A target drifting into unmeasured markets has to be visible."""
+    state = _watcher.WatcherState()
+    state.fills = [_fill(followed=True), _fill(followed=False, slug="btc-updown-5m-1")]
+    assert len(state.fills) == 2
+    assert len(state.followed_fills) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_switched_off_watcher_does_not_call_the_api() -> None:
+    called = False
+
+    class _Client:
+        async def get(self, *a, **k):  # pragma: no cover - must not run
+            nonlocal called
+            called = True
+            raise AssertionError("polled while switched off")
+
+    import polymarket_bot.strategies as _strategies
+
+    original = _strategies.enabled
+
+    async def _off(_name: str) -> bool:
+        return False
+
+    _strategies.enabled = _off
+    _watcher._strategies.enabled = _off
+    try:
+        w = _watcher.CopyWatcher()
+        await w.poll_once(_Client())
+    finally:
+        _strategies.enabled = original
+        _watcher._strategies.enabled = original
+    assert called is False
+    assert w.state.polls == 0
+
+
+def test_the_panel_says_plainly_that_it_places_nothing() -> None:
+    state = _watcher.WatcherState(
+        target=_targets.DEFAULT_TARGET, label="kodeoed", enabled=True,
+        connected=True, last_poll=time.time(), polls=3,
+    )
+    state.fills = [_fill(observed_at=time.time())]
+    html = panel.render(state=state, target=_targets.get(_targets.DEFAULT_TARGET))
+    assert "places no orders" in html
+
+
+def test_the_panel_uses_no_browser_dialogs() -> None:
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="kodeoed")
+    html = panel.render(state=state, target=_targets.get(_targets.DEFAULT_TARGET))
+    for banned in ("confirm(", "alert(", "prompt("):
+        assert banned not in html
+
+
+def test_the_panel_renders_before_the_watcher_has_started() -> None:
+    assert "not started" in panel.render(state=None, target=None)

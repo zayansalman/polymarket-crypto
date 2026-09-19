@@ -152,6 +152,15 @@ async def _lifespan(app: FastAPI):
     macro_task = asyncio.create_task(macro.run(macro_stop_event))
     _macro_recorder.set_current(macro)
 
+    # Copy-trade watcher (#copytrade): follows one target wallet's fills on the
+    # daily macro Up/Down markets. Observation only — it places nothing — and
+    # like the daily scanner it runs for the process lifetime with its
+    # STRATEGIES switch as the only gate.
+    from polymarket_bot.copytrade.watcher import run_forever as _run_copy_watcher
+
+    copy_stop_event = asyncio.Event()
+    copy_task = asyncio.create_task(_run_copy_watcher(copy_stop_event))
+
     # Market-data hub: live Up/Down books and trades (CLOB market WS) and the
     # Chainlink / TWAP / Binance reference prices (RTDS WS) — observation data only.
     from polymarket_exec.marketdata import hub as _marketdata_hub
@@ -168,6 +177,9 @@ async def _lifespan(app: FastAPI):
     _flow_recorder.set_current(None)
     _macro_recorder.set_current(None)
     _marketdata_hub.set_current(None)
+    from polymarket_bot.copytrade import watcher as _copy_watcher
+
+    _copy_watcher.set_current(None)
     for stop_event, task in (
         (daily_stop_event, daily_task),
         (quote_stop_event, quote_task),
@@ -175,6 +187,7 @@ async def _lifespan(app: FastAPI):
         (flow_stop_event, flow_task),
         (macro_stop_event, macro_task),
         (marketdata_stop_event, marketdata_task),
+        (copy_stop_event, copy_task),
     ):
         stop_event.set()
         task.cancel()
