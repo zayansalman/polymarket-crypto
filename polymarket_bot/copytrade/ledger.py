@@ -229,6 +229,8 @@ async def summary() -> dict:
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END)     AS wins,
                       SUM(pnl)                                   AS pnl,
                       SUM(real_pnl)                              AS real_pnl,
+                      SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END)
+                                                                 AS never_filled,
                       SUM(cost_usd)                              AS staked,
                       SUM(real_cost_usd)                         AS real_staked,
                       AVG(real_slippage)                         AS real_slip,

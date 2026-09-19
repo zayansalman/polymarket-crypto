@@ -181,6 +181,38 @@ def _drift_html(drift: dict) -> str:
     )
 
 
+def _reach_html(reach: list) -> str:
+    """Per target: how often we could actually get in.
+
+    A wallet can have a real edge and still be unfollowable, because it enters
+    where a follower arriving seconds later finds no book. Offline research
+    cannot see this; only live polling can.
+    """
+    if not reach:
+        return ""
+    rows = ""
+    for r in reach[:12]:
+        seen = r.get("seen") or 0
+        copied = r.get("copied") or 0
+        if not seen:
+            continue
+        pct = 100 * copied / seen
+        cls = "copy-good" if pct >= 50 else ("copy-warn" if pct >= 20 else "copy-bad")
+        rows += (
+            "<div class='copy-result'>"
+            f"<span>{escape(str(r.get('target_label') or '-'))}</span>"
+            f"<span>{copied} of {seen} fills followed</span>"
+            f"<span class='{cls}'>{pct:.0f}%</span></div>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<div class='copy-results'>"
+        "<div class='copy-results-h'>REACHABILITY — fills we could actually "
+        "act on</div>" + rows + "</div>"
+    )
+
+
 def _results_html(summary: dict) -> str:
     """Settled paper P&L per target — the number the morning read-out is for."""
     if not summary:
@@ -193,16 +225,25 @@ def _results_html(summary: dict) -> str:
         wins = r.get("wins") or 0
         pnl = r.get("pnl") or 0.0
         staked = r.get("staked") or 0.0
-        slip = r.get("slip") or 0.0
         cls = "copy-good" if pnl > 0 else "copy-bad"
+        # The realistic figure decides whether a target is worth keeping; the
+        # paper one is only there to show how far off it is.
+        rpnl = r.get("real_pnl")
+        nf = r.get("never_filled") or 0
+        if rpnl is None:
+            real = "<span class='copy-muted'>real n/a</span>"
+        else:
+            rcls = "copy-good" if rpnl > 0 else "copy-bad"
+            real = f"<span class='{rcls}'><b>${rpnl:+,.2f}</b></span>"
         rows += (
             "<div class='copy-result'>"
             f"<span>{escape(str(r.get('target_label') or '-'))}</span>"
             f"<span>{rn} settled</span>"
             f"<span>{(100 * wins / rn) if rn else 0:.0f}% won</span>"
             f"<span>${staked:,.2f} staked</span>"
-            f"<span>slip {100 * slip:+.2f}c</span>"
-            f"<span class='{cls}'>${pnl:+,.2f}</span>"
+            + (f"<span class='copy-muted'>{nf} unfilled</span>" if nf else "")
+            + f"<span class='copy-muted'>paper ${pnl:+,.2f}</span>"
+            f"{real}"
             "</div>"
         )
     # Key the empty state off the settled COUNT, not off whether the per-target
@@ -252,7 +293,8 @@ def _results_html(summary: dict) -> str:
 
 def render(
     *, state, target: Target | None, summary: dict | None = None,
-    decisions: list | None = None, now: float | None = None,
+    decisions: list | None = None, reach: list | None = None,
+    now: float | None = None,
 ) -> str:
     now = time.time() if now is None else now
     if state is None:
@@ -316,6 +358,7 @@ def render(
         f"{_drift_html(getattr(state, 'drift', {}) or {})}"
         f"{_results_html(summary or {})}"
         f"{_execution_html(summary or {})}"
+        f"{_reach_html(reach or [])}"
         f"{_decisions_html(decisions or [])}"
         "<div class='gr-toggle-hint' style='margin:8px 0'>"
         "PAPER — copies are priced against the live ask ladder and charged the taker fee, but no real order is ever sent."

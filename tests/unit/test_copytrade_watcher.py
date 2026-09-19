@@ -346,3 +346,32 @@ def test_results_show_the_realistic_pnl_beside_the_paper_one() -> None:
     assert "same trades, realistic fills" in html
     assert "3 never filled" in html
     assert "$-5.10" in html and "$-2.82" in html
+
+
+def test_each_target_is_judged_on_its_realistic_pnl() -> None:
+    """Which of the forty to keep is a question the paper number cannot answer."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {
+        "total": {"n": 4, "wins": 2, "pnl": 5.0, "real_pnl": 1.0,
+                  "staked": 40.0, "never_filled": 1},
+        "per_target": [
+            {"target_label": "t-aaaa", "n": 3, "wins": 2, "pnl": 6.0,
+             "real_pnl": -1.5, "staked": 30.0, "never_filled": 1, "slip": 0.01},
+        ],
+        "open": {"n": 0, "staked": 0}, "execution": {},
+    }
+    html = panel.render(state=state, target=None, summary=summary)
+    # paper says +6.00, reality says -1.50 — both must be visible
+    assert "paper $+6.00" in html
+    assert "$-1.50" in html
+    assert "1 unfilled" in html
+
+
+def test_reachability_is_reported_per_target() -> None:
+    """A wallet can have a real edge and still be impossible to follow."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    reach = [{"target_label": "t-aaaa", "seen": 20, "copied": 2,
+              "too_late": 15, "lag": 14.0}]
+    html = panel.render(state=state, target=None, reach=reach)
+    assert "REACHABILITY" in html
+    assert "2 of 20 fills followed" in html
