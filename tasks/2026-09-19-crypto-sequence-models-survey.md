@@ -3,7 +3,7 @@
 Parked. **Desk research only — no code, no data, no backtest, nothing measured here.**
 Every number below is copied from a model card or a paper, not reproduced.
 
-Backlog issue: #257
+Backlog issue: #258
 
 ## What prompted this
 
