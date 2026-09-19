@@ -159,6 +159,52 @@ async def test_build_market_view_uses_end_minus_24h_not_start_date():
 
 
 @pytest.mark.asyncio
+async def test_build_market_view_reference_is_noon_et_on_fall_back_day():
+    """DST fall-back: 2026-11-01's market compares noon EDT on Oct 31
+    (16:00Z) with noon EST on Nov 1 (17:00Z) — 25h apart, so a flat
+    ``endDate - 86400`` reads 13:00 EDT, a full hour late."""
+    market = _gamma_market(
+        slug="ethereum-up-or-down-on-november-1-2026",
+        start_date="2026-10-30T16:00:00Z",
+        end_date="2026-11-01T17:00:00Z",
+    )
+    binance = _FakeBinanceClient(
+        spot=3100.0, closes=[3000.0] * 30, reference_close=3050.0
+    )
+    view = await build_market_view(binance, "eth", market)
+    assert view is not None
+
+    reference_call = next(c for c in binance.kline_calls if c.get("interval") == "1m")
+    expected_ref_ts = int(
+        datetime.fromisoformat("2026-10-31T16:00:00+00:00").timestamp()
+    )
+    assert reference_call["startTime"] == expected_ref_ts * 1000
+
+
+@pytest.mark.asyncio
+async def test_build_market_view_reference_is_noon_et_on_spring_forward_day():
+    """DST spring-forward: 2027-03-14's market compares noon EST on Mar 13
+    (17:00Z) with noon EDT on Mar 14 (16:00Z) — 23h apart, so a flat
+    ``endDate - 86400`` reads 11:00 EST, a full hour early."""
+    market = _gamma_market(
+        slug="ethereum-up-or-down-on-march-14-2027",
+        start_date="2027-03-12T17:00:00Z",
+        end_date="2027-03-14T16:00:00Z",
+    )
+    binance = _FakeBinanceClient(
+        spot=3100.0, closes=[3000.0] * 30, reference_close=3050.0
+    )
+    view = await build_market_view(binance, "eth", market)
+    assert view is not None
+
+    reference_call = next(c for c in binance.kline_calls if c.get("interval") == "1m")
+    expected_ref_ts = int(
+        datetime.fromisoformat("2027-03-13T17:00:00+00:00").timestamp()
+    )
+    assert reference_call["startTime"] == expected_ref_ts * 1000
+
+
+@pytest.mark.asyncio
 async def test_build_market_view_populates_asset_and_tokens():
     slug = "dogecoin-up-or-down-on-august-30-2026"
     market = _gamma_market(

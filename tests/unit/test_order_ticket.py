@@ -51,6 +51,30 @@ class TestWindowSlug:
             uq.window_slug("btc", "4d", _NOW)
 
 
+class TestDailyReferenceInstant:
+    """The noon-ET close a daily Up/Down market compares against: noon ET on
+    the calendar day BEFORE it resolves. That is 24h before resolution on a
+    normal day, but 23h or 25h across a DST switch."""
+
+    def test_normal_day_is_24h_before_resolution(self) -> None:
+        resolves = datetime(2026, 1, 15, 17, 0, tzinfo=UTC)  # noon EST
+        assert uq.daily_reference_instant(resolves) == datetime(
+            2026, 1, 14, 17, 0, tzinfo=UTC
+        )
+
+    def test_fall_back_day_is_25h_before_resolution(self) -> None:
+        resolves = datetime(2026, 11, 1, 17, 0, tzinfo=UTC)  # noon EST
+        assert uq.daily_reference_instant(resolves) == datetime(
+            2026, 10, 31, 16, 0, tzinfo=UTC  # noon EDT
+        )
+
+    def test_spring_forward_day_is_23h_before_resolution(self) -> None:
+        resolves = datetime(2027, 3, 14, 16, 0, tzinfo=UTC)  # noon EDT
+        assert uq.daily_reference_instant(resolves) == datetime(
+            2027, 3, 13, 17, 0, tzinfo=UTC  # noon EST
+        )
+
+
 def _transport(*, gamma_rows: list | None = None, books_status: int = 200) -> httpx.MockTransport:
     calls = {"gamma": 0, "books": 0}
 

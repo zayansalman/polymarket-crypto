@@ -82,6 +82,29 @@ def window_slug(asset: str, timeframe: str, now: datetime) -> str:
     raise ValueError(f"unknown timeframe {timeframe!r}")
 
 
+def daily_reference_instant(resolves_at: datetime) -> datetime:
+    """The noon-ET close a ``1d`` market compares its settlement close against.
+
+    A daily Up/Down market asks whether the noon-ET close on its resolution
+    date beat the noon-ET close on the calendar day before. Both legs are
+    noon *wall-clock* ET, so the gap is 24h only on a normal day: it is 25h
+    across the November fall-back and 23h across the March spring-forward.
+    Subtracting a flat 86400s therefore reads the wrong minute on exactly
+    those two days a year (verified on Gamma against
+    ``ethereum-up-or-down-on-november-2`` and ``-on-march-8``).
+
+    ``resolves_at`` is the market's ``endDate`` (tz-aware); only its ET
+    calendar date is used, so an endDate that is not exactly noon still
+    lands on the right reference day.
+    """
+    resolution_noon = resolves_at.astimezone(_ET).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
+    # Wall-clock arithmetic on an aware datetime: the previous calendar day's
+    # noon keeps 12:00 ET and picks up that day's own UTC offset.
+    return resolution_noon - timedelta(days=1)
+
+
 def _date_part(et: datetime) -> str:
     return f"{et.strftime('%B').lower()}-{et.day}-{et.year}"
 
