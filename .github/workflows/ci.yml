@@ -10,6 +10,15 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+# Adding develop roughly doubles CI volume, so stop paying for runs nobody
+# will read: a new push to the same ref cancels the one it supersedes. This
+# also covers the one case where develop is in both lists at once — while a
+# develop -> main release PR is open, a push to develop would otherwise fire
+# the push run and the PR's synchronize run on identical content.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
