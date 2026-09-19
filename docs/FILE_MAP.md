@@ -8,8 +8,8 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 |---|---|---|---|
 | `config.py` | WIRED | 30 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 15 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 13 | Structured JSON logging with structlog. Module + trade_id context. |
+| `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
+| `logging_setup.py` | WIRED | 14 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -46,11 +46,12 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/backtest/conditional.py` | DEAD? | 0 | Conditional backtest — evaluates strategy on historical user trades. |
 | `polymarket_exec/backtest/harness.py` | DEAD? | 0 | Full-market backtest harness. |
 | `polymarket_exec/backtest/metrics.py` | WIRED | 1 | Backtest metrics, friction models, and reporting data classes. |
-| `polymarket_exec/connectors/__init__.py` | pkg | 1 | Exchange and data connectors. |
+| `polymarket_exec/connectors/__init__.py` | pkg | 2 | Exchange and data connectors. |
 | `polymarket_exec/connectors/base.py` | DEAD? | 0 | Re-export abstract base classes and exceptions for connector authors. |
 | `polymarket_exec/connectors/binance.py` | DEAD? | 0 | Binance connector — BTC spot price and recent close history. |
 | `polymarket_exec/connectors/chainlink.py` | DEAD? | 0 | Chainlink Data Streams connector stub. |
 | `polymarket_exec/connectors/chainlink_settlement.py` | WIRED | 2 | Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21). |
+| `polymarket_exec/connectors/macro_calendar.py` | WIRED | 2 | Pure parsers for US macro release calendars: BLS/BEA ICS, Census and Fed calendars, ForexFactory. |
 | `polymarket_exec/connectors/polymarket.py` | DEAD? | 0 | Polymarket connector — discovers the current BTC 5-minute binary market window. |
 | `polymarket_exec/connectors/registry.py` | WIRED | 1 | Connector registry — manages the lifecycle and discovery of all connectors. |
 | `polymarket_exec/connectors/updown_quote.py` | WIRED | 2 | Live top-of-book quote for the current window of any crypto Up/Down market. |
@@ -90,8 +91,10 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/feed_monitor.py` | WIRED | 3 | Always-on feed monitor: keeps the live feeds connected and checks each one. |
 | `polymarket_exec/ops/flow_recorder.py` | WIRED | 3 | Always-on recorder for venue trade-flow feeds: Binance spot/perp/liquidations and Kraken. |
 | `polymarket_exec/ops/incidents.py` | WIRED | 1 | Incident state machine and operator runbooks for the BTC 5m pricing-model system. |
+| `polymarket_exec/ops/macro_recorder.py` | WIRED | 3 | Always-on recorder for macro feeds: each source polled on its own cadence into SQLite. |
 | `polymarket_exec/ops/telemetry.py` | WIRED | 1 | Feed health telemetry and latency tracking for the BTC 5m pricing-model system. |
-| `polymarket_exec/storage/__init__.py` | pkg | 1 | Persistence layer — database, recording, and replay. |
+| `polymarket_exec/storage/__init__.py` | pkg | 2 | Persistence layer — database, recording, and replay. |
+| `polymarket_exec/storage/macro_store.py` | WIRED | 1 | SQLite read/write for the macro calendar: scheduled events and first-seen consensus values. |
 | `polymarket_exec/storage/recorder.py` | WIRED | 2 | Market data recorder — persists raw market snapshots to SQLite for deterministic replay. |
 | `polymarket_exec/storage/replay.py` | DEAD? | 0 | Deterministic replay — feed recorded market data through a signal generator. |
 | `polymarket_exec/storage/venue_flow_store.py` | WIRED | 1 | SQLite read/write for venue flow hour bars and perp venue snapshots. |

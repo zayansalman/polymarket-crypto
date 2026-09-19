@@ -1,11 +1,13 @@
 """FEEDS card: one row per live upstream feed — what it feeds, source, delay, status.
 
 Rows come from the always-on feed monitor (``polymarket_exec/ops/feed_monitor.py``),
-which checks every feed directly — so the card is live whether or not the bot
-loop is running. Rows are plain data (``FeedRow``) so new venues are one more row.
+the venue flow recorder and the macro recorder, which check every feed directly — so
+the card is live whether or not the bot loop is running. Rows are plain data
+(``FeedRow``) so new venues are one more row.
 
-Delay is the age of the latest print for the Chainlink WS stream, and the
-round-trip time of the latest check for each REST feed.
+Delay is the age of the latest print for the Chainlink WS stream, the round-trip
+time of the latest check for each monitored REST feed, and the age of the last
+successful pull for recorder feeds.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from html import escape
 import config as _config
 from polymarket_exec.ops import feed_monitor as fm
 from polymarket_exec.ops import flow_recorder as fr
+from polymarket_exec.ops import macro_recorder as mr
 
 # A REST round trip slower than this is flagged (status stays OK).
 SLOW_MS = 2000.0
@@ -52,10 +55,23 @@ _FLOW_FEEDS = (
     (fr.KRAKEN_FUTURES, "Kraken PF_XBTUSD", "hourly flow", "WS v1 trades", True),
     (fr.KRAKEN_FUTURES_STATE, "Kraken PF_XBTUSD", "funding · OI", "tickers REST", False),
 )
+
+# (macro source key, name, used for, source) — macro calendar rows, in card order.
+_MACRO_FEEDS = (
+    (mr.BLS_SCHEDULE, "BLS schedule", "CPI · jobs · PPI times", "bls.gov ICS"),
+    (mr.BEA_SCHEDULE, "BEA schedule", "GDP · PCE times", "bea.gov ICS"),
+    (mr.CENSUS_SCHEDULE, "Census schedule", "retail sales times", "census.gov calendar"),
+    (mr.FED_CALENDAR, "Fed calendar", "FOMC · speeches", "federalreserve.gov JSON"),
+    (mr.FF_WEEK, "ForexFactory week", "forecasts · claims", "faireconomy JSON"),
+)
+
 # A connected trade socket with no frame for this long is flagged (or QUIET if normal).
 WS_STALE_S = 120.0
 # A socket that has not connected yet this soon after start is "connecting", not down.
 WS_CONNECT_GRACE_S = 30.0
+# A rate-limited macro source is retried on the recorder's first tick after its wait ends,
+# behind any sources ahead of it in that pass: its row stays WAIT for a tick plus this.
+MACRO_WAIT_GRACE_S = 30.0
 
 
 def _secs(v: float) -> str:
@@ -68,6 +84,18 @@ def _secs(v: float) -> str:
 
 def _ms(v: float) -> str:
     return f"{v:.0f}ms" if v < 1000 else _secs(v / 1000)
+
+
+def _age(v: float) -> str:
+    """Long ages, coarse: '42s', '17m', '5h03m', '2d04h'."""
+    s = max(0, int(v))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86_400:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m"
+    return f"{s // 86_400}d{s % 86_400 // 3600:02d}h"
 
 
 def _ws_row(snap: fm.FeedsSnapshot) -> FeedRow:
@@ -136,8 +164,37 @@ def _flow_row(
     return FeedRow(name, role, source, delay, "OK", "on")
 
 
+def _macro_row(macro: mr.MacroSnapshot, key: str, name: str, role: str, source: str) -> FeedRow:
+    st = macro.feeds.get(key)
+    if st is None or st.last_attempt_at is None:
+        return FeedRow(name, role, source, "—", "CHECKING", "idle")
+    age = macro.taken_at - st.last_ok_at if st.last_ok_at is not None else None
+    delay = _age(age) if age is not None else "—"
+    stale_after = 2 * st.cadence_s + macro.tick_s
+    if not st.ok:
+        waiting = (
+            st.retry_after
+            and st.next_attempt_at is not None
+            and macro.taken_at < st.next_attempt_at + macro.tick_s + MACRO_WAIT_GRACE_S
+        )
+        if not waiting:
+            return FeedRow(name, role, source, delay, "DOWN", "down", False, st.detail)
+        # A rate limit that never lifts is an outage: no data for too long (or, never had
+        # any, the recorder running that long) is STALE, not a quiet WAIT.
+        no_data_for = age if age is not None else macro.taken_at - macro.started_at
+        if no_data_for > stale_after:
+            return FeedRow(name, role, source, delay, "STALE", "warn", True, st.detail)
+        return FeedRow(name, role, source, delay, "WAIT", "idle", False, st.detail)
+    if age is not None and age > stale_after:
+        return FeedRow(name, role, source, delay, "STALE", "warn", True,
+                       f"last success {delay} ago")
+    return FeedRow(name, role, source, delay, "OK", "on")
+
+
 def build_rows(
-    snap: fm.FeedsSnapshot | None, flow: fr.FlowSnapshot | None = None
+    snap: fm.FeedsSnapshot | None,
+    flow: fr.FlowSnapshot | None = None,
+    macro: mr.MacroSnapshot | None = None,
 ) -> list[FeedRow]:
     if snap is None:
         # Feed monitor not running (only outside the dashboard app).
@@ -149,11 +206,17 @@ def build_rows(
         rows = [_ws_row(snap)] + [_rest_row(snap, *feed) for feed in _REST_FEEDS]
     if flow is not None:
         rows += [_flow_row(flow, *feed) for feed in _FLOW_FEEDS]
+    if macro is not None:
+        rows += [_macro_row(macro, *feed) for feed in _MACRO_FEEDS]
     return rows
 
 
-def render(snap: fm.FeedsSnapshot | None, flow: fr.FlowSnapshot | None = None) -> str:
-    rows = build_rows(snap, flow)
+def render(
+    snap: fm.FeedsSnapshot | None,
+    flow: fr.FlowSnapshot | None = None,
+    macro: mr.MacroSnapshot | None = None,
+) -> str:
+    rows = build_rows(snap, flow, macro)
     issues = sum(r.level in ("warn", "down") for r in rows)
     note = "all OK" if not issues else f"{issues} issue{'s' if issues != 1 else ''}"
     body = "".join(

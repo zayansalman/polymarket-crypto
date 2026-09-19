@@ -20,6 +20,8 @@ dependencies = [
     "uvicorn>=0.29",
     "py-clob-client-v2>=1.0",
     "websockets>=12",
+    # IANA zones for zoneinfo (US Eastern release times); slim images lack system tzdata.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

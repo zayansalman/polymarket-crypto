@@ -102,6 +102,20 @@ def _no_flow_recorder_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FlowRecorder, "run", _idle_run)
 
 
+@pytest.fixture(autouse=True)
+def _no_macro_recorder_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dashboard tests boot the app lifespan; keep the macro calendar recorder offline.
+
+    The recorder's sources are unit-tested with fakes in test_macro_recorder.py.
+    """
+    from polymarket_exec.ops.macro_recorder import MacroRecorder
+
+    async def _idle_run(self, stop_event):  # noqa: ANN001
+        await stop_event.wait()
+
+    monkeypatch.setattr(MacroRecorder, "run", _idle_run)
+
+
 # ---------------------------------------------------------------------------
 # Strategy parameter fixtures
 # ---------------------------------------------------------------------------
