@@ -124,7 +124,8 @@ async def test_daily_scanner_on_still_scans(monkeypatch: pytest.MonkeyPatch) -> 
 
     await scanner.scan_once(None)
 
-    assert calls == ["scan", "settle"]
+    # Settlement first, then entries (#245) — the switch gates only the latter.
+    assert calls == ["settle", "scan"]
 
 
 def _snapshot():

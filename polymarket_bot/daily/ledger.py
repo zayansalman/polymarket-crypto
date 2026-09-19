@@ -1,13 +1,10 @@
-"""Persistence for the daily altcoin scanner's shadow positions.
+"""Persistence for the daily altcoin scanner's paper positions.
 
-Mirrors :mod:`polymarket_bot.shadow.ledger` (same ``INSERT OR IGNORE`` +
-settle-by-outcome shape, same after-fee PnL via
-:mod:`polymarket_bot.fees`), but keyed on ``window_slug`` alone: this
-market family's slug is already asset+day-specific (e.g.
-``solana-up-or-down-on-august-30-2026``), so — unlike the 5m shadow ledger,
-which needs ``(window_slug, model_id)`` because several competing models
-share one window — a single scan decision per window is naturally
-idempotent on the slug by itself.
+``INSERT OR IGNORE`` + settle-by-outcome, with after-fee PnL via
+:mod:`polymarket_bot.fees`, keyed on ``window_slug`` alone: this market
+family's slug is already asset+day-specific (e.g.
+``solana-up-or-down-on-august-30-2026``), so a single scan decision per
+window is naturally idempotent on the slug by itself.
 """
 from __future__ import annotations
 

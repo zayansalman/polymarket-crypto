@@ -82,11 +82,40 @@ async def _shares_for(sig: DailySignal, view: DailyMarketView) -> float:
 
 
 async def scan_once(client: httpx.AsyncClient) -> None:
-    # Operator switch (STRATEGIES card): off stops NEW entries only — the
-    # settlement pass below still runs, so an open window is never stranded.
-    if not await _strategies.enabled("daily_altcoin"):
+    """One tick: settle whatever is due, then look for a new entry.
+
+    The two halves are INDEPENDENT and neither may swallow the other.
+    Settlement runs first and unconditionally because it needs nothing from
+    discovery — it settles off the ``reference_price``/``resolves_at``/
+    ``binance_symbol`` stamped on each open row (see :func:`_settle_due`).
+    This used to sit behind an early ``return`` on empty discovery, so any
+    tick that found no markets also skipped settlement: a live run left an
+    already-resolved doge window ``state='open'`` for over a day that way,
+    through a stretch where the UTC-date slug lookup fixed in #239 returned
+    nothing from noon ET to UTC midnight. A Gamma outage would do the same.
+
+    Each half logs its own failure rather than aborting the other, per
+    AGENTS.md's no-silent-failures rule.
+    """
+    try:
         await _settle_due(client)
+    except Exception:  # noqa: BLE001 — a stuck settlement must not stop entries
+        log.exception("daily_scan.settle_failed")
+    try:
+        await _enter_best(client)
+    except Exception:  # noqa: BLE001 — a broken entry pass must not strand settlements
+        log.exception("daily_scan.entry_pass_failed")
+
+
+async def _enter_best(client: httpx.AsyncClient) -> None:
+    """Score every tracked asset and open at most one position this tick."""
+    # Operator switch (STRATEGIES card): off stops NEW entries only. It
+    # deliberately gates this half alone — _settle_due above runs whatever
+    # the switch says, so turning the scanner off can never strand an open
+    # window (the #245 failure, reached by a different route).
+    if not await _strategies.enabled("daily_altcoin"):
         return
+
     markets = await _market.discover_daily_markets(client)
     if not markets:
         log.warning("daily_scan.no_markets_found")
@@ -132,8 +161,6 @@ async def scan_once(client: httpx.AsyncClient) -> None:
                 entry_price=best.entry_price,
             )
 
-    await _settle_due(client)
-
 
 async def _settle_due(client: httpx.AsyncClient) -> None:
     """Settle any open window whose resolution instant has passed.
@@ -150,29 +177,51 @@ async def _settle_due(client: httpx.AsyncClient) -> None:
     """
     now = int(datetime.now(UTC).timestamp())
     for row in await _ledger.open_settlement_candidates():
-        end = _epoch_or_none(row["resolves_at"])
-        if end is None or now < end:
-            continue
-        settlement_price = await _market.fetch_close_at(client, row["binance_symbol"], end)
-        if settlement_price is None:
-            continue
-        reference = row["reference_price"]
-        if settlement_price == reference:
-            outcome_side = None  # exact tie -> resolves 50-50, see ledger.settle
-        else:
-            outcome_side = "Up" if settlement_price > reference else "Down"
-        n = await _ledger.settle(
+        # Per row, mirroring the entry half's per-asset isolation: one row
+        # whose price lookup misbehaves must not abort settlement for every
+        # other due window, on every tick, forever.
+        try:
+            await _settle_row(client, row, now)
+        except Exception:  # noqa: BLE001 — one poison row must not strand the rest
+            log.exception("daily_scan.settle_row_failed", window_slug=row["window_slug"])
+
+
+async def _settle_row(client: httpx.AsyncClient, row: dict, now: int) -> None:
+    """Settle one open row, if its resolution instant has passed."""
+    end = _epoch_or_none(row["resolves_at"])
+    if end is None:
+        log.warning("daily_scan.settle_bad_resolves_at", window_slug=row["window_slug"])
+        return
+    if now < end:
+        return  # still trading: not a failure, and the common case
+    settlement_price = await _market.fetch_close_at(client, row["binance_symbol"], end)
+    if settlement_price is None:
+        # fetch_close_at turns every HTTP error into None, so without this
+        # the row strands exactly like the bug scan_once fixes, but silently
+        # (AGENTS.md: no silent failures).
+        log.warning(
+            "daily_scan.settle_price_unavailable",
             window_slug=row["window_slug"],
-            outcome_side=outcome_side,
-            settlement_price=settlement_price,
-            resolved_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            symbol=row["binance_symbol"],
         )
-        if n:
-            log.info(
-                "daily_scan.settled",
-                window_slug=row["window_slug"],
-                outcome=outcome_side or "tie",
-            )
+        return
+    reference = row["reference_price"]
+    if settlement_price == reference:
+        outcome_side = None  # exact tie -> resolves 50-50, see ledger.settle
+    else:
+        outcome_side = "Up" if settlement_price > reference else "Down"
+    n = await _ledger.settle(
+        window_slug=row["window_slug"],
+        outcome_side=outcome_side,
+        settlement_price=settlement_price,
+        resolved_at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
+    if n:
+        log.info(
+            "daily_scan.settled",
+            window_slug=row["window_slug"],
+            outcome=outcome_side or "tie",
+        )
 
 
 def _epoch_or_none(value: str | None) -> int | None:
@@ -188,8 +237,17 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
     """Run the scan loop until ``stop_event`` is set (or forever if ``None``)."""
     async with httpx.AsyncClient(timeout=15.0) as client:
         while stop_event is None or not stop_event.is_set():
+            # Backstop: both halves of scan_once catch their own failures, so
+            # this fires only for a step added later without its own handler.
+            # The interval read is INSIDE it on purpose — it is a SQLite read
+            # that can raise, and it is the one statement whose failure would
+            # end the loop for the process's lifetime. Nothing supervises this
+            # task (app.py starts it with a bare create_task), so an escape
+            # here stops the scanner with nothing in the logs.
             try:
                 await scan_once(client)
+                interval = await _knobs.get("daily_scan_interval_seconds")
             except Exception:  # noqa: BLE001
                 log.exception("daily_scan.tick_failed")
-            await asyncio.sleep(await _knobs.get("daily_scan_interval_seconds"))
+                interval = _config.DAILY_SCAN_INTERVAL_SECONDS
+            await asyncio.sleep(interval)
