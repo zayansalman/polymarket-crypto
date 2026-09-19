@@ -45,7 +45,7 @@ class _FakeWs:
 
 def _market() -> dict:
     return {
-        "slug": f"btc-updown-5m-{NOW}",
+        "slug": f"btc-updown-1h-{NOW}",
         "outcomes": json.dumps(["Up", "Down"]),
         "outcomePrices": json.dumps(["0.5", "0.5"]),
         "clobTokenIds": json.dumps(["111", "222"]),

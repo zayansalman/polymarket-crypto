@@ -1,1 +1,1 @@
-"""BTC 5m Binary Pricing Model trading system."""
+"""Polymarket crypto binary-markets trading system."""

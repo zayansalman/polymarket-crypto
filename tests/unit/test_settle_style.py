@@ -28,7 +28,7 @@ async def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _snapshot(**overrides) -> paper.PaperSnapshot:
     base = dict(
         created_at="2026-06-11T06:00:00+00:00",
-        window_slug="btc-updown-5m-1781160000",
+        window_slug="btc-updown-1h-1781160000",
         market_question="q",
         remaining_seconds=200,
         spot_price=62000.0,
@@ -62,7 +62,7 @@ _POS = {
     "entry_price": 0.50,
     "shares": 6.0,
     "notional_usd": 3.0,
-    "window_slug": "btc-updown-5m-1781160000",
+    "window_slug": "btc-updown-1h-1781160000",
     "realized_pnl_usd": None,
 }
 
@@ -106,7 +106,7 @@ async def test_one_entry_per_window(test_db, monkeypatch: pytest.MonkeyPatch):
         async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 1
     # A new window is a fresh signal.
-    await paper._maybe_open_position(_snapshot(window_slug="btc-updown-5m-1781160300"))
+    await paper._maybe_open_position(_snapshot(window_slug="btc-updown-1h-1781163600"))
     async with paper.connect() as db:
         async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 2
@@ -146,7 +146,7 @@ def _settled_executor(tmp_path: Path) -> LiveExecutor:
 @pytest.mark.asyncio
 async def test_record_settlement_win(test_db, tmp_path: Path):
     ex = _settled_executor(tmp_path)
-    result = await ex.record_settlement(True, "btc-updown-5m-1781160000")
+    result = await ex.record_settlement(True, "btc-updown-1h-1781160000")
     assert result.ok and result.status == "SETTLED"
     assert ex.daily_realized_pnl == pytest.approx(3.0)  # 6 * (1.0 - 0.5)
     assert ex._position_open is False
@@ -161,7 +161,7 @@ async def test_record_settlement_win(test_db, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_record_settlement_loss_feeds_daily_halt(test_db, tmp_path: Path):
     ex = _settled_executor(tmp_path)
-    result = await ex.record_settlement(False, "btc-updown-5m-1781160000")
+    result = await ex.record_settlement(False, "btc-updown-1h-1781160000")
     assert result.ok and result.status == "SETTLED"
     assert ex.daily_realized_pnl == pytest.approx(-3.0)  # 6 * (0.0 - 0.5)
 
@@ -352,7 +352,8 @@ def _stub_market_inputs(monkeypatch: pytest.MonkeyPatch, *, spot: float | None) 
     now = paper._now()
     market = {
         "window_start_ts": now - 120,
-        "slug": f"btc-updown-5m-{now - 120}",
+        "window_seconds": 3600,
+        "slug": f"btc-updown-1h-{now - 120}",
         "question": "BTC up?",
         "outcomePrices": "[\"0.40\", \"0.60\"]",
         "clobTokenIds": "[\"up-token\", \"down-token\"]",
@@ -375,23 +376,20 @@ def _stub_market_inputs(monkeypatch: pytest.MonkeyPatch, *, spot: float | None) 
 
 @pytest.mark.asyncio
 async def test_no_strategy_loaded_never_signals_an_entry(test_db, monkeypatch):
-    from polymarket_bot.strategy import signal_from_executable_edges
-
     _stub_market_inputs(monkeypatch, spot=60_004.5)
 
     snap = await paper._build_snapshot(MagicMock())
 
-    # The archived v0 gates would have entered Up on exactly this tick.
-    old_side, _, old_notional, _ = signal_from_executable_edges(
-        edge_up=snap.fair_up_prob - 0.55,
-        edge_down=(1 - snap.fair_up_prob) - 0.46,
-        remaining_seconds=snap.remaining_seconds,
-        up_ask=0.55,
-        down_ask=0.46,
-        params=paper._strategy_params(),
-    )
-    assert old_side == "Up" and old_notional > 0
-    # The loop, with no strategy loaded, does not.
+    # Guard against a vacuous pass: this is a healthy tick with a real edge on
+    # the Down side (fair Down ~0.475 against a 0.46 ask), so the "no entry"
+    # below is the no-strategy rule and not a degraded-feed bail-out. This
+    # used to run the archived v0 gates as its control; v0 was tuned on the
+    # deleted 5-minute family and its verdict means nothing at other window
+    # lengths, so the edge is asserted directly instead.
+    assert snap.fair_up_prob is not None
+    assert (1 - snap.fair_up_prob) - 0.46 > 0.01
+    assert snap.remaining_seconds > 0
+    # The loop, with no strategy loaded, does not enter.
     assert snap.signal_side is None
     assert snap.notional_usd == 0.0
     assert snap.reason == paper.NO_STRATEGY_REASON

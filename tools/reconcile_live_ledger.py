@@ -32,6 +32,7 @@ import argparse
 import collections
 import csv
 import json
+import re
 import sqlite3
 import sys
 import urllib.request
@@ -55,6 +56,9 @@ _UA = {"User-Agent": "Mozilla/5.0"}
 # ---------------------------------------------------------------------------
 # Ground-truth loaders (read-only)
 # ---------------------------------------------------------------------------
+
+
+_BTC_UPDOWN_SLUG = re.compile(r"^btc-updown-\d+[smhd]-\d+$")
 
 
 def _fetch_positions(addr: str) -> list[dict]:
@@ -133,14 +137,16 @@ def lifetime_pnls(addr_activity: list[dict]) -> tuple[float, float]:
         )
 
     # Isolate the bot's BTC trades by the structural slug prefix, not the title
-    # substring (#113). The bot only ever trades ``btc-updown-5m-{ts}`` markets
-    # (the hardcoded discovery contract), so the slug is the robust discriminator
-    # — immune to null/renamed titles and to non-bot markets that merely mention
-    # Bitcoin. Verified on real data: 648/648 BTC rows match, 0 false positives.
+    # substring (#113). The bot only ever trades ``btc-updown-{tf}-{ts}``
+    # markets, so the slug is the robust discriminator — immune to
+    # null/renamed titles and to non-bot markets that merely mention Bitcoin.
+    # Verified on real data: 648/648 BTC rows match, 0 false positives.
+    # The timeframe is matched generically (2026-09-19) so historical ``-5m-``
+    # rows still reconcile after that family's removal.
     btc = [
         r
         for r in addr_activity
-        if (r.get("eventSlug") or r.get("slug") or "").startswith("btc-updown-5m-")
+        if _BTC_UPDOWN_SLUG.match(r.get("eventSlug") or r.get("slug") or "")
     ]
     return round(flow(btc), 4), round(flow(addr_activity), 4)
 

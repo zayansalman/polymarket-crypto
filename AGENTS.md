@@ -24,18 +24,17 @@
 ## Active Scope
 
 This repository is a local Polymarket crypto binary-markets research and
-paper-trading lab. Two strategies are wired and run simultaneously:
+paper-trading lab.
 
-1. **BTC 5-minute Up/Down** (`polymarket_bot/paper.py:run_paper_loop`) — the
-   original line; its active *development* closed 2026-08-29 (#182), but the
-   loop itself is still the default paper-trading path, started/stopped by
-   the dashboard's ▶ Start / Stop controls (see below). **No strategy is
-   loaded:** the v0 strategy (entry gates, auto-pause, param tuner,
-   calibration, model picker) was archived 2026-09-13 —
-   [docs/archive/v0-strategy.md](docs/archive/v0-strategy.md). The loop runs
-   and journals market data but takes no entries until a new strategy is
-   plugged into `paper.py:_build_snapshot`.
-2. **Daily altcoin Up/Down scanner** (`polymarket_bot/daily/scanner.py`,
+> **The 5-minute family is GONE (2026-09-19).** It is not the project, not the
+> default, and not a starting point for new work. Its discovery, the `5m`
+> timeframe option, and the 5m pair-quoting shadow strategy were deleted.
+> Mentions that survive in `CHANGELOG.md`, `tasks/` and `docs/archive/` are
+> deliberate history — do not treat them as current scope.
+
+One strategy is wired and running:
+
+1. **Daily altcoin Up/Down scanner** (`polymarket_bot/daily/scanner.py`,
    issue #185) — scans Polymarket's daily (24h-window) Up/Down family across
    a tracked set of thinner altcoin markets (doge/sol/xrp/bnb/eth by
    default, `config.DAILY_ASSETS`) and shadow-trades a flat $10 paper
@@ -47,14 +46,20 @@ paper-trading lab. Two strategies are wired and run simultaneously:
    (`panels/daily_altcoin.py`) shows current position(s), settled PnL, and a
    plain-language explanation of the mechanism.
 
-The primary active product behavior for the BTC loop specifically is:
+The loop (`polymarket_bot/paper.py:run_paper_loop`) survives as a **chassis
+with no market and no strategy**: feed, CLOB book quoting, risk gate, execution
+and journaling are all market-agnostic and intact, but
+`paper.py:_fetch_current_market` raises `NO_MARKET_FAMILY_REASON` until a
+replacement family's discovery is built, and `market_selection.LOOP_SUPPORTED`
+is empty so every selection is flagged "not wired". Pressing ▶ Start today
+surfaces that error rather than trading. Wiring a new line means:
 
-1. Operator opens the local dashboard.
-2. Operator presses **▶ Start**.
-3. The loop runs on BTC 5-minute Up/Down markets (paper by default) and
-   enters only once a strategy is loaded (none is today).
-4. Operator presses **Stop** to halt new entries and close open simulated
-   positions.
+1. Build discovery in `paper.py:_fetch_current_market` — return the Gamma market
+   dict with `window_start_ts` and `window_seconds` set on it.
+2. Add the combo to `market_selection.LOOP_SUPPORTED`.
+3. Plug the entry decision into `paper.py:_build_snapshot`
+   (the `NO_STRATEGY_REASON` block; v0 was archived 2026-09-13 —
+   [docs/archive/v0-strategy.md](docs/archive/v0-strategy.md)).
 
 Live trading is also built and multi-gated (see the live rule below); it stays
 off unless the operator explicitly arms every gate **and** this file names an
@@ -66,15 +71,13 @@ all, so there is nothing to arm for it.
 
 In scope:
 
-- Discover current BTC 5-minute Up/Down Polymarket markets.
+- Choosing and building the next market family for the loop. No family is
+  wired today.
 - **Research/shadow-only exploration is open by default** — any market, any
   timeframe, any venue instrument may be investigated, backtested, or shadow-run
   as long as it places no real orders. No fresh operator carve-out is needed to
   start a new research direction; the market/timeframe restriction below binds
-  the **live trading path** only. Example: two-sided maker quoting across the
-  venue's 5-minute Up/Down crypto family (btc/eth/sol/xrp/doge/bnb) —
-  `polymarket_bot/pairarb/`, shadow only, placed no orders (#182, widened
-  2026-08-14, closed 2026-08-29).
+  the **live trading path** only.
 - Daily (24h-window) Up/Down markets across doge/sol/xrp/bnb/eth —
   `polymarket_bot/daily/`, shadow only, no live path exists, always-on
   (#185, started 2026-08-30).
@@ -97,8 +100,9 @@ Out of scope:
 
 - Flipping the live gate or placing live orders on behalf of the operator.
 - **Any market, on the live trading path (real capital).** No market/timeframe
-  is currently authorized for live trading: 5-minute BTC work closed 2026-08-29
-  (#182) and no replacement category has been chosen or built. Research/shadow
+  is currently authorized for live trading: the 5-minute BTC line closed
+  2026-08-29 (#182) and was deleted 2026-09-19; no replacement category has
+  been chosen or built. Research/shadow
   work on any market/timeframe remains in scope — see the research/shadow-only
   line above. Live trading resumes only once this file is explicitly updated
   naming a newly authorized market.
@@ -107,10 +111,10 @@ Out of scope:
 ## Absolute Rules
 
 - **Live trading (real capital) is not currently authorized for any market.**
-  5-minute BTC work closed 2026-08-29 (#182); no replacement category is chosen
-  or built. Research and shadow-only work on any market/timeframe remains in
+  The 5-minute BTC line closed 2026-08-29 (#182) and was deleted 2026-09-19; no
+  replacement category is chosen or built. Research and shadow-only work on any market/timeframe remains in
   scope by default — see Scope Fence above.
-- One open BTC paper position at a time.
+- One open paper position at a time.
 - **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
   It runs only when the operator **clicks LIVE in the dashboard**
   **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
@@ -168,6 +172,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 982.
+- **Tests:** 950.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

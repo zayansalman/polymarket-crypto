@@ -223,7 +223,7 @@ class TestBlotterOpenUnrealized:
     live window and a tick is available."""
 
     _TICK = {
-        "window_slug": "btc-updown-5m-100",
+        "window_slug": "btc-updown-1h-100",
         "up_best_bid": 0.60, "up_best_ask": 0.62,
         "down_best_bid": 0.38, "down_best_ask": 0.42,
         "market_up_price": 0.61, "market_down_price": 0.40,
@@ -231,7 +231,7 @@ class TestBlotterOpenUnrealized:
 
     def _pos(self, **over):
         p = dict(side="UP", entry_price=0.50, shares=10.0, notional_usd=5.0,
-                 window_slug="btc-updown-5m-100", mode="live")
+                 window_slug="btc-updown-1h-100", mode="live")
         p.update(over)
         return p
 
@@ -251,7 +251,7 @@ class TestBlotterOpenUnrealized:
         from polymarket_exec.ops.dashboard.panels import blotter
 
         html = blotter.render(
-            closed=[], open_pos=[self._pos(window_slug="btc-updown-5m-999")],
+            closed=[], open_pos=[self._pos(window_slug="btc-updown-1h-999")],
             tick=self._TICK,
         )
         assert "OPEN" in html  # no live mark for a stale window
@@ -263,7 +263,7 @@ class TestMarketOpenPosition:
     the latest tick's are shown without a fabricated mark ('—')."""
 
     _TICK = {
-        "window_slug": "btc-updown-5m-100", "spot_price": 65000.0,
+        "window_slug": "btc-updown-1h-100", "spot_price": 65000.0,
         "reference_price": 64990.0, "remaining_seconds": 120, "edge": 0.03,
         "fair_up_prob": 0.55,
         "up_best_bid": 0.60, "up_best_ask": 0.62,
@@ -273,7 +273,7 @@ class TestMarketOpenPosition:
 
     def _pos(self, **over):
         p = dict(side="UP", entry_price=0.50, shares=10.0, notional_usd=5.0,
-                 window_slug="btc-updown-5m-100", mode="live")
+                 window_slug="btc-updown-1h-100", mode="live")
         p.update(over)
         return p
 
@@ -301,7 +301,7 @@ class TestMarketOpenPosition:
     def test_other_window_position_not_marked(self) -> None:
         from polymarket_exec.ops.dashboard.panels import market
 
-        html = market.render(self._TICK, [self._pos(window_slug="btc-updown-5m-999")])
+        html = market.render(self._TICK, [self._pos(window_slug="btc-updown-1h-999")])
         # No fabricated unrealized from a stale window; entry still shown.
         assert "OPEN POSITION" in html
         assert "+$1.10" not in html

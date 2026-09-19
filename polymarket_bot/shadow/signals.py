@@ -101,7 +101,14 @@ def cushion_favorite_v2(
     )
 
 
-_WINDOW_SECONDS = 300  # 5-minute up/down markets
+# NOTE (2026-09-19): every candidate in this module is a 5-MINUTE-era model —
+# its window-age gates are absolute seconds tuned against a 300s window, so the
+# constant below is part of the model definition, not a live-path assumption.
+# It is deliberately left at 300 rather than repointed: changing it would
+# silently redefine what these models mean without any strategy rationale.
+# The whole shadow package is 5m-era code with nothing to run against now that
+# the family is gone, and is the natural next thing to delete.
+_WINDOW_SECONDS = 300
 
 
 def cushion_fresh_v7(

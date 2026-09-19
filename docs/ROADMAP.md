@@ -6,7 +6,8 @@ systems.
 
 ## Current Strengths
 
-- Narrow market scope (inherited): BTC 5-minute Up/Down was the original build;
+- Narrow market scope (inherited): BTC 5-minute Up/Down was the original build
+  and was deleted 2026-09-19;
   that line closed 2026-08-29 (#182) and no replacement category is chosen yet.
 - Explicit operator controls: Start, Stop, Refresh, activity feed.
 - Local paper ledger: ticks, simulated positions, exits, config state, and

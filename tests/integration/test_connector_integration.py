@@ -52,7 +52,7 @@ def _make_async_client(mock_get_response):
 async def test_full_flow_registry_to_polymarket_discovery():
     """End-to-end: registry -> PolymarketConnector -> discover_current_window."""
     market_payload = {
-        "slug": "btc-updown-5m-1700000000",
+        "slug": "btc-updown-1h-1700000000",
         "question": "Bitcoin Up or Down - Nov 14, 2023?",
         "outcomes": '["Up", "Down"]',
         "outcomePrices": '["0.52", "0.48"]',
@@ -70,7 +70,7 @@ async def test_full_flow_registry_to_polymarket_discovery():
     resolved = registry.get_market("polymarket")
     window = await resolved.discover_current_window()
 
-    assert window.slug.startswith("btc-updown-5m-")
+    assert window.slug.startswith("btc-updown-1h-")
     assert window.up_price == 0.52
     assert window.down_price == 0.48
     assert resolved is poly  # Identity check

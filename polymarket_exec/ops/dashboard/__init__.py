@@ -1,4 +1,4 @@
-"""FastAPI dashboard for BTC 5m Binary Pricing Model trading system.
+"""FastAPI dashboard for the Polymarket crypto binary-markets trading system.
 
 Replaces the Gradio dashboard with a lightweight FastAPI + Jinja2
 implementation. Eliminates the 150MB+ Gradio dependency while

@@ -1,7 +1,7 @@
 """The daily altcoin scanner's tick loop (issue #185).
 
 Every ``config.DAILY_SCAN_INTERVAL_SECONDS`` (default 60s — this market
-resolves on a ~24h cadence, so it has no need of the BTC 5m loop's 5s
+resolves on a ~24h cadence, so it has no need of the main loop's 5s
 tick): scores every tracked asset's daily Up/Down market, opens ONE $10
 paper (shadow-only) position on the single strongest qualifying signal, and
 settles any window whose resolution instant has passed. No live gate exists

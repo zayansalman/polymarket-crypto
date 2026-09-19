@@ -1,4 +1,4 @@
-"""Feed health telemetry and latency tracking for the BTC 5m pricing-model system.
+"""Feed health telemetry and latency tracking for the pricing-model system.
 
 Usage::
 

@@ -7,10 +7,15 @@ Spanning both columns fixes the parity — do not revert to a bare ``card``.
 """
 from __future__ import annotations
 
+import re
 from html import escape
 from typing import Any
 
 from . import _shared as s
+
+# Strip the family prefix from a window slug for display:
+# ``btc-updown-1h-1786705200`` -> ``#1786705200``.
+_WINDOW_PREFIX = re.compile(r"^[a-z]+-updown-[0-9a-z]+-")
 
 
 def _open_position_block(
@@ -77,7 +82,7 @@ def render(
     edge = tick.get("edge")
     return (
         "<section class='card wide'><div class='card-h'>LIVE MARKET"
-        f"<span class='win'>{escape((tick.get('window_slug') or '').replace('btc-updown-5m-', '#'))} · {rem}s</span></div>"
+        f"<span class='win'>{escape(_WINDOW_PREFIX.sub('#', tick.get('window_slug') or ''))} · {rem}s</span></div>"
         f"{s.gauge(tick.get('fair_up_prob'))}"
         "<div class='book'>"
         "<div class='book-side up'><div class='bk-l'>UP</div>"

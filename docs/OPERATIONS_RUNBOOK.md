@@ -1,7 +1,8 @@
 # Operations Runbook
 
 This runbook is for the local Polymarket crypto binary-markets strategy lab
-(currently-wired path is inherited BTC 5-minute — see AGENTS.md for status).
+(**no market family is currently wired** — the BTC 5-minute line was deleted
+2026-09-19; see AGENTS.md for status).
 The goal is to
 make operation boring: visible state, bounded risk, and fast Stop behavior.
 Paper mode is the default; live mode is strictly opt-in (see "Going live").
@@ -20,7 +21,9 @@ http://127.0.0.1:7860
 
 ## Paper Trading
 
-- Press **▶ Start** to begin the BTC 5-minute paper loop (paper is the default mode).
+- Press **▶ Start** to begin the paper loop (paper is the default mode). With no
+  market family wired, Start currently surfaces `NO_MARKET_FAMILY_REASON`
+  instead of trading — that is expected, not a fault.
 - Press **Stop** to halt new paper entries and force-close open simulated
   positions.
 - Use **Refresh** if you want an immediate dashboard update between timer ticks.
@@ -42,8 +45,9 @@ Expected:
 
 - If the dashboard port is busy, stop the old process or change
   `DASHBOARD_SERVER_PORT`.
-- If no current BTC market is found, wait for the next 5-minute boundary and
-  refresh.
+- "No market family is wired into the loop" is the expected state since
+  2026-09-19 — build discovery in `polymarket_bot/paper.py:_fetch_current_market`
+  to change it.
 - If public BTC spot data is unavailable, the paper loop surfaces the error in
   logs and dashboard detail instead of opening silent entries.
 
@@ -188,7 +192,7 @@ rm data/KILL        # re-arm (the bot resumes on the next tick)
 - The file is checked on every tick, before every entry, and once more
   immediately before the order is posted (covers the book-fetch window).
 - **Exits stay allowed under kill**: flattening an open position only reduces
-  exposure, and on a 5-minute binary a frozen position can become a 100%
+  exposure, and on a short-dated binary a frozen position can become a 100%
   loss at resolution. If you want literally zero order flow, flatten manually
   in the Polymarket UI after touching the kill file.
 - Deleting the file re-arms the handler: touching it again later cancels the

@@ -4,7 +4,7 @@ Replaces the 150MB+ Gradio dashboard with a lightweight FastAPI + Jinja2
 implementation. All visual design is preserved via extracted CSS. Also
 starts the daily altcoin scanner (#185) and the feed monitor (FEEDS card)
 as background tasks for its lifetime — see ``_lifespan`` — both independent
-of the BTC 5m loop the rest of this module's endpoints control.
+of the trading loop the rest of this module's endpoints control.
 
 Endpoints:
     GET  /              — Main dashboard page (HTML)
@@ -309,7 +309,7 @@ async def _get_status_safe() -> Any:
         state = "stopped"
         mode = BOT_MODE
         updated_at = None
-        detail = f"BTC 5-minute bot is ready. Mode: {_MODE_BANNER}"
+        detail = f"Bot is ready. Mode: {_MODE_BANNER}"
     return _MockStatus()
 
 
@@ -347,7 +347,7 @@ async def _get_paper_safe() -> Any:
 
 def _position_cards(positions: list[dict[str, Any]]) -> str:
     if not positions:
-        return "<div class='note'>No paper positions yet. Start the bot to let it observe a BTC 5m window.</div>"
+        return "<div class='note'>No paper positions yet. Start the bot to let it observe a window.</div>"
     cards: list[str] = []
     for pos in positions:
         pnl = pos.get("realized_pnl_usd")
@@ -515,7 +515,7 @@ def _history_html() -> str:
 def _brief_html() -> str:
     return (
         "<h3>System Brief</h3>\n"
-        "<p>This is a local BTC 5-minute binary pricing-model strategy lab. It is useful "
+        "<p>This is a local Polymarket crypto binary pricing-model strategy lab. It is useful "
         "as a personal paper bot and as a compact example of trading-system "
         "discipline: market discovery, feed labeling, confidence-based sizing, "
         "one-position risk control, structured event logs, and a dashboard kill "
@@ -528,7 +528,7 @@ def _brief_html() -> str:
             f"Kill switch file: <code>{escape(str(KILL_SWITCH_PATH))}</code>.</p>"
             if _IS_LIVE
             else "<p>Mode: paper — this mode does not sign or submit live orders. The active "
-            "workflow is simple: <strong>Start</strong> begins simulated BTC 5m trading, and "
+            "workflow is simple: <strong>Start</strong> begins simulated trading, and "
             "<strong>Stop</strong> halts new entries and closes any open simulated position.</p>"
         )
     )
@@ -538,7 +538,8 @@ def _scorecard_html() -> str:
     return (
         "<h3>Trading Systems Scorecard</h3>\n"
         "<ul>\n"
-        "<li>Scope: BTC 5-minute Up/Down markets only.</li>\n"
+        "<li>Scope: Polymarket crypto Up/Down markets. No market family is wired into "
+        "the loop today (the 5-minute family was removed 2026-09-19).</li>\n"
         "<li>Operator control: Start, Stop, Refresh, and activity feed.</li>\n"
         "<li>Risk: one open paper position, bounded $1-$5 sizing, target/stop/time exits.</li>\n"
         "<li>Feed discipline: public BTC fallback is labeled; Chainlink Streams is the intended reference.</li>\n"
@@ -550,12 +551,13 @@ def _scorecard_html() -> str:
 
 def _settings_html() -> str:
     return (
-        "<h3>BTC 5m Paper Rules</h3>\n"
+        "<h3>Paper Rules</h3>\n"
         "<p class='dim'>Every value below is a live, dashboard-editable knob — see the "
-        "SETTINGS card on the BTC 5m tab to change one. This list just reflects the "
+        "SETTINGS card on the market tab to change one. This list just reflects the "
         "current values.</p>\n"
         "<ul>\n"
-        f"<li>Market scope: BTC Up/Down 5-minute windows only.</li>\n"
+        f"<li>Market scope: <strong>none wired</strong> — the 5-minute family was "
+        f"removed 2026-09-19.</li>\n"
         "<li>Strategy: <strong>none loaded</strong> (v0 archived 2026-09-13).</li>\n"
         f"<li>Paper sizing: <strong>${_knobs.cached('paper_min_trade_usd'):.0f}-${_knobs.cached('paper_max_trade_usd'):.0f}</strong>.</li>\n"
         f"<li>Tick cadence: <strong>{_knobs.cached('paper_tick_seconds'):.0f}s</strong>.</li>\n"
@@ -580,7 +582,7 @@ def _backtest_html() -> str:
     report_path = DATA_DIR / "backtests" / "latest.json"
     if not report_path.exists():
         return (
-            "<h3>BTC 5m Binary Pricing Model Backtest</h3>\n"
+            "<h3>Binary Pricing Model Backtest</h3>\n"
             "<p>No local report yet. Run:</p>\n"
             '<pre><code>./.venv/bin/python tools/backtest_btc_strategy.py</code></pre>'
         )
@@ -593,7 +595,7 @@ def _backtest_html() -> str:
         current = report.get("current", {})
         best = report.get("best", {})
         lines = [
-            "<h2>BTC 5m Binary Pricing Model Backtest</h2>",
+            "<h2>Binary Pricing Model Backtest</h2>",
             "<ul>",
             f"<li>Opportunities: {report.get('opportunities', 'N/A')}</li>",
             f"<li>Method: {report.get('method', 'N/A')}</li>",

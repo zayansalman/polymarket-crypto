@@ -145,7 +145,7 @@ async def _db_with_rows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, modes: 
             await conn.execute(
                 "INSERT INTO paper_positions (opened_at, window_slug, side, state, "
                 "entry_price, notional_usd, shares, mode) VALUES (?, ?, ?, 'open', 0.5, 1, 2, ?)",
-                ("2026-09-13T00:00:00+00:00", "btc-updown-5m-1", "Up", mode),
+                ("2026-09-13T00:00:00+00:00", "btc-updown-1h-1", "Up", mode),
             )
         await conn.commit()
 

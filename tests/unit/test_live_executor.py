@@ -663,7 +663,7 @@ async def test_settlement_books_entry_taker_fee_on_win(
 ) -> None:
     executor = await _taker_entry_executor(tmp_path)
 
-    result = await executor.record_settlement(True, "btc-updown-5m-1782332700")
+    result = await executor.record_settlement(True, "btc-updown-1h-1782332700")
 
     expected = 5.09 * (1.0 - 0.51) - _FEE_1768  # +2.4051 — the real redemption net
     assert result.ok and result.status == "SETTLED"
@@ -681,7 +681,7 @@ async def test_settlement_books_entry_taker_fee_on_loss(
     """A lost taker position costs exactly the USDC paid all-in at entry."""
     executor = await _taker_entry_executor(tmp_path)
 
-    result = await executor.record_settlement(False, "btc-updown-5m-1782332700")
+    result = await executor.record_settlement(False, "btc-updown-1h-1782332700")
 
     assert result.ok
     assert executor.daily_realized_pnl == pytest.approx(-2.68493, abs=1e-3)
@@ -698,7 +698,7 @@ async def test_settlement_books_no_fee_for_resting_maker_fill(
     entry = await executor.submit_entry(UP_TOKEN, 0.57, 3.0)
     assert entry.ok
 
-    result = await executor.record_settlement(True, "btc-updown-5m-1782332700")
+    result = await executor.record_settlement(True, "btc-updown-1h-1782332700")
 
     assert result.ok
     assert executor.daily_realized_pnl == pytest.approx(5.26 * (1.0 - 0.57))
@@ -1080,11 +1080,11 @@ async def test_boot_closes_open_row_when_entry_never_filled(
 # lookup fails; only an unknowable fill state on live risk may refuse boot.
 # ---------------------------------------------------------------------------
 
-_RESOLVED_SLUG = "btc-updown-5m-1700000000"  # window start long in the past
+_RESOLVED_SLUG = "btc-updown-1h-1700000000"  # window start long in the past
 
 
 def _unresolved_slug() -> str:
-    return f"btc-updown-5m-{int(time.time()) + 3600}"
+    return f"btc-updown-1h-{int(time.time()) + 3600}"
 
 
 @pytest.mark.asyncio
@@ -1301,7 +1301,7 @@ async def test_settlement_no_phantom_win_when_fill_lookup_fails(
     _resting_unfilled_entry(executor)
 
     result = await executor.record_settlement(
-        won=True, window_slug="btc-updown-5m-1781827800"
+        won=True, window_slug="btc-updown-1h-1781827800"
     )
 
     assert result.status == "SETTLED"
@@ -1320,7 +1320,7 @@ async def test_settlement_no_phantom_loss_when_fill_lookup_fails(
     _resting_unfilled_entry(executor)
 
     result = await executor.record_settlement(
-        won=False, window_slug="btc-updown-5m-1781827800"
+        won=False, window_slug="btc-updown-1h-1781827800"
     )
 
     assert result.size == 0.0

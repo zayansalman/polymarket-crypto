@@ -27,7 +27,7 @@ class TestFixtureDeterminism:
 
     def test_market_window_deterministic(self, fixture_market_window: MarketWindow) -> None:
         """fixture_market_window must have fixed, known values."""
-        assert fixture_market_window.slug == "btc-updown-5m-1704067200"
+        assert fixture_market_window.slug == "btc-updown-1h-1704067200"
         assert fixture_market_window.start_ts == 1704067200
         assert fixture_market_window.end_ts == 1704067500
         assert fixture_market_window.up_price == 0.52
@@ -149,7 +149,7 @@ class TestMockFixtures:
         market = mock_connector_registry.get_primary_market()
         window = await market.discover_current_window()
         assert isinstance(window, MarketWindow)
-        assert window.slug == "btc-updown-5m-1704067200"
+        assert window.slug == "btc-updown-1h-1704067200"
 
     @pytest.mark.asyncio
     async def test_mock_registry_health_check(

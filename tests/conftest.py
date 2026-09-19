@@ -162,7 +162,7 @@ def fixture_market_window() -> MarketWindow:
     all derived calculations are bit-for-bit identical across runs.
     """
     return MarketWindow(
-        slug="btc-updown-5m-1704067200",
+        slug="btc-updown-1h-1704067200",
         question="Bitcoin Up or Down - Jan 01, 2024?",
         start_ts=1704067200,
         end_ts=1704067500,
@@ -281,7 +281,7 @@ def mock_connector_registry() -> MagicMock:
     mock_market = MagicMock(spec=AbstractMarketConnector)
     mock_market.discover_current_window = AsyncMock(
         return_value=MarketWindow(
-            slug="btc-updown-5m-1704067200",
+            slug="btc-updown-1h-1704067200",
             question="Bitcoin Up or Down?",
             start_ts=1704067200,
             end_ts=1704067500,
@@ -322,7 +322,7 @@ def mock_execution_manager() -> MagicMock:
         return_value=PaperOrder(
             order_id=1,
             created_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-            window_slug="btc-updown-5m-1704067200",
+            window_slug="btc-updown-1h-1704067200",
             side=Side.UP,
             state=OrderState.FILLED,
             requested_notional=3.0,
@@ -378,7 +378,7 @@ async def latency_tracker(tmp_db_path: Path) -> AsyncGenerator[LatencyTracker, N
 def sample_window() -> MarketWindow:
     """A single BTC 5-minute market window."""
     return MarketWindow(
-        slug="btc-updown-5m-1700000000",
+        slug="btc-updown-1h-1700000000",
         question="Bitcoin Up or Down - Dec 14, 2023?",
         start_ts=1700000000,
         end_ts=1700000300,
@@ -421,7 +421,7 @@ def sample_order() -> PaperOrder:
     return PaperOrder(
         order_id=1,
         created_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-        window_slug="btc-updown-5m-1700000000",
+        window_slug="btc-updown-1h-1700000000",
         side=Side.UP,
         state=OrderState.FILLED,
         requested_notional=3.0,

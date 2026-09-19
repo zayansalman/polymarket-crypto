@@ -408,7 +408,7 @@ def format_report(report: dict[str, Any]) -> str:
     current = report["current"]
     best = report["best"]
     lines = [
-        "# BTC 5m Binary Pricing Model Backtest",
+        "# Binary Pricing Model Backtest",
         "",
         f"- Opportunities: {report['opportunities']}",
         f"- Method: {report['method']}",

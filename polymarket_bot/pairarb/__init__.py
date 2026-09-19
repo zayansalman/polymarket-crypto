@@ -1,15 +1,18 @@
-"""Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182).
+"""Shared Polymarket venue plumbing (formerly the 5m pair-quoting strategy).
 
-Reproduces the strategy run by the venue's most profitable 5m account
-(``0xf8af03f1e68ee7162db8983f0d6dd0dc869854c6``): rest bids on **both** legs of
-the same window so a completed pair costs less than the 1.00 it redeems for.
+The two-sided maker quoting strategy this package was built for (#182, shadow
+only) targeted the 5-minute Up/Down family and was **removed 2026-09-19** along
+with that family: ``quoter.py``, ``fills.py``, ``types.py`` and ``ledger.py``
+are gone, as are ``tools/pairarb_shadow.py`` and ``tools/pairarb_report.py``.
 
-This is market making, not arbitrage. Measured on the live venue 2026-08-14 the
-best-*ask* sum is 1.0100 — crossing both legs costs 1.0449 after fees for a 1.00
-payout, so no taker opportunity exists. The best-*bid* sum is 0.990, and maker
-fills are fee-free. The edge is entirely in being the resting order.
+What survives here is timeframe-agnostic venue plumbing that other live lines
+depend on, which is the only reason the package name is still ``pairarb``:
 
-**No order is ever placed from this package.** It reads public books and the
-public trade tape and simulates what resting orders would have done. Live
-quoting would be a separate, operator-armed decision (``AGENTS.md``).
+* ``market_index`` — outcome-token -> market metadata resolver. Used by the
+  daily altcoin scanner (``polymarket_bot/daily/market.py``).
+* ``mirror`` / ``feed`` / ``onchain`` — the on-chain fill tape and copy pricing.
+  Used by the copytrade tools.
+
+**No order is ever placed from this package.** Renaming it to something honest
+is a worthwhile follow-up; it was left alone here to keep this change small.
 """

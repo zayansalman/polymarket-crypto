@@ -1,4 +1,4 @@
-"""Entrypoint for the BTC 5-minute paper trading system."""
+"""Entrypoint for the Polymarket crypto paper trading system."""
 from __future__ import annotations
 
 import asyncio
@@ -26,7 +26,7 @@ async def startup_tasks() -> None:
     await init_db()
     await notify(
         "system_start",
-        "BTC 5-minute paper trading system started",
+        "Paper trading system started",
         {
             "db_path": str(DB_PATH),
             "version": "0.2.0",

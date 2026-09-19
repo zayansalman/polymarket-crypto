@@ -1,4 +1,4 @@
-"""Custom exception hierarchy for the BTC 5m Binary Pricing Model trading system."""
+"""Custom exception hierarchy for the binary-markets trading system."""
 
 from __future__ import annotations
 

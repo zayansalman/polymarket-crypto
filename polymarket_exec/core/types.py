@@ -1,4 +1,4 @@
-"""All domain types and enums for the BTC 5m Binary Pricing Model trading system."""
+"""All domain types and enums for the binary-markets trading system."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 
 class Side(str, Enum):
-    """Binary outcome side for BTC 5-minute markets."""
+    """Binary outcome side for Up/Down markets."""
 
     UP = "Up"
     DOWN = "Down"
@@ -57,7 +57,7 @@ class ExitReason(str, Enum):
 
 @dataclass(frozen=True)
 class MarketWindow:
-    """A single BTC 5-minute binary market window."""
+    """A single binary market window."""
 
     slug: str
     question: str

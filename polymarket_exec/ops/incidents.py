@@ -1,4 +1,4 @@
-"""Incident state machine and operator runbooks for the BTC 5m pricing-model system.
+"""Incident state machine and operator runbooks for the pricing-model system.
 
 Usage::
 

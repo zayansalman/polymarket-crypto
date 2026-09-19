@@ -2,7 +2,7 @@
 
 Public API
 ----------
-* :class:`PolymarketConnector` — discovers BTC 5m binary markets on Polymarket
+* :class:`PolymarketConnector` — discovers Up/Down binary markets on Polymarket
 * :class:`BinanceConnector` — BTC spot price and recent close history
   (volatility-shape fallback and backtest tooling ONLY — never settlement levels)
 * :class:`ChainlinkSettlementConnector` — settlement-aligned reference open /

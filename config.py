@@ -74,7 +74,10 @@ DASHBOARD_SERVER_PORT = int(os.getenv("DASHBOARD_SERVER_PORT", "7860"))
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 CHAINLINK_STREAM_URL = "https://data.chain.link/streams/btc-usd-cexprice-streams"
-MARKET_TIMEFRAME_MINUTES = 5
+# NOTE: DB_PATH's filename above is historical. Renaming it would orphan the
+# existing database, so it stays as-is after the 5-minute family's removal
+# (2026-09-19). MARKET_TIMEFRAME_MINUTES was dropped in the same change:
+# window length is a property of the market family, not a global constant.
 
 # --- Settlement-aligned Chainlink feed (issue #21) --------------------------
 # Polymarket resolves BTC 5m markets on its Chainlink BTC/USD stream, NOT on

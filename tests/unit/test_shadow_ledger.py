@@ -26,7 +26,7 @@ async def _record(
     side: str,
     entry_price: float = 0.55,
     shares: float = 10.0,
-    window_slug: str = "btc-updown-5m-1700000000",
+    window_slug: str = "btc-updown-1h-1700000000",
 ) -> None:
     await record_shadow_signal(
         created_at="2026-06-18T00:00:00+00:00",
@@ -90,7 +90,7 @@ async def test_settle_resolves_both_with_net_of_fee_pnl(test_db):
     await _record(test_db, model_id="down_model", side="Down", entry_price=0.40, shares=10.0)
 
     settled = await settle_open_shadow(
-        window_slug="btc-updown-5m-1700000000",
+        window_slug="btc-updown-1h-1700000000",
         outcome_side="Up",
         settlement_price=1.0,
         resolved_at="2026-06-18T00:05:00+00:00",
@@ -148,7 +148,7 @@ async def test_regime_columns_persist_when_supplied(test_db):
     """#122: decision-time market state is stored verbatim for regime axes."""
     await record_shadow_signal(
         created_at="2026-07-09T12:00:00+00:00",
-        window_slug="btc-updown-5m-1783600000",
+        window_slug="btc-updown-1h-1783600000",
         model_id="v0",
         side="Up",
         entry_price=0.55,

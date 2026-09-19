@@ -44,7 +44,7 @@ async def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _snapshot(**overrides: object) -> PaperSnapshot:
     base = dict(
         created_at="2026-06-18T00:00:00+00:00",
-        window_slug="btc-updown-5m-1700000000",
+        window_slug="btc-updown-1h-1700000000",
         market_question="Bitcoin Up or Down?",
         remaining_seconds=120,
         spot_price=64020.0,
@@ -90,7 +90,7 @@ def test_build_view_maps_fields_and_mid() -> None:
 @pytest.mark.asyncio
 async def test_favorite_window_logs_v0_and_cushion(test_db, params) -> None:
     await runner.record_shadow(_snapshot(), params)
-    rows = await _models_for(test_db, "btc-updown-5m-1700000000")
+    rows = await _models_for(test_db, "btc-updown-1h-1700000000")
     # A clean cushioned favourite: v0 fires AND the cushion gate passes.
     assert "pricing_v0" in rows
     assert "cushion_favorite_v2" in rows
@@ -107,7 +107,7 @@ async def test_favorite_window_logs_v0_and_cushion(test_db, params) -> None:
 async def test_fresh_window_logs_v7_too(test_db, params) -> None:
     """First 60s of the window + modest edge claim -> v7 logs alongside v2."""
     await runner.record_shadow(_snapshot(remaining_seconds=250), params)
-    rows = await _models_for(test_db, "btc-updown-5m-1700000000")
+    rows = await _models_for(test_db, "btc-updown-1h-1700000000")
     assert "cushion_fresh_v7" in rows
     assert rows["cushion_fresh_v7"]["side"] == "Up"
     assert rows["cushion_fresh_v7"]["entry_price"] == pytest.approx(0.56)
@@ -125,7 +125,7 @@ async def test_very_fresh_window_logs_f45_alongside_v7(test_db, params) -> None:
     """≤45s into the window: f45 (#155) logs alongside v7, and records the
     decision-time market state for the #122 regime axes."""
     await runner.record_shadow(_snapshot(remaining_seconds=270), params)  # 30s elapsed
-    rows = await _models_for(test_db, "btc-updown-5m-1700000000")
+    rows = await _models_for(test_db, "btc-updown-1h-1700000000")
     assert "cushion_fresh_v7_f45" in rows
     f45 = rows["cushion_fresh_v7_f45"]
     assert f45["side"] == "Up"
@@ -142,7 +142,7 @@ async def test_very_fresh_window_logs_f45_alongside_v7(test_db, params) -> None:
 async def test_recording_is_idempotent_per_window(test_db, params) -> None:
     await runner.record_shadow(_snapshot(), params)
     await runner.record_shadow(_snapshot(market_up_price=0.58, up_best_ask=0.58), params)
-    rows = await _models_for(test_db, "btc-updown-5m-1700000000")
+    rows = await _models_for(test_db, "btc-updown-1h-1700000000")
     # The first signal per (window, model) wins; the second tick is dropped.
     assert rows["cushion_favorite_v2"]["entry_price"] == pytest.approx(0.56)
 
@@ -151,13 +151,13 @@ async def test_recording_is_idempotent_per_window(test_db, params) -> None:
 async def test_settle_books_net_of_fee_pnl(test_db, params) -> None:
     await runner.record_shadow(_snapshot(), params)
     settled = await settle_open_shadow(
-        window_slug="btc-updown-5m-1700000000",
+        window_slug="btc-updown-1h-1700000000",
         outcome_side="Up",
         settlement_price=1.0,
         resolved_at="2026-06-18T00:05:00+00:00",
     )
     assert settled >= 2  # v0 + cushion both resolved
-    rows = await _models_for(test_db, "btc-updown-5m-1700000000")
+    rows = await _models_for(test_db, "btc-updown-1h-1700000000")
     row = rows["cushion_favorite_v2"]
     assert row["state"] == "settled" and row["outcome"] == "Up"
     expected = runner.SHADOW_SHARES * net_pnl_per_share(0.56, won=True)

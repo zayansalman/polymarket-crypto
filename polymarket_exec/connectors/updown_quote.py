@@ -7,7 +7,7 @@ both outcome books from the CLOB.
 
 Slug schemes (verified against Gamma, 2026-09):
 
-* ``5m`` / ``15m`` — clock-floored: ``{asset}-updown-{tf}-{window_start_epoch}``.
+* ``15m`` — clock-floored: ``{asset}-updown-{tf}-{window_start_epoch}``.
 * ``1h`` — ET start hour: ``{name}-up-or-down-{month}-{day}-{year}-{h}{am|pm}-et``.
 * ``1d`` — resolves at noon ET: ``{name}-up-or-down-on-{month}-{day}-{year}``,
   dated the noon it resolves on (today before noon ET, else tomorrow).
@@ -40,7 +40,8 @@ _LONG_NAME: dict[str, str] = {
     "bnb": "bnb",
 }
 
-_CLOCK_SECONDS: dict[str, int] = {"5m": 300, "15m": 900}
+# The ``5m`` entry was removed 2026-09-19 with the 5-minute family.
+_CLOCK_SECONDS: dict[str, int] = {"15m": 900}
 
 
 @dataclass(frozen=True)

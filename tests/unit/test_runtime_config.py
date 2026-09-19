@@ -102,12 +102,16 @@ class TestRuntimeConfigEndpoint:
 
 
 class TestMarketSelection:
-    def test_default_is_btc_5m(self, client: TestClient) -> None:
+    def test_default_is_btc_1h_and_no_combo_is_loop_wired(
+        self, client: TestClient
+    ) -> None:
+        """5m was removed 2026-09-19; no family is wired into the loop."""
         from polymarket_bot import market_selection as ms
 
         sel = asyncio.run(ms.get_selection())
-        assert (sel.asset, sel.timeframe) == ("btc", "5m")
-        assert sel.loop_supported
+        assert (sel.asset, sel.timeframe) == ("btc", "1h")
+        assert not sel.loop_supported
+        assert "5m" not in ms.TIMEFRAMES
 
     def test_set_market_persists(self, client: TestClient) -> None:
         from polymarket_bot import market_selection as ms
@@ -140,16 +144,16 @@ class TestMarketSelectorGlow:
         from polymarket_bot.market_selection import MarketSelection
         from polymarket_exec.ops.dashboard.panels import market_selector as mks
 
-        slug = "btc-updown-5m-1757750400"
+        slug = "btc-updown-1h-1757750400"
         tick = {"window_slug": slug, "up_best_bid": 0.60, "up_best_ask": 0.62}
         pos = [{"window_slug": slug, "side": "UP", "entry_price": 0.50, "shares": 5}]
         pnl = mks.open_market_pnl(open_pos=pos, daily_open=[{"asset": "doge"}], tick=tick)
-        assert pnl[("btc", "5m")] == pytest.approx(0.55)
+        assert pnl[("btc", "1h")] == pytest.approx(0.55)
         assert pnl[("doge", "1d")] is None
 
-        html = mks.render(selection=MarketSelection("btc", "5m"), open_pnl=pnl)
+        html = mks.render(selection=MarketSelection("btc", "1h"), open_pnl=pnl)
         assert "active glow-pos' data-asset='btc'" in html
-        assert "active glow-pos' data-timeframe='5m'" in html
+        assert "active glow-pos' data-timeframe='1h'" in html
         assert "glow-flat' data-asset='doge'" in html
 
         pos[0]["entry_price"] = 0.70

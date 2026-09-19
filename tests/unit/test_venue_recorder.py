@@ -39,11 +39,11 @@ from tools.venue_recorder import (
 
 
 def test_classify_reads_the_rung_off_a_structured_slug():
-    asset, family, rung, evidence = classify({"slug": "btc-updown-5m-1766162100"})
+    asset, family, rung, evidence = classify({"slug": "btc-updown-1h-1766162100"})
     assert asset == "btc"
-    assert family == "btc-updown-5m"
-    assert rung == "5m"
-    assert "btc-updown-5m-1766162100" in evidence
+    assert family == "btc-updown-1h"
+    assert rung == "1h"
+    assert "btc-updown-1h-1766162100" in evidence
 
 
 def test_classify_derives_named_date_window_length_from_venue_dates():
@@ -207,7 +207,7 @@ def test_persist_is_idempotent_and_refreshes_liquidity(tmp_path: Path):
     async def run() -> None:
         async with aiosqlite.connect(tmp_path / "t.db") as db:
             await db.executescript(SCHEMA)
-            m = _market("btc-updown-5m-1766162100", "0xdef")
+            m = _market("btc-updown-1h-1766162100", "0xdef")
             await persist_markets(db, [m])
             m2 = dict(m, liquidityNum=999.0)
             await persist_markets(db, [m2])

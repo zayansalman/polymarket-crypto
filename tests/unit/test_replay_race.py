@@ -36,36 +36,36 @@ class TestReconstructOutcomes:
     def test_labels_from_next_window_reference(self) -> None:
         """outcome(N) = Up iff ref(N+1) >= ref(N); last window stays unlabeled."""
         ticks = {
-            "btc-updown-5m-1000000000": [_tick("btc-updown-5m-1000000000", 250, 100.0)],
-            "btc-updown-5m-1000000300": [_tick("btc-updown-5m-1000000300", 250, 101.0)],
-            "btc-updown-5m-1000000600": [_tick("btc-updown-5m-1000000600", 250, 100.5)],
+            "btc-updown-1h-1000000000": [_tick("btc-updown-1h-1000000000", 250, 100.0)],
+            "btc-updown-1h-1000003600": [_tick("btc-updown-1h-1000003600", 250, 101.0)],
+            "btc-updown-1h-1000007200": [_tick("btc-updown-1h-1000007200", 250, 100.5)],
         }
         labels, agreement, checked = reconstruct_outcomes(ticks, known={})
-        assert labels["btc-updown-5m-1000000000"] == "Up"  # 101 >= 100
-        assert labels["btc-updown-5m-1000000300"] == "Down"  # 100.5 < 101
-        assert "btc-updown-5m-1000000600" not in labels  # no next window
+        assert labels["btc-updown-1h-1000000000"] == "Up"  # 101 >= 100
+        assert labels["btc-updown-1h-1000003600"] == "Down"  # 100.5 < 101
+        assert "btc-updown-1h-1000007200" not in labels  # no next window
         assert checked == 0
 
     def test_ground_truth_wins_and_agreement_measured(self) -> None:
         ticks = {
-            "btc-updown-5m-1000000000": [_tick("btc-updown-5m-1000000000", 250, 100.0)],
-            "btc-updown-5m-1000000300": [_tick("btc-updown-5m-1000000300", 250, 101.0)],
+            "btc-updown-1h-1000000000": [_tick("btc-updown-1h-1000000000", 250, 100.0)],
+            "btc-updown-1h-1000003600": [_tick("btc-updown-1h-1000003600", 250, 101.0)],
         }
         # Known outcome DISAGREES with reconstruction: truth wins, agreement 0.
         labels, agreement, checked = reconstruct_outcomes(
-            ticks, known={"btc-updown-5m-1000000000": "Down"}
+            ticks, known={"btc-updown-1h-1000000000": "Down"}
         )
-        assert labels["btc-updown-5m-1000000000"] == "Down"
+        assert labels["btc-updown-1h-1000000000"] == "Down"
         assert checked == 1 and agreement == 0.0
 
     def test_equal_reference_resolves_up(self) -> None:
         """The venue's >= tie rule: an unchanged print resolves Up."""
         ticks = {
-            "btc-updown-5m-1000000000": [_tick("btc-updown-5m-1000000000", 250, 100.0)],
-            "btc-updown-5m-1000000300": [_tick("btc-updown-5m-1000000300", 250, 100.0)],
+            "btc-updown-1h-1000000000": [_tick("btc-updown-1h-1000000000", 250, 100.0)],
+            "btc-updown-1h-1000003600": [_tick("btc-updown-1h-1000003600", 250, 100.0)],
         }
         labels, _, _ = reconstruct_outcomes(ticks, known={})
-        assert labels["btc-updown-5m-1000000000"] == "Up"
+        assert labels["btc-updown-1h-1000000000"] == "Up"
 
 
 class TestReplay:
@@ -87,7 +87,7 @@ class TestReplay:
         settled net of the taker fee."""
         from polymarket_bot.shadow.signals import pricing_fresh_v8
 
-        slug = "btc-updown-5m-1000000000"
+        slug = "btc-updown-1h-1000000000"
         ticks = {
             slug: [
                 _tick(slug, 260, 100.0, up_best_ask=0.55, created_at="t1"),
@@ -106,6 +106,6 @@ class TestReplay:
     def test_unlabeled_window_produces_no_trades(self, params) -> None:
         from polymarket_bot.shadow.signals import pricing_fresh_v8
 
-        slug = "btc-updown-5m-1000000000"
+        slug = "btc-updown-1h-1000000000"
         ticks = {slug: [_tick(slug, 260, 100.0)]}
         assert replay(ticks, {}, {"pricing_fresh_v8": pricing_fresh_v8}, params) == []

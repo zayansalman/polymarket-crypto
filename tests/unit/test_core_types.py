@@ -240,7 +240,7 @@ class TestPaperSnapshot:
     def test_creation(self) -> None:
         snap = PaperSnapshot(
             created_at="2024-01-01T12:00:00+00:00",
-            window_slug="btc-updown-5m-1700000000",
+            window_slug="btc-updown-1h-1700000000",
             market_question="Bitcoin Up or Down?",
             remaining_seconds=180,
             spot_price=50000.0,
@@ -256,14 +256,14 @@ class TestPaperSnapshot:
             reason="enter Up: edge +0.030",
             feed_source="binance",
         )
-        assert snap.window_slug == "btc-updown-5m-1700000000"
+        assert snap.window_slug == "btc-updown-1h-1700000000"
         assert snap.signal_side == "Up"
         assert snap.notional_usd == 2.0
 
     def test_null_signal_side(self) -> None:
         snap = PaperSnapshot(
             created_at="2024-01-01T12:00:00+00:00",
-            window_slug="btc-updown-5m-1700000000",
+            window_slug="btc-updown-1h-1700000000",
             market_question="Bitcoin Up or Down?",
             remaining_seconds=180,
             spot_price=50000.0,
@@ -303,7 +303,7 @@ class TestPaperSummary:
             risk_state="OK",
             last_signal="Up conf 0.75 $3: enter Up: edge +0.080",
             last_tick_at="2024-01-01T12:00:00+00:00",
-            last_window_slug="btc-updown-5m-1700000000",
+            last_window_slug="btc-updown-1h-1700000000",
             last_spot_price=50000.0,
             last_fair_up_prob=0.60,
             last_up_price=0.52,

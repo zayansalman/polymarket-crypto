@@ -1,1 +1,1 @@
-"""BTC 5-minute paper-trading package."""
+"""Polymarket crypto paper-trading package."""

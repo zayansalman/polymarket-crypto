@@ -3,9 +3,11 @@
 One global selection shared by paper AND live — mode is a railroad switch over
 the same pipeline, never a different market. Persisted in the config table.
 
-For now this is UI + persistence only: the loop (``paper.py``) still trades the
-BTC 5m family. ``LOOP_SUPPORTED`` names the combos the loop actually honours so
-the dashboard can flag a selection the loop is not yet wired for.
+For now this is UI + persistence only. ``LOOP_SUPPORTED`` names the combos the
+loop actually honours so the dashboard can flag a selection the loop is not yet
+wired for. The 5-minute family was removed 2026-09-19 — the loop currently
+honours no combo at all and takes no entries until a market family is wired
+into ``paper.py:_fetch_current_market``.
 """
 from __future__ import annotations
 
@@ -23,17 +25,18 @@ ASSETS: dict[str, str] = {
 
 # Window timeframe → display label.
 TIMEFRAMES: dict[str, str] = {
-    "5m": "5m",
     "15m": "15m",
     "1h": "1h",
     "1d": "1d",
 }
 
 DEFAULT_ASSET = "btc"
-DEFAULT_TIMEFRAME = "5m"
+DEFAULT_TIMEFRAME = "1h"
 
-# Combos the trading loop actually trades today.
-LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset({("btc", "5m")})
+# Combos the trading loop actually trades today. EMPTY since the 5-minute
+# family was removed (2026-09-19): every selection is flagged "not wired" until
+# a replacement market family is built into the loop's discovery.
+LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset()
 
 ASSET_KEY = "polymarket_bot.market_asset"
 TIMEFRAME_KEY = "polymarket_bot.market_timeframe"

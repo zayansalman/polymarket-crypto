@@ -22,8 +22,8 @@ Safety model
   when the file is deleted. Exits stay ALLOWED under kill — flattening only
   reduces exposure.
 * Exits never rest: the GTC SELL is awaited for a bounded time and cancelled
-  if unfilled, so no stale exit order can sit in the book of a 5-minute
-  market into resolution. Callers must treat a non-ok exit as "position
+  if unfilled, so no stale exit order can sit in a short-dated market's book
+  into resolution. Callers must treat a non-ok exit as "position
   still open — retry".
 * Every order/cancel attempt — including blocked ones — is journaled to the
   ``live_orders`` SQLite table.
@@ -72,7 +72,7 @@ METAMASK_SIGNATURE_TYPE = 2
 # Polymarket CLOB conventions (see installed py_clob_client_v2 source):
 # - size granularity is 2 decimals for every tick size (ROUNDING_CONFIG.size == 2)
 # - tick sizes are one of 0.1 / 0.01 / 0.001 / 0.0001 (GET /tick-size per token)
-# - the order book reports min_order_size in shares (typically 5 for 5m markets)
+# - the order book reports min_order_size in shares (typically 5)
 SIZE_DECIMALS = 2
 DEFAULT_TICK_SIZE = 0.01
 DEFAULT_MIN_ORDER_SIZE = 5.0
@@ -215,23 +215,36 @@ def _placement_crossed_shares(response: dict[str, Any], side: str) -> float:
         return 0.0
 
 
-_WINDOW_SECONDS = 300  # 5-minute up/down markets
+# Window length per timeframe label, read out of the slug. The hardcoded
+# 300 was removed 2026-09-19 with the 5-minute family.
+_TIMEFRAME_SECONDS: dict[str, int] = {"15m": 900, "1h": 3600, "1d": 86400}
 _WINDOW_RESOLVE_GRACE_SECONDS = 60
+
+
+def _window_seconds_from_slug(window_slug: str) -> int | None:
+    """Window length implied by a ``<asset>-updown-<tf>-<ts>`` slug, or None."""
+    parts = str(window_slug).rsplit("-", 2)
+    return _TIMEFRAME_SECONDS.get(parts[-2]) if len(parts) >= 2 else None
 
 
 def _window_resolved(window_slug: str, *, now: float | None = None) -> bool:
     """True when the slug's window has certainly resolved.
 
-    Window slugs end in the window's unix start second (…-5m-1782332700); the
-    market resolves ``_WINDOW_SECONDS`` later. Unparseable slugs return False,
-    so an unknown window is treated as possibly-live risk, never discarded.
+    Window slugs end in the window's unix start second and carry their
+    timeframe just before it (…-1h-1782332700); the market resolves that
+    timeframe's length later. A slug whose start second or timeframe cannot be
+    read returns False, so an unknown window is treated as possibly-live risk,
+    never discarded.
     """
     try:
         start = int(str(window_slug).rsplit("-", 1)[-1])
     except (TypeError, ValueError):
         return False
+    window = _window_seconds_from_slug(window_slug)
+    if window is None:
+        return False
     now_s = time.time() if now is None else now
-    return now_s >= start + _WINDOW_SECONDS + _WINDOW_RESOLVE_GRACE_SECONDS
+    return now_s >= start + window + _WINDOW_RESOLVE_GRACE_SECONDS
 
 
 def _journal_filled_shares(details_json: object) -> float:
@@ -433,7 +446,7 @@ class LiveExecutor:
     async def _reconcile_account(self) -> None:
         """Cancel resting orders from dead sessions and re-adopt open positions."""
         # 1) Cancel ALL resting orders on the account. A resting GTC in the
-        # book of a 5-minute market from a dead session is pure downside.
+        # book of a short-dated market from a dead session is pure downside.
         # Retry transient API errors (notably the 425 "order manager not ready,
         # please retry" Polymarket returns right after a cold start) — the
         # cancel is idempotent, so retrying is safe; only refuse after the
@@ -942,7 +955,7 @@ class LiveExecutor:
         Allowed even while the kill switch is active — flattening only reduces
         exposure. The SELL is awaited for a bounded time and cancelled if it
         does not fill, so no stale exit order ever rests in the book of a
-        5-minute market. Realized PnL is recorded here, on confirmed fills at
+        short-dated market. Realized PnL is recorded here, on confirmed fills at
         the exit order's limit price — never on submission alone.
 
         Returns ok=True only when the position is confirmed flat (or was

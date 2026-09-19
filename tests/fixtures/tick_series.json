@@ -1,7 +1,7 @@
 [
   {
     "ts": "2023-11-14T22:13:20+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50000.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -15,7 +15,7 @@
   },
   {
     "ts": "2023-11-14T22:13:21+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50100.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -29,7 +29,7 @@
   },
   {
     "ts": "2023-11-14T22:13:22+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50200.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -43,7 +43,7 @@
   },
   {
     "ts": "2023-11-14T22:13:23+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50300.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -57,7 +57,7 @@
   },
   {
     "ts": "2023-11-14T22:13:24+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50250.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -71,7 +71,7 @@
   },
   {
     "ts": "2023-11-14T22:13:25+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50150.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -85,7 +85,7 @@
   },
   {
     "ts": "2023-11-14T22:13:26+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 50100.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -99,7 +99,7 @@
   },
   {
     "ts": "2023-11-14T22:13:27+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 49950.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -113,7 +113,7 @@
   },
   {
     "ts": "2023-11-14T22:13:28+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 49850.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,
@@ -127,7 +127,7 @@
   },
   {
     "ts": "2023-11-14T22:13:29+00:00",
-    "window_slug": "btc-updown-5m-1700000000",
+    "window_slug": "btc-updown-1h-1700000000",
     "spot_price": 49900.0,
     "reference_price": 49900.0,
     "sigma_per_second": 0.0002,

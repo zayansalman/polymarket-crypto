@@ -1,6 +1,6 @@
 # Backtesting
 
-The repo includes a repeatable local backtest for the BTC 5m Binary Pricing Model
+The repo includes a repeatable local backtest for the Binary Pricing Model
 strategy.
 
 ```bash
@@ -22,7 +22,7 @@ The current backtest is a **trade-history conditional backtest**:
 
 - Reads the local exported Polymarket CSV.
 - Keeps historical BTC Up/Down buy rows.
-- Parses each 5-minute market window from the market name.
+- Parses each market window from the market name.
 - Fetches/caches Binance BTCUSDT 1-second candles for that window.
 - Computes reference price, trade-time spot, recent volatility, fair side
   probability, edge, confidence, and hold-to-resolution settlement PnL.

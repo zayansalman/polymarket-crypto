@@ -20,7 +20,7 @@ from polymarket_bot.pairarb.market_index import (
 )
 
 
-def _market(slug="btc-updown-5m-1786705500", outcomes=("Up", "Down"),
+def _market(slug="btc-updown-1h-1786705200", outcomes=("Up", "Down"),
             tokens=("111", "222"), condition_id="0xabc"):
     return {
         "slug": slug,
@@ -31,16 +31,27 @@ def _market(slug="btc-updown-5m-1786705500", outcomes=("Up", "Down"),
 
 
 def test_window_slug_is_clock_derived():
-    assert window_slug("btc", 1786705500) == "btc-updown-5m-1786705500"
-    # Anything inside the same 5-minute bucket floors to the same slug.
-    assert window_slug("btc", 1786705799) == "btc-updown-5m-1786705500"
-    assert window_slug("btc", 1786705800) == "btc-updown-5m-1786705800"
+    # Default timeframe is 1h since the 5-minute family was removed.
+    assert window_slug("btc", 1786705200) == "btc-updown-1h-1786705200"
+    # Anything inside the same bucket floors to the same slug.
+    assert window_slug("btc", 1786708799) == "btc-updown-1h-1786705200"
+    assert window_slug("btc", 1786708800) == "btc-updown-1h-1786708800"
+
+
+def test_window_slug_honours_the_timeframe():
+    assert window_slug("doge", 1786705500, "15m") == "doge-updown-15m-1786705200"
+    assert window_slug("doge", 1786705500, "1d") == "doge-updown-1d-1786665600"
+
+
+def test_window_slug_rejects_an_unknown_timeframe():
+    with pytest.raises(ValueError):
+        window_slug("btc", 1786705500, "5m")
 
 
 def test_parse_market_aligns_tokens_to_outcomes_up_first():
     mt = parse_market(_market(outcomes=("Up", "Down"), tokens=("up_tok", "down_tok")))
     assert mt == MarketTokens(
-        slug="btc-updown-5m-1786705500",
+        slug="btc-updown-1h-1786705200",
         condition_id="0xabc",
         up_token="up_tok",
         down_token="down_tok",
@@ -92,9 +103,9 @@ class _FakeClient:
 
 @pytest.mark.asyncio
 async def test_refresh_indexes_current_and_previous_window():
-    now = 1786705800  # exact boundary of a window
+    now = 1786708800  # exact boundary of a 1h window
     cur = window_slug("btc", now)
-    prev = window_slug("btc", now - 300)
+    prev = window_slug("btc", now - 3600)
     client = _FakeClient({
         cur: [_market(slug=cur, tokens=("cur_up", "cur_down"))],
         prev: [_market(slug=prev, tokens=("prev_up", "prev_down"))],

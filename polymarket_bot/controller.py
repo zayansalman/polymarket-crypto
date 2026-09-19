@@ -1,4 +1,4 @@
-"""Start/stop controller for the BTC 5-minute trader (paper default, live opt-in)."""
+"""Start/stop controller for the trading loop (paper default, live opt-in)."""
 from __future__ import annotations
 
 import asyncio
@@ -22,10 +22,10 @@ from logging_setup import get_logger
 log = get_logger("controller")
 
 PAPER_ONLY_DETAIL = (
-    "BTC 5-minute paper mode is ready. No live orders are placed in paper mode."
+    "Paper mode is ready. No live orders are placed in paper mode."
 )
 LIVE_MODE_DETAIL = (
-    "BTC 5-minute LIVE mode is configured — Start will place REAL orders on the "
+    "LIVE mode is configured — Start will place REAL orders on the "
     "Polymarket CLOB, risk-gated and journaled to live_orders."
 )
 
@@ -263,11 +263,11 @@ async def request_start() -> BtcBotStatus:
     if mode == "live":
         detail = (
             "BTC LIVE loop starting — orders are REAL. It will discover the "
-            "current BTC 5m market and place risk-gated CLOB orders."
+            "current market and place risk-gated CLOB orders."
         )
     else:
         detail = (
-            "BTC paper loop starting. It will discover the current BTC 5m "
+            "Paper loop starting. It will discover the current "
             "market and log simulated trades only."
         )
     await set_config("polymarket_bot.detail", detail)

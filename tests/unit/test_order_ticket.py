@@ -21,10 +21,14 @@ _NOW = datetime(2026, 9, 13, 18, 47, 30, tzinfo=UTC)
 
 
 class TestWindowSlug:
-    def test_5m_and_15m_floor_to_the_window_start(self) -> None:
+    def test_15m_floors_to_the_window_start(self) -> None:
         ts = int(_NOW.timestamp())
-        assert uq.window_slug("eth", "5m", _NOW) == f"eth-updown-5m-{ts - ts % 300}"
         assert uq.window_slug("btc", "15m", _NOW) == f"btc-updown-15m-{ts - ts % 900}"
+
+    def test_the_removed_5m_family_is_rejected(self) -> None:
+        """5m was removed 2026-09-19 — it must not resolve to a slug."""
+        with pytest.raises(ValueError, match="unknown timeframe"):
+            uq.window_slug("eth", "5m", _NOW)
 
     def test_1h_uses_the_et_start_hour(self) -> None:
         assert (
@@ -93,18 +97,18 @@ class TestQuoteClient:
         transport = _transport()
         async with httpx.AsyncClient(transport=transport) as http:
             client = UpDownQuoteClient(http)
-            await client.fetch("eth", "5m", _NOW)
-            await client.fetch("eth", "5m", _NOW)
+            await client.fetch("eth", "15m", _NOW)
+            await client.fetch("eth", "15m", _NOW)
         assert transport.calls == {"gamma": 1, "books": 2}  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_missing_market_and_http_errors_are_reported_not_raised(self) -> None:
         async with httpx.AsyncClient(transport=_transport(gamma_rows=[])) as http:
-            missing = await UpDownQuoteClient(http).fetch("eth", "5m", _NOW)
+            missing = await UpDownQuoteClient(http).fetch("eth", "15m", _NOW)
         assert missing.error and "no market" in missing.error
         assert missing.up_ask is None
         async with httpx.AsyncClient(transport=_transport(books_status=429)) as http:
-            limited = await UpDownQuoteClient(http).fetch("eth", "5m", _NOW)
+            limited = await UpDownQuoteClient(http).fetch("eth", "15m", _NOW)
         assert limited.error and "429" in limited.error
 
 
@@ -145,9 +149,9 @@ class TestQuoteFeed:
         task = asyncio.create_task(_REAL_RUN_FOREVER(stop))
         try:
             await asyncio.sleep(0.05)
-            assert quote_feed.snapshot("btc", "5m") is None  # first ask: nothing yet
+            assert quote_feed.snapshot("btc", "15m") is None  # first ask: nothing yet
             await asyncio.sleep(0.05)
-            assert quote_feed.snapshot("btc", "5m").asset == "btc"
+            assert quote_feed.snapshot("btc", "15m").asset == "btc"
             quote_feed.snapshot("sol", "1d")
             await asyncio.sleep(0.05)  # far less than POLL_SECONDS
             assert seen[-1] == ("sol", "1d")

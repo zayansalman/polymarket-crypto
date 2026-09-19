@@ -1,13 +1,17 @@
-"""Outcome-token -> market metadata resolver for the 5m Up/Down family (#182).
+"""Outcome-token -> market metadata resolver for the Up/Down families.
+
+Originally built for the 5-minute family (#182); that family was removed
+2026-09-19 and the window scheme is now a parameter. Still used by the daily
+altcoin scanner (``polymarket_bot/daily/market.py``) and the copytrade tools.
 
 The on-chain fill feed (``feed.py``) only carries a ``token_id`` — an ERC-1155
 CTF outcome-token id. It has no idea what market or outcome that token belongs
 to; ``price_the_copy()`` needs a window slug, an ``outcome`` ("Up"/"Down") and a
 ``conditionId`` to price and settle a copy.
 
-Every 5m window's slug is a pure function of the clock
-(``{asset}-updown-5m-{floor(now/300)*300}``, the #181 discovery), so this keeps
-a small rolling cache instead of a general reverse index: fetch each tracked
+Every window's slug is a pure function of the clock
+(``{asset}-updown-{tf}-{floor(now/window)*window}``, the #181 discovery), so
+this keeps a small rolling cache instead of a general reverse index: fetch each tracked
 asset's *current* and *previous* window from Gamma and index both outcome
 tokens by id. The previous window stays indexed too, because a fill can arrive
 attributed to a window that has already rolled over.
@@ -21,13 +25,20 @@ from dataclasses import dataclass
 from typing import Any
 
 GAMMA = "https://gamma-api.polymarket.com"
-WINDOW_SECONDS = 300
+
+# Window length per timeframe label. The 5-minute entry was removed 2026-09-19.
+TIMEFRAME_SECONDS: dict[str, int] = {"15m": 900, "1h": 3600, "1d": 86400}
+DEFAULT_TIMEFRAME = "1h"
 
 
-def window_slug(asset: str, ts: int) -> str:
-    """The 5m window slug covering ``ts``, per the #181 clock-derived scheme."""
-    floor = (ts // WINDOW_SECONDS) * WINDOW_SECONDS
-    return f"{asset}-updown-5m-{floor}"
+def window_slug(asset: str, ts: int, timeframe: str = DEFAULT_TIMEFRAME) -> str:
+    """The window slug covering ``ts``, per the #181 clock-derived scheme."""
+    try:
+        window = TIMEFRAME_SECONDS[timeframe]
+    except KeyError:
+        raise ValueError(f"unknown timeframe {timeframe!r}") from None
+    floor = (ts // window) * window
+    return f"{asset}-updown-{timeframe}-{floor}"
 
 
 @dataclass(frozen=True)
@@ -68,12 +79,18 @@ class TokenIndex:
     """Rolling ``token_id -> (slug, outcome, condition_id)`` cache.
 
     Tracks a fixed asset list and, on :meth:`refresh`, indexes each asset's
-    current and previous 5m window. Cheap to call often — already-indexed
-    windows are skipped without a network round trip.
+    current and previous window of ``timeframe``. Cheap to call often —
+    already-indexed windows are skipped without a network round trip.
     """
 
-    def __init__(self, assets: list[str]) -> None:
+    def __init__(
+        self, assets: list[str], timeframe: str = DEFAULT_TIMEFRAME
+    ) -> None:
+        if timeframe not in TIMEFRAME_SECONDS:
+            raise ValueError(f"unknown timeframe {timeframe!r}")
         self._assets = list(assets)
+        self._timeframe = timeframe
+        self._window_seconds = TIMEFRAME_SECONDS[timeframe]
         self._by_token: dict[str, tuple[str, str, str]] = {}
         self._indexed_slugs: set[str] = set()
 
@@ -98,8 +115,8 @@ class TokenIndex:
         """
         now = now if now is not None else int(time.time())
         for asset in self._assets:
-            for ts in (now, now - WINDOW_SECONDS):
-                slug = window_slug(asset, ts)
+            for ts in (now, now - self._window_seconds):
+                slug = window_slug(asset, ts, self._timeframe)
                 if slug in self._indexed_slugs:
                     continue
                 try:

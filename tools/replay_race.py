@@ -42,7 +42,7 @@ from polymarket_bot.shadow import runner as shadow_runner  # noqa: E402
 from polymarket_bot.shadow.fees import net_pnl_per_share  # noqa: E402
 from polymarket_bot.shadow.types import ShadowSignal, SnapshotView  # noqa: E402
 
-WINDOW_SECONDS = 300
+WINDOW_SECONDS = 3600  # 1h windows (the 5-minute family was removed 2026-09-19)
 SHARES = shadow_runner.SHADOW_SHARES
 
 

@@ -67,10 +67,10 @@ async def em_with_latency(tmp_path: Path) -> PaperExecutionManager:
 @pytest.fixture
 def window() -> MarketWindow:
     return MarketWindow(
-        slug="btc-updown-5m-1700000000",
+        slug="btc-updown-1h-1700000000",
         question="Bitcoin Up or Down?",
         start_ts=1700000000,
-        end_ts=1700000300,
+        end_ts=1700003600,
         up_price=0.52,
         down_price=0.48,
     )
@@ -273,9 +273,9 @@ async def test_check_exits_window_roll(em: PaperExecutionManager, window: Market
 
     # New window with different slug
     new_window = MarketWindow(
-        slug="btc-updown-5m-1700000300",  # different slug
+        slug="btc-updown-1h-1700003600",  # different slug
         question="Bitcoin Up or Down?",
-        start_ts=1700000300,
+        start_ts=1700003600,
         end_ts=1700000600,
         up_price=0.55,
         down_price=0.45,
@@ -359,7 +359,7 @@ async def test_check_exits_time_hit(em: PaperExecutionManager, window: MarketWin
     pos = open_positions[0]
 
     # Tick with remaining seconds = 30 (below 45 threshold)
-    # Window end is 1700000300, so ts must be 1700000270 or later
+    # Window end is 1700003600, so ts must be 1700000270 or later
     tick_window = MarketWindow(
         slug=window.slug,
         question=window.question,
@@ -436,9 +436,9 @@ async def test_exit_priority_window_roll_before_time(em: PaperExecutionManager, 
     pos = open_positions[0]
 
     new_window = MarketWindow(
-        slug="btc-updown-5m-1700000300",
+        slug="btc-updown-1h-1700003600",
         question=window.question,
-        start_ts=1700000300,
+        start_ts=1700003600,
         end_ts=1700000600,
         up_price=0.52,
         down_price=0.48,
@@ -530,10 +530,10 @@ async def test_get_closed_positions_limit(em: PaperExecutionManager, window: Mar
     # Enter and close 3 positions
     for i in range(3):
         w = MarketWindow(
-            slug=f"btc-updown-5m-{1700000000 + i * 300}",
+            slug=f"btc-updown-1h-{1700000000 + i * 3600}",
             question="Bitcoin Up or Down?",
             start_ts=1700000000 + i * 300,
-            end_ts=1700000300 + i * 300,
+            end_ts=1700003600 + i * 300,
             up_price=0.52,
             down_price=0.48,
         )

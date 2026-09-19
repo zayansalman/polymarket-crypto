@@ -4,7 +4,7 @@ A local research and execution stack for Polymarket crypto binary markets: a pri
 model, a paper/live execution stack, a shadow forward-tester for candidate strategies,
 and a validated tick-replay backtester. Originally built around BTC 5-minute Up/Down
 markets; that line closed 2026-08-29 (#182) after a shadow copy-trade/maker-quoting
-research phase came back net negative. Next chapter (daily/hourly/longer-horizon
+research phase came back net negative, and its code was **removed 2026-09-19**. Next chapter (daily/hourly/longer-horizon
 markets) is not yet chosen or built — see Status below.
 
 Agent instructions and scope live in **[AGENTS.md](AGENTS.md)**; the routing map is
@@ -13,8 +13,9 @@ change."
 
 ## Status (current)
 
-5-minute-market work is closed (2026-08-29, #182 branch close-out). Two research
-phases ran on it:
+5-minute-market work is closed (2026-08-29, #182 branch close-out) and the code was
+deleted 2026-09-19: no market family is wired into the trading loop today, and
+pressing ▶ Start surfaces that rather than trading. Two research phases ran on it:
 
 - A 30-day BTC-only signal-race (June–July 2026) found no exploitable directional edge
   at retail latency net of the venue's taker fee — archived 2026-07-10, see

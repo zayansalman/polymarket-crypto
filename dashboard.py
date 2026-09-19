@@ -1,4 +1,8 @@
-"""Local Gradio dashboard for BTC 5-minute paper trading."""
+"""Local Gradio dashboard (DEAD fallback — the live UI is the FastAPI app).
+
+Never executes: ``HAS_NEW_DASHBOARD`` is always true. Kept only so ``main.py``'s
+import resolves. See docs/CODE_MAP.md.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -460,7 +464,7 @@ def _status_markdown() -> str:
 
 def _position_cards(positions: list[dict[str, Any]]) -> str:
     if not positions:
-        return "<div class='note'>No paper positions yet. Start the bot to let it observe a BTC 5m window.</div>"
+        return "<div class='note'>No paper positions yet. Start the bot to let it observe a window.</div>"
     cards: list[str] = []
     for pos in positions:
         pnl = pos.get("realized_pnl_usd")
@@ -527,13 +531,13 @@ def _history_markdown() -> str:
 def _brief_markdown() -> str:
     return (
         "### System Brief\n"
-        "This is a local BTC 5-minute binary pricing-model strategy lab. It is useful "
+        "This is a local Polymarket crypto binary pricing-model strategy lab. It is useful "
         "as a personal paper bot and as a compact example of trading-system "
         "discipline: market discovery, feed labeling, confidence-based sizing, "
         "one-position risk control, structured event logs, and a dashboard kill "
         "switch.\n\n"
         "This build does not sign or submit live orders. The active workflow is simple: "
-        "**Start** begins simulated BTC 5m trading, and **Stop** halts new entries "
+        "**Start** begins simulated trading, and **Stop** halts new entries "
         "and closes any open simulated position."
     )
 
@@ -541,7 +545,7 @@ def _brief_markdown() -> str:
 def _scorecard_markdown() -> str:
     return (
         "### Trading Systems Scorecard\n"
-        "- Scope: BTC 5-minute Up/Down markets only.\n"
+        "- Scope: Polymarket crypto Up/Down markets; no family is wired today.\n"
         "- Operator control: Start, Stop, Refresh, and activity feed.\n"
         "- Risk: one open paper position, bounded $1-$5 sizing, target/stop/time exits.\n"
         "- Feed discipline: public BTC fallback is labeled; Chainlink Streams is the intended reference.\n"
@@ -552,8 +556,8 @@ def _scorecard_markdown() -> str:
 
 def _settings_markdown() -> str:
     return (
-        "### BTC 5m Paper Rules\n"
-        f"- Market scope: BTC Up/Down 5-minute windows only.\n"
+        "### Paper Rules\n"
+        f"- Market scope: none wired (the 5-minute family was removed 2026-09-19).\n"
         f"- Paper sizing: **${PAPER_MIN_TRADE_USD:.0f}-${PAPER_MAX_TRADE_USD:.0f}** by confidence.\n"
         f"- Tick cadence: **{PAPER_TICK_SECONDS:.0f}s**.\n"
         f"- Minimum confidence: **{PAPER_MIN_CONFIDENCE:.0%}**.\n"
@@ -570,7 +574,7 @@ def _backtest_markdown() -> str:
     report_path = DATA_DIR / "backtests" / "latest.json"
     if not report_path.exists():
         return (
-            "### BTC 5m Binary Pricing Model Backtest\n"
+            "### Binary Pricing Model Backtest\n"
             "No local report yet. Run:\n\n"
             "```bash\n"
             "./.venv/bin/python tools/backtest_btc_strategy.py\n"
@@ -608,12 +612,12 @@ def _btc_stop_views() -> tuple[str, str, str, str, str]:
 
 def build_ui() -> gr.Blocks:
     initial = _btc_views()
-    with gr.Blocks(title="BTC 5m Binary Pricing Model", css=CSS) as app:
+    with gr.Blocks(title="Binary Pricing Model", css=CSS) as app:
         gr.HTML(
             """
             <div class='hero'>
-              <h1>BTC 5m Binary Pricing Model</h1>
-              <p>Local paper-trading dashboard for Polymarket BTC Up/Down 5-minute markets.
+              <h1>Binary Pricing Model</h1>
+              <p>Local paper-trading dashboard for Polymarket crypto Up/Down markets.
               Resolution-aware pricing-model signal, bounded paper sizing, and operator controls.</p>
             </div>
             """
@@ -623,7 +627,7 @@ def build_ui() -> gr.Blocks:
             gr.Markdown(value=_brief_markdown())
             gr.Markdown(value=_scorecard_markdown())
             history = gr.Markdown(value=initial[3])
-        with gr.Tab("BTC 5m"):
+        with gr.Tab("Market"):
             with gr.Row():
                 start_btn = gr.Button("Start BTC Paper Bot", variant="primary", scale=2)
                 stop_btn = gr.Button("Stop", variant="stop", scale=1)

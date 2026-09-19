@@ -1,4 +1,4 @@
-"""Shared BTC 5-minute binary strategy math."""
+"""Shared binary-market strategy math (timeframe-agnostic)."""
 from __future__ import annotations
 
 import math

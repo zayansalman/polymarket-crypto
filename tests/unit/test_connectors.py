@@ -55,7 +55,7 @@ class TestPolymarketConnector:
     async def test_discover_current_window_happy_path(self):
         """Successful market discovery via the markets endpoint."""
         market_payload = {
-            "slug": "btc-updown-5m-1700000000",
+            "slug": "btc-updown-1h-1700000000",
             "question": "Bitcoin Up or Down - Nov 14, 2023?",
             "outcomes": '["Up", "Down"]',
             "outcomePrices": '["0.52", "0.48"]',
@@ -68,10 +68,10 @@ class TestPolymarketConnector:
         window = await connector.discover_current_window()
 
         assert isinstance(window, MarketWindow)
-        assert window.slug.startswith("btc-updown-5m-")
+        assert window.slug.startswith("btc-updown-1h-")
         assert window.up_price == 0.52
         assert window.down_price == 0.48
-        assert window.end_ts == window.start_ts + 300
+        assert window.end_ts == window.start_ts + 3600
         # Verify the client was called (at least once for markets endpoint)
         assert client.get.called
 
@@ -83,7 +83,7 @@ class TestPolymarketConnector:
         event_payload = {
             "markets": [
                 {
-                    "slug": "btc-updown-5m-1700000000",
+                    "slug": "btc-updown-1h-1700000000",
                     "question": "Bitcoin Up or Down?",
                     "outcomes": '["Up", "Down"]',
                     "outcomePrices": '["0.55", "0.45"]',
@@ -170,7 +170,7 @@ class TestPolymarketConnector:
     async def test_discover_with_list_outcome_prices(self):
         """Market where outcomePrices is already a list (not JSON string)."""
         market_payload = {
-            "slug": "btc-updown-5m-1700000000",
+            "slug": "btc-updown-1h-1700000000",
             "question": "Bitcoin Up or Down?",
             "outcomes": ["Up", "Down"],
             "outcomePrices": ["0.61", "0.39"],

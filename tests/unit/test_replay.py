@@ -130,7 +130,7 @@ async def populated_recorder(tmp_path: Path) -> MarketDataRecorder:
     await r.init()
 
     window = MarketWindow(
-        slug="btc-updown-5m-1700000000",
+        slug="btc-updown-1h-1700000000",
         question="Bitcoin Up or Down?",
         start_ts=1700000000,
         end_ts=1700000300,
@@ -185,7 +185,7 @@ async def test_replay_window_generates_signals(
     mock_signal_gen: MockSignalGenerator,
 ) -> None:
     replay = DeterministicReplay(populated_recorder, mock_signal_gen)
-    signals = await replay.replay_window("btc-updown-5m-1700000000")
+    signals = await replay.replay_window("btc-updown-1h-1700000000")
 
     # 10 ticks should produce 10 signals
     assert len(signals) == 10
@@ -253,7 +253,7 @@ async def test_replay_window_callback_called(
         received_pairs.append((tick, signal))
 
     signals = await replay.replay_window(
-        "btc-updown-5m-1700000000", callback=callback
+        "btc-updown-1h-1700000000", callback=callback
     )
 
     assert call_count == 10
@@ -264,7 +264,7 @@ async def test_replay_window_callback_called(
     for tick, signal in received_pairs:
         assert isinstance(tick, Tick)
         assert isinstance(signal, Signal)
-        assert tick.window.slug == "btc-updown-5m-1700000000"
+        assert tick.window.slug == "btc-updown-1h-1700000000"
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +474,7 @@ async def test_reset_stats(
     mock_signal_gen: MockSignalGenerator,
 ) -> None:
     replay = DeterministicReplay(populated_recorder, mock_signal_gen)
-    await replay.replay_window("btc-updown-5m-1700000000")
+    await replay.replay_window("btc-updown-1h-1700000000")
     assert replay._stats["total_ticks"] == 10
 
     replay.reset_stats()

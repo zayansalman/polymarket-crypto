@@ -1,4 +1,8 @@
-"""Backtest and optimize the BTC 5-minute binary strategy on local history."""
+"""Backtest and optimize the archived v0 binary strategy on local history.
+
+Built for the 5-minute family, which was removed 2026-09-19; it runs against
+exported local trade history, not against a live market.
+"""
 from __future__ import annotations
 
 import csv
@@ -361,7 +365,7 @@ def format_report(report: dict[str, Any]) -> str:
     current = report["current"]
     best = report["best"]
     lines = [
-        "# BTC 5m Binary Pricing Model Backtest",
+        "# Binary Pricing Model Backtest",
         "",
         f"- Opportunities: {report['opportunities']}",
         f"- Method: {report['method']}",

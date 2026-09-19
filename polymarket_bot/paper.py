@@ -1,6 +1,11 @@
-"""BTC 5-minute trading engine (paper by default, live opt-in).
+"""Up/Down window trading engine (paper by default, live opt-in).
 
-It discovers the current Polymarket BTC 5m market, prices it against the
+NO MARKET FAMILY IS WIRED. The BTC 5-minute family this loop was built on was
+removed 2026-09-19; ``_fetch_current_market`` raises until a replacement is
+built. Everything below it — feed, book quoting, risk, execution, journaling —
+is market-agnostic and is the chassis the next strategy plugs into.
+
+It discovers the current Polymarket Up/Down window market, prices it against the
 SETTLEMENT feed (Polymarket's Chainlink BTC/USD stream — reference open via
 the crypto-price REST API, live spot + sigma via the ws-live-data WebSocket,
 issue #21), quotes the EXECUTABLE market from the CLOB order book for both
@@ -38,7 +43,6 @@ import httpx
 
 from config import (
     BINANCE_API_BASE,
-    MARKET_TIMEFRAME_MINUTES,
     POLYMARKET_CLOB_API,
     POLYMARKET_CRYPTO_PRICE_API,
     POLYMARKET_GAMMA_API,
@@ -141,7 +145,11 @@ def _is_current_generation(my_generation: int) -> bool:
 _MIN_CHAINLINK_SIGMA_POINTS = 30
 
 BINANCE_API = BINANCE_API_BASE
-FIVE_MINUTES = MARKET_TIMEFRAME_MINUTES * 60
+
+# Window length is a property of the market family, not a global constant: the
+# discovery function returns it as ``window_seconds`` alongside
+# ``window_start_ts``. The hardcoded 5-minute constant was removed 2026-09-19.
+TIMEFRAME_SECONDS: dict[str, int] = {"15m": 900, "1h": 3600, "1d": 86400}
 
 
 def _strategy_params() -> StrategyParams:
@@ -843,7 +851,7 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
     start_ts = int(market["window_start_ts"])
     slug = str(market["slug"])
     question = str(market.get("question") or slug)
-    remaining = max(0, start_ts + FIVE_MINUTES - now)
+    remaining = max(0, start_ts + int(market["window_seconds"]) - now)
 
     # Gamma is used for market DISCOVERY only. Its outcomePrices are
     # journaled to quantify staleness, never used for pricing (issue #22).
@@ -1072,23 +1080,23 @@ def _best_level(levels: Any) -> tuple[float | None, float | None]:
         return None, None
 
 
+NO_MARKET_FAMILY_REASON = (
+    "No market family is wired into the loop. The BTC 5-minute family was "
+    "removed 2026-09-19; build discovery for the replacement family here."
+)
+
+
 async def _fetch_current_market(client: httpx.AsyncClient, now: int) -> dict[str, Any]:
-    current_start = now - (now % FIVE_MINUTES)
-    # Try current first, then next and previous to handle boundary/API timing.
-    for start_ts in (current_start, current_start + FIVE_MINUTES, current_start - FIVE_MINUTES):
-        slug = f"btc-updown-5m-{start_ts}"
-        data = await _gamma_get(client, "markets", {"slug": slug})
-        market = _first(data)
-        if market is None:
-            event_data = await _gamma_get(client, "events", {"slug": slug})
-            event = _first(event_data)
-            markets = event.get("markets") if event else None
-            market = markets[0] if isinstance(markets, list) and markets else None
-        if market is None:
-            continue
-        market["window_start_ts"] = start_ts
-        return market
-    raise RuntimeError("Could not discover current BTC 5-minute Polymarket market.")
+    """Discover the current window market — NOT IMPLEMENTED for any family.
+
+    The contract for whoever wires the next one: return the Gamma market dict
+    with ``window_start_ts`` (unix start of the window) and ``window_seconds``
+    (its length, see ``TIMEFRAME_SECONDS``) set on it. Everything downstream
+    reads the window from those two keys and is otherwise family-agnostic.
+
+    ``_gamma_get`` and ``_first`` below remain as the building blocks.
+    """
+    raise RuntimeError(NO_MARKET_FAMILY_REASON)
 
 
 async def _gamma_get(
@@ -1451,7 +1459,7 @@ async def _close_due_positions(
 async def _close_rolled_position(
     pos: dict[str, Any], snapshot: PaperSnapshot, client: httpx.AsyncClient
 ) -> bool:
-    """Close a position whose 5-minute window has rolled.
+    """Close a position whose window has rolled.
 
     Live mode keeps the established path: the executor cancels any resting
     entry and flattens at the REAL book; the price passed here is advisory.
@@ -1524,7 +1532,7 @@ async def _settle_position_outcome(
 
 
 def _window_start_from_slug(slug: str) -> int | None:
-    """Unix start ts from a btc-updown-5m-<ts> slug, or None."""
+    """Unix start ts from a ``<asset>-updown-<tf>-<ts>`` slug, or None."""
     try:
         return int(str(slug).rsplit("-", 1)[-1])
     except (TypeError, ValueError):

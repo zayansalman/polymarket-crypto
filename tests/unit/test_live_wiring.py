@@ -32,7 +32,7 @@ async def bot_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _snapshot(side: str | None = "Up", notional: float = 3.0) -> paper.PaperSnapshot:
     return paper.PaperSnapshot(
         created_at="2026-06-10T12:00:00+00:00",
-        window_slug="btc-updown-5m-1770000000",
+        window_slug="btc-updown-1h-1770000000",
         market_question="Bitcoin Up or Down?",
         remaining_seconds=200,
         spot_price=100000.0,

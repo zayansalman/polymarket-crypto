@@ -27,7 +27,7 @@ class SnapshotView:
     """Immutable per-tick market view handed to a candidate strategy.
 
     Attributes:
-        window_slug: The Polymarket 5-minute window identifier.
+        window_slug: The Polymarket window identifier.
         remaining_seconds: Seconds left until the window resolves.
         spot: Current BTC spot from the settlement-aligned feed.
         reference: The window's open/reference print (resolves Up on >=).

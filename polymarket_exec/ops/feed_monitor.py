@@ -119,8 +119,21 @@ class FeedMonitor:
         market: dict[str, Any] | None = None
 
         async def gamma() -> None:
+            # Family-independent health check (2026-09-19): this used to probe
+            # via the loop's own market discovery, which tied feed health to
+            # whichever family was wired. It now asks Gamma for any open
+            # Up/Down crypto market, so the card keeps working while no family
+            # is wired at all.
             nonlocal market
-            market = await _paper._fetch_current_market(client, now)
+            r = await client.get(
+                f"{_config.POLYMARKET_GAMMA_API}/markets",
+                params={"closed": "false", "limit": 1, "tag_slug": "crypto"},
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if not isinstance(rows, list) or not rows:
+                raise _Unusable("no open crypto markets returned")
+            market = rows[0]
 
         await self._probe(GAMMA, gamma)
 

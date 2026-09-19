@@ -37,7 +37,7 @@ async def recorder(tmp_path: Path) -> MarketDataRecorder:
 @pytest.fixture
 def sample_window() -> MarketWindow:
     return MarketWindow(
-        slug="btc-updown-5m-1700000000",
+        slug="btc-updown-1h-1700000000",
         question="Bitcoin Up or Down - Dec 14, 2023?",
         start_ts=1700000000,
         end_ts=1700000300,

@@ -60,6 +60,9 @@ from config import (  # noqa: E402
 )
 
 HF_REPO = "aliplayer1/polymarket-crypto-updown"
+# "5-minute" stays selectable on purpose: the 5-minute family was removed from
+# the live path 2026-09-19, but this tool replays HISTORICAL datasets that
+# still contain those windows. It is no longer the default.
 TIMEFRAME_SECONDS = {"5-minute": 300, "15-minute": 900, "1-hour": 3600, "4-hour": 14400}
 
 
@@ -94,7 +97,7 @@ def _list_partition_files(prefix: str, crypto: str, timeframe: str) -> list[str]
     ]
 
 
-def load_markets(crypto: str = "BTC", timeframe: str = "5-minute") -> pl.DataFrame:
+def load_markets(crypto: str = "BTC", timeframe: str = "1-hour") -> pl.DataFrame:
     """Resolved markets of the given shape, with derived window-open ts."""
     path = _download("data/markets.parquet")
     df = (
@@ -127,7 +130,7 @@ def load_chainlink_btc_spots(min_ts_s: int, max_ts_s: int) -> pl.DataFrame:
 
 
 def load_market_prices(
-    market_ids: list[str], crypto: str = "BTC", timeframe: str = "5-minute"
+    market_ids: list[str], crypto: str = "BTC", timeframe: str = "1-hour"
 ) -> pl.DataFrame:
     """Per-market Up/Down mid-price evolution for the requested markets.
 
@@ -329,7 +332,7 @@ def aggregate_metrics(entries: list[ReplayEntry]) -> dict:
 
 
 def run(
-    timeframe: str = "5-minute",
+    timeframe: str = "1-hour",
     crypto: str = "BTC",
     max_markets: int | None = None,
     params: StrategyParams | None = None,
@@ -387,7 +390,7 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--timeframe", default="5-minute", choices=list(TIMEFRAME_SECONDS))
+    parser.add_argument("--timeframe", default="1-hour", choices=list(TIMEFRAME_SECONDS))
     parser.add_argument("--crypto", default="BTC")
     parser.add_argument(
         "--max-markets",

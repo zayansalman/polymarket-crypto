@@ -1,6 +1,6 @@
 """Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21).
 
-Polymarket resolves ``btc-updown-5m-*`` markets on its **Chainlink BTC/USD**
+Polymarket resolves ``btc-updown-*`` markets on its **Chainlink BTC/USD**
 data stream — "Up" iff close >= open — never on Binance or any other spot
 market. This module provides the two halves of that feed:
 
@@ -86,7 +86,7 @@ def chrome_headers(referer_slug: str | None = None) -> dict[str, str]:
     """Full Chrome fingerprint header set required by the Polymarket WAF.
 
     ``referer_slug`` should be the market/event slug (e.g.
-    ``btc-updown-5m-1781091600``) so the Referer matches a real event page.
+    ``btc-updown-1h-1781091600``) so the Referer matches a real event page.
     """
     referer = (
         f"https://polymarket.com/event/{referer_slug}"
@@ -129,7 +129,11 @@ def build_subscribe_message(symbol: str = "btc/usd") -> str:
 
 @dataclass(frozen=True)
 class WindowPrices:
-    """One 5-minute window as reported by the crypto-price REST endpoint."""
+    """One window as reported by the crypto-price REST endpoint.
+
+    The endpoint serves 5-minute OHLC bars — that is the venue feed's own
+    granularity, unrelated to the deleted 5-minute market family.
+    """
 
     open_price: float | None
     close_price: float | None

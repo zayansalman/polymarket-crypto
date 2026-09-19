@@ -249,7 +249,7 @@ def test_band_reentry_suppressed_when_feed_degraded():
 
     snapshot = PaperSnapshot(
         created_at="2026-06-11T00:00:00+00:00",
-        window_slug="btc-updown-5m-1781155200",
+        window_slug="btc-updown-1h-1781155200",
         market_question="q",
         remaining_seconds=200,
         spot_price=0.0,
@@ -274,7 +274,7 @@ def test_band_reentry_suppressed_when_feed_degraded():
         "entry_price": 0.50,
         "shares": 4.0,
         "notional_usd": 2.0,
-        "window_slug": "btc-updown-5m-1781155200",
+        "window_slug": "btc-updown-1h-1781155200",
     }
     # edge ~0 would trigger BAND_REENTRY were the feed healthy; degraded must hold.
     assert _exit_reason(snapshot, pos, exit_price=0.49) is None

@@ -1,6 +1,9 @@
-"""Polymarket connector — discovers the current BTC 5-minute binary market window.
+"""Polymarket connector — discovers the current Up/Down binary market window.
 
 Extracted and refactored from *polymarket_bot/paper.py* (lines 275-362).
+
+The asset and window length are constructor parameters: the hardcoded BTC
+5-minute family this was built for was removed 2026-09-19.
 """
 
 from __future__ import annotations
@@ -15,24 +18,36 @@ from polymarket_exec.core.exceptions import FeedError, MarketDiscoveryError
 from polymarket_exec.core.interfaces import AbstractMarketConnector
 from polymarket_exec.core.types import MarketWindow
 
-FIVE_MINUTES = 300  # 5 * 60 seconds
+# Window length per timeframe label. The 5-minute entry was removed 2026-09-19.
+TIMEFRAME_SECONDS: dict[str, int] = {"15m": 900, "1h": 3600, "1d": 86400}
+DEFAULT_ASSET = "btc"
+DEFAULT_TIMEFRAME = "1h"
 
 
 class PolymarketConnector(AbstractMarketConnector):
-    """Discover BTC 5m Up/Down markets on Polymarket via the Gamma API.
+    """Discover Up/Down markets on Polymarket via the Gamma API.
 
     Parameters:
         client: An *httpx.AsyncClient* instance (shared or dedicated).
         api_base: Root URL of the Polymarket Gamma API.
+        asset: Asset slug prefix, e.g. ``btc``.
+        timeframe: Window timeframe label, see :data:`TIMEFRAME_SECONDS`.
     """
 
     def __init__(
         self,
         client: httpx.AsyncClient,
         api_base: str = "https://gamma-api.polymarket.com",
+        asset: str = DEFAULT_ASSET,
+        timeframe: str = DEFAULT_TIMEFRAME,
     ) -> None:
+        if timeframe not in TIMEFRAME_SECONDS:
+            raise ValueError(f"unknown timeframe {timeframe!r}")
         self._client = client
         self._api_base = api_base.rstrip("/")
+        self._asset = asset
+        self._timeframe = timeframe
+        self._window_seconds = TIMEFRAME_SECONDS[timeframe]
 
     # ------------------------------------------------------------------
     # AbstractMarketConnector
@@ -41,27 +56,23 @@ class PolymarketConnector(AbstractMarketConnector):
     async def discover_current_window(self) -> MarketWindow:
         """Return the active :class:`MarketWindow` for the current time period.
 
-        The method tries the *current*, *next*, and *previous* 5-minute windows
-        because Polymarket may rotate markets slightly before/after the exact
-        boundary.
+        The method tries the *current*, *next*, and *previous* windows because
+        Polymarket may rotate markets slightly before/after the exact boundary.
 
         Raises:
             MarketDiscoveryError: when no active market can be found.
             FeedError: on HTTP errors from the Gamma API.
         """
         now = int(time.time())
-        current_start = now - (now % FIVE_MINUTES)
+        window = self._window_seconds
+        current_start = now - (now % window)
 
-        for start_ts in (
-            current_start,
-            current_start + FIVE_MINUTES,
-            current_start - FIVE_MINUTES,
-        ):
-            slug = f"btc-updown-5m-{start_ts}"
+        for start_ts in (current_start, current_start + window, current_start - window):
+            slug = f"{self._asset}-updown-{self._timeframe}-{start_ts}"
             market = await self._try_slug(slug)
             if market is not None:
                 up_price, down_price = _outcome_prices(market)
-                end_ts = start_ts + FIVE_MINUTES
+                end_ts = start_ts + window
                 return MarketWindow(
                     slug=slug,
                     question=market.get("question", ""),
@@ -72,8 +83,8 @@ class PolymarketConnector(AbstractMarketConnector):
                 )
 
         raise MarketDiscoveryError(
-            "Could not discover current BTC 5-minute Polymarket market "
-            f"(tried windows around {current_start})."
+            f"Could not discover current {self._asset}-updown-{self._timeframe} "
+            f"Polymarket market (tried windows around {current_start})."
         )
 
     async def health_check(self) -> dict:
