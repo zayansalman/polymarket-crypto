@@ -57,6 +57,44 @@ def _fill_row(f, now: float) -> str:
     )
 
 
+def _drift_html(drift: dict) -> str:
+    """How much of each target's recent flow is still on measured markets.
+
+    A wallet that has moved to markets it was never screened on cannot be
+    copied on that screening. This is the first thing to read, ahead of P&L.
+    """
+    if not drift:
+        return ""
+    rows = ""
+    off = 0
+    for addr, (label, followed, total) in sorted(
+        drift.items(), key=lambda kv: -(kv[1][1] / kv[1][2] if kv[1][2] else 0)
+    ):
+        pct = (100 * followed / total) if total else 0
+        if pct < 25:
+            off += 1
+        cls = "copy-good" if pct >= 50 else ("copy-warn" if pct >= 25 else "copy-bad")
+        rows += (
+            "<div class='copy-result'>"
+            f"<a class='copy-link' href='{PROFILE_URL}{escape(addr)}' target='_blank' "
+            f"rel='noopener'>{escape(label)}</a>"
+            f"<span>{followed}/{total} fills on measured markets</span>"
+            f"<span class='{cls}'>{pct:.0f}%</span>"
+            "</div>"
+        )
+    warn = (
+        f"<div class='copy-error'>{off} of {len(drift)} targets have left the "
+        "markets they were measured on — their screened edge does not apply to "
+        "what they are trading now.</div>"
+        if off else ""
+    )
+    return (
+        "<div class='copy-results'>"
+        "<div class='copy-results-h'>TARGET DRIFT</div>"
+        f"{warn}{rows}</div>"
+    )
+
+
 def _results_html(summary: dict) -> str:
     """Settled paper P&L per target — the number the morning read-out is for."""
     if not summary:
@@ -170,6 +208,7 @@ def render(
         f"<span>median lag <b>{state.median_lag:.0f}s</b></span>"
         "</div>"
         f"{err}"
+        f"{_drift_html(getattr(state, 'drift', {}) or {})}"
         f"{_results_html(summary or {})}"
         "<div class='gr-toggle-hint' style='margin:8px 0'>"
         "PAPER — copies are priced against the live ask ladder and charged the taker fee, but no real order is ever sent."

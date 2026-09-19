@@ -82,6 +82,10 @@ class WatcherState:
     target: str = ""
     label: str = ""
     watching: list[str] = field(default_factory=list)
+    drift: dict[str, tuple[str, int, int]] = field(default_factory=dict)
+    """address -> (label, fills on measured markets, fills seen). A target that
+    has moved to markets it was never measured on cannot be copied on that
+    evidence, and this is the number that says so."""
     copies_opened: int = 0
     settled_total: int = 0
     enabled: bool = False
@@ -223,6 +227,12 @@ class CopyWatcher:
                         self.state.copies_opened += 1
                 except Exception:  # noqa: BLE001
                     log.exception("copytrade.copy_failed", tx=f.tx[:14])
+
+        followed_n = sum(1 for f in fresh if f.followed)
+        prev = self.state.drift.get(address, (self.state.label, 0, 0))
+        self.state.drift[address] = (
+            self.state.label, prev[1] + followed_n, prev[2] + len(fresh)
+        )
 
         if fresh:
             self.state.fills = (fresh + self.state.fills)[: self.MAX_FILLS]

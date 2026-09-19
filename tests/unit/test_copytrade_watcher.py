@@ -128,3 +128,23 @@ def test_the_wallet_links_to_its_polymarket_profile() -> None:
     html = panel.render(state=state, target=_targets.get(_targets.DEFAULT_TARGET))
     assert f"https://polymarket.com/profile/{_targets.DEFAULT_TARGET}" in html
     assert "rel='noopener'" in html
+
+
+def test_drift_is_reported_when_a_target_leaves_its_measured_markets() -> None:
+    """The failure that disqualified an earlier candidate must be visible.
+
+    A wallet screened on Up-or-Down markets that is now trading weather or
+    sports cannot be copied on that screening, and the card has to say so
+    before it shows any P&L.
+    """
+    state = _watcher.WatcherState(
+        target=_targets.DEFAULT_TARGET, label="kodeoed", enabled=True, connected=True
+    )
+    state.drift = {
+        _targets.DEFAULT_TARGET: ("kodeoed", 0, 40),      # fully drifted
+        "0x83451c358d50b3f8982124fc741e8bda4b4edd93": ("Oldstreet", 83, 89),
+    }
+    html = panel.render(state=state, target=_targets.get(_targets.DEFAULT_TARGET))
+    assert "TARGET DRIFT" in html
+    assert "have left the markets they were measured on" in html
+    assert "0/40" in html and "83/89" in html
