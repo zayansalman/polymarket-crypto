@@ -1,6 +1,6 @@
 # Gradient-boosted trees for medium-speed crypto signals — fit check + model hunt (parked 2026-09-19)
 
-Backlog issue: see the issue linked from this branch.
+Backlog issue: #260
 
 Desk research only. **No code, no training, no backtest.** Nothing here has been measured. Parked
 at this point so it is recoverable later.
