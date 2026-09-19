@@ -1,0 +1,78 @@
+{
+ "events": [
+  {
+   "description": "Stress Testing",
+   "location": "At a Chat with U.S. Federal Reserve Vice Chair for Supervision Michelle Bowman, London, United Kingdom",
+   "title": "Speech - Vice Chair for Supervision Michelle W. Bowman",
+   "time": "9:30 a.m.",
+   "month": "2026-09",
+   "days": "18",
+   "type": "Speeches"
+  },
+  {
+   "description": "Economic Outlook",
+   "location": "At the Reuters NEXT Newsmaker Interview (Virtual)",
+   "title": "Speech - Governor Christopher J. Waller",
+   "time": "8:30 a.m.",
+   "month": "2026-09",
+   "days": "3",
+   "type": "Speeches"
+  },
+  {
+   "description": "&lt;p&gt;Meeting of December 8-9&lt;/p&gt;",
+   "title": "FOMC Minutes",
+   "time": "2:00 p.m.",
+   "month": "2026-12",
+   "days": "30",
+   "type": "FOMC"
+  },
+  {
+   "title": "Beige Book",
+   "time": "2:00 p.m.",
+   "month": "2026-10",
+   "days": "14",
+   "type": "Beige"
+  },
+  {
+   "title": "FOMC Press Conference",
+   "time": "2:30 p.m.",
+   "month": "2026-09",
+   "days": "16",
+   "type": "FOMC"
+  },
+  {
+   "description": "&lt;p&gt;Two-day meeting, December 8 - 9&lt;/p&gt;&#10;&#10;&lt;p&gt;Press Conference&lt;/p&gt;",
+   "title": "FOMC Meeting",
+   "time": "2:00 p.m.",
+   "month": "2026-12",
+   "days": "9",
+   "type": "FOMC"
+  },
+  {
+   "description": "&lt;p&gt;Two-day meeting, September 15 - 16&lt;/p&gt;&#10;&#10;&lt;p&gt;Press Conference&lt;/p&gt;",
+   "title": "FOMC Meeting",
+   "time": "2:00 p.m.",
+   "month": "2026-09",
+   "days": "16",
+   "type": "FOMC"
+  },
+  {
+   "description": "Moderated Discussion",
+   "location": "At the New York Times DealBook Summit, New York, N.Y.",
+   "title": "Discussion -- Chair Jerome H. Powell",
+   "time": "1:40 p.m.",
+   "month": "",
+   "days": "4",
+   "type": "events"
+  },
+  {},
+  {
+   "description": "&lt;p&gt;The daily and weekly statistical releases scheduled for today will be released on Monday December 28.&lt;/p&gt;",
+   "title": "Holiday - Christmas Day",
+   "time": "",
+   "month": "2026-12",
+   "days": "25",
+   "type": "Other"
+  }
+ ]
+}

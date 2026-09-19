@@ -179,6 +179,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_shadow_positions_window
   ON daily_shadow_positions(window_slug);
 CREATE INDEX IF NOT EXISTS idx_daily_shadow_positions_asset
   ON daily_shadow_positions(asset);
+
+-- Venue flow feeds: one closed-hour trade-flow bar per (venue, symbol, hour).
+-- complete=0 marks an hour a live WS feed did not see end to end (a reconnect,
+-- or the recorder starting mid-hour). Observation data for the hourly BTC strategy.
+CREATE TABLE IF NOT EXISTS venue_flow_hourly (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  hour_start_ms INTEGER NOT NULL,
+  open REAL,
+  high REAL,
+  low REAL,
+  close REAL,
+  volume REAL NOT NULL,
+  taker_buy_volume REAL NOT NULL,
+  trades INTEGER NOT NULL,
+  complete INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_venue_flow_hourly_key
+  ON venue_flow_hourly(venue, symbol, hour_start_ms);
+
+-- Perp venue state (mark, index, funding, open interest) sampled each hour.
+CREATE TABLE IF NOT EXISTS venue_snapshot (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  taken_at_ms INTEGER NOT NULL,
+  mark_price REAL,
+  index_price REAL,
+  funding_rate REAL,
+  next_funding_ms INTEGER,
+  open_interest REAL,
+  source TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_venue_snapshot_key
+  ON venue_snapshot(venue, symbol, taken_at_ms);
+
+-- Macro calendar: scheduled US releases and Fed events from official calendars (BLS, BEA,
+-- Census, Fed) and ForexFactory. A future slot that vanishes from its source's next pull
+-- becomes status='removed', so a reschedule shows as the old time removed and the new
+-- time appearing. first_seen_ms says when the schedule was first known. Observation data.
+CREATE TABLE IF NOT EXISTS macro_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  scheduled_at_ms INTEGER NOT NULL,
+  reference_period TEXT,
+  status TEXT NOT NULL CHECK (status IN ('scheduled', 'removed')),
+  first_seen_ms INTEGER NOT NULL,
+  last_seen_ms INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_macro_events_key
+  ON macro_events(source, title, scheduled_at_ms);
+CREATE INDEX IF NOT EXISTS idx_macro_events_time
+  ON macro_events(scheduled_at_ms);
+
+-- Consensus (impact, forecast, previous) per release, one row per observed change, so
+-- each value keeps the time it was first seen (taken_at_ms) — no lookahead when read back.
+CREATE TABLE IF NOT EXISTS macro_consensus (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  title TEXT NOT NULL,
+  country TEXT NOT NULL,
+  category TEXT NOT NULL,
+  scheduled_at_ms INTEGER NOT NULL,
+  impact TEXT,
+  forecast TEXT,
+  previous TEXT,
+  taken_at_ms INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_macro_consensus_key
+  ON macro_consensus(source, title, scheduled_at_ms, taken_at_ms);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {

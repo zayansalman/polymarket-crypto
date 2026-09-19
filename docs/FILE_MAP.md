@@ -6,10 +6,10 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 29 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 32 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 14 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 11 | Structured JSON logging with structlog. Module + trade_id context. |
+| `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
+| `logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -46,14 +46,18 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/backtest/conditional.py` | DEAD? | 0 | Conditional backtest — evaluates strategy on historical user trades. |
 | `polymarket_exec/backtest/harness.py` | DEAD? | 0 | Full-market backtest harness. |
 | `polymarket_exec/backtest/metrics.py` | WIRED | 1 | Backtest metrics, friction models, and reporting data classes. |
-| `polymarket_exec/connectors/__init__.py` | pkg | 0 | Exchange and data connectors. |
+| `polymarket_exec/connectors/__init__.py` | pkg | 2 | Exchange and data connectors. |
 | `polymarket_exec/connectors/base.py` | DEAD? | 0 | Re-export abstract base classes and exceptions for connector authors. |
 | `polymarket_exec/connectors/binance.py` | DEAD? | 0 | Binance connector — BTC spot price and recent close history. |
 | `polymarket_exec/connectors/chainlink.py` | DEAD? | 0 | Chainlink Data Streams connector stub. |
 | `polymarket_exec/connectors/chainlink_settlement.py` | WIRED | 2 | Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21). |
+| `polymarket_exec/connectors/macro_calendar.py` | WIRED | 2 | Pure parsers for US macro release calendars: BLS/BEA ICS, Census and Fed calendars, ForexFactory. |
 | `polymarket_exec/connectors/polymarket.py` | DEAD? | 0 | Polymarket connector — discovers the current BTC 5-minute binary market window. |
 | `polymarket_exec/connectors/registry.py` | WIRED | 1 | Connector registry — manages the lifecycle and discovery of all connectors. |
-| `polymarket_exec/connectors/updown_quote.py` | WIRED | 3 | Live top-of-book quote for the current window of any crypto Up/Down market. |
+| `polymarket_exec/connectors/updown_quote.py` | WIRED | 4 | Live top-of-book quote for the current window of any crypto Up/Down market. |
+| `polymarket_exec/connectors/venue_flow.py` | WIRED | 3 | Closed-hour trade-flow bars and venue state snapshots for the Binance and Kraken feeds. |
+| `polymarket_exec/connectors/venue_messages.py` | WIRED | 1 | Parsers for venue feed frames: Kraken spot/futures trades, Binance liquidations, perp state. |
+| `polymarket_exec/connectors/ws_runner.py` | WIRED | 1 | Reconnecting WebSocket loop shared by the venue trade feeds (Kraken, Binance liquidations). |
 | `polymarket_exec/core/__init__.py` | pkg | 0 | Core domain types, interfaces, and exceptions. |
 | `polymarket_exec/core/exceptions.py` | WIRED | 4 | Custom exception hierarchy for the BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/core/interfaces.py` | WIRED | 10 | Abstract base classes for all pluggable system components. |
@@ -63,6 +67,15 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/execution/live.py` | WIRED | 7 | Live execution on the Polymarket CLOB via py-clob-client. |
 | `polymarket_exec/execution/paper.py` | WIRED | 1 | Paper execution manager — explicit order lifecycle with SQLite persistence. |
 | `polymarket_exec/execution/risk.py` | WIRED | 1 | Venue-independent risk service — pre-trade and post-trade risk controls. |
+| `polymarket_exec/marketdata/__init__.py` | pkg | 5 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
+| `polymarket_exec/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
+| `polymarket_exec/marketdata/clob_shard.py` | WIRED | 1 | One asset x timeframe's market-channel connections: N redundant sockets, the freshest served. |
+| `polymarket_exec/marketdata/clob_stream.py` | WIRED | 4 | Reconnecting connection to the Polymarket CLOB market channel (books, trades, lifecycle). |
+| `polymarket_exec/marketdata/hub.py` | WIRED | 5 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
+| `polymarket_exec/marketdata/order_book.py` | WIRED | 3 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
+| `polymarket_exec/marketdata/rest_poll.py` | WIRED | 1 | A light REST /book poll running alongside the sockets on the markets in use. |
+| `polymarket_exec/marketdata/rtds_stream.py` | WIRED | 2 | Chainlink, Chainlink 60 s TWAP and Binance prices from Polymarket's RTDS WebSocket. |
+| `polymarket_exec/marketdata/universe.py` | WIRED | 1 | Which Polymarket Up/Down windows to follow, and their outcome token ids. |
 | `polymarket_exec/ops/__init__.py` | pkg | 3 | Operator controls and telemetry. |
 | `polymarket_exec/ops/controller.py` | DEAD? | 0 | Unified bot controller — tick loop using execution manager + risk service. |
 | `polymarket_exec/ops/dashboard/__init__.py` | pkg | 2 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
@@ -76,7 +89,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
-| `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: one row per live upstream feed — what it feeds, source, delay, status. |
+| `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
 | `polymarket_exec/ops/dashboard/panels/market_selector.py` | WIRED | 1 | Topbar market selector: asset buttons over timeframe buttons. |
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |
@@ -85,11 +98,15 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/tca.py` | WIRED | 1 | TCA panel: quoted spread, half-spread, edge capture, Brier calibration. |
 | `polymarket_exec/ops/dashboard/quote_feed.py` | WIRED | 2 | Background quote poller for the dashboard's order-size ticket. |
 | `polymarket_exec/ops/feed_monitor.py` | WIRED | 3 | Always-on feed monitor: keeps the live feeds connected and checks each one. |
+| `polymarket_exec/ops/flow_recorder.py` | WIRED | 3 | Always-on recorder for venue trade-flow feeds: Binance spot/perp/liquidations and Kraken. |
 | `polymarket_exec/ops/incidents.py` | WIRED | 1 | Incident state machine and operator runbooks for the BTC 5m pricing-model system. |
+| `polymarket_exec/ops/macro_recorder.py` | WIRED | 3 | Always-on recorder for macro feeds: each source polled on its own cadence into SQLite. |
 | `polymarket_exec/ops/telemetry.py` | WIRED | 1 | Feed health telemetry and latency tracking for the BTC 5m pricing-model system. |
-| `polymarket_exec/storage/__init__.py` | pkg | 0 | Persistence layer — database, recording, and replay. |
+| `polymarket_exec/storage/__init__.py` | pkg | 2 | Persistence layer — database, recording, and replay. |
+| `polymarket_exec/storage/macro_store.py` | WIRED | 1 | SQLite read/write for the macro calendar: scheduled events and first-seen consensus values. |
 | `polymarket_exec/storage/recorder.py` | WIRED | 2 | Market data recorder — persists raw market snapshots to SQLite for deterministic replay. |
 | `polymarket_exec/storage/replay.py` | DEAD? | 0 | Deterministic replay — feed recorded market data through a signal generator. |
+| `polymarket_exec/storage/venue_flow_store.py` | WIRED | 1 | SQLite read/write for venue flow hour bars and perp venue snapshots. |
 | `polymarket_exec/strategy/__init__.py` | pkg | 0 | Signal generation module — pricing model, sizing, and signal composition. |
 | `polymarket_exec/strategy/pricing_model.py` | WIRED | 2 | Pricing-model probability and volatility estimation. |
 | `polymarket_exec/strategy/signal.py` | DEAD? | 0 | Signal composition — bridge raw edge into a fully typed :class:`Signal`. |

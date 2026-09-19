@@ -10,6 +10,9 @@ structlog==24.4.0
 gradio==5.49.1
 py-clob-client-v2==1.0.1
 websockets==16.0
+# zoneinfo's IANA database: python:3.11-slim ships no system tzdata, and the macro
+# calendar parsers convert naive US Eastern release times (DST-aware).
+tzdata==2025.3
 
 # Offline replay harness (tools/offline_replay.py, issue #56).
 # Parquet via huggingface-hub direct download (no `datasets` runtime needed);

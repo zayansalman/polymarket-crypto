@@ -1,0 +1,12 @@
+{
+ "connection_id": "test-connection-id",
+ "payload": {
+  "full_accuracy_value": "75964.00000000",
+  "symbol": "btcusdt",
+  "timestamp": 1789555684000,
+  "value": 75964
+ },
+ "timestamp": 1789555684182,
+ "topic": "crypto_prices",
+ "type": "update"
+}
