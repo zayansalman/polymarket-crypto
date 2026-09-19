@@ -6,10 +6,10 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 30 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 31 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
 | `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 14 | Structured JSON logging with structlog. Module + trade_id context. |
+| `logging_setup.py` | WIRED | 19 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -54,7 +54,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/connectors/macro_calendar.py` | WIRED | 2 | Pure parsers for US macro release calendars: BLS/BEA ICS, Census and Fed calendars, ForexFactory. |
 | `polymarket_exec/connectors/polymarket.py` | DEAD? | 0 | Polymarket connector — discovers the current BTC 5-minute binary market window. |
 | `polymarket_exec/connectors/registry.py` | WIRED | 1 | Connector registry — manages the lifecycle and discovery of all connectors. |
-| `polymarket_exec/connectors/updown_quote.py` | WIRED | 2 | Live top-of-book quote for the current window of any crypto Up/Down market. |
+| `polymarket_exec/connectors/updown_quote.py` | WIRED | 3 | Live top-of-book quote for the current window of any crypto Up/Down market. |
 | `polymarket_exec/connectors/venue_flow.py` | WIRED | 3 | Closed-hour trade-flow bars and venue state snapshots for the Binance and Kraken feeds. |
 | `polymarket_exec/connectors/venue_messages.py` | WIRED | 1 | Parsers for venue feed frames: Kraken spot/futures trades, Binance liquidations, perp state. |
 | `polymarket_exec/connectors/ws_runner.py` | WIRED | 1 | Reconnecting WebSocket loop shared by the venue trade feeds (Kraken, Binance liquidations). |
@@ -67,6 +67,14 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/execution/live.py` | WIRED | 7 | Live execution on the Polymarket CLOB via py-clob-client. |
 | `polymarket_exec/execution/paper.py` | WIRED | 1 | Paper execution manager — explicit order lifecycle with SQLite persistence. |
 | `polymarket_exec/execution/risk.py` | WIRED | 1 | Venue-independent risk service — pre-trade and post-trade risk controls. |
+| `polymarket_exec/marketdata/__init__.py` | pkg | 3 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
+| `polymarket_exec/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
+| `polymarket_exec/marketdata/clob_shard.py` | WIRED | 1 | One asset x timeframe's market-channel connections: N redundant sockets, the freshest served. |
+| `polymarket_exec/marketdata/clob_stream.py` | WIRED | 3 | Reconnecting connection to the Polymarket CLOB market channel (books, trades, lifecycle). |
+| `polymarket_exec/marketdata/hub.py` | WIRED | 3 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
+| `polymarket_exec/marketdata/order_book.py` | WIRED | 2 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
+| `polymarket_exec/marketdata/rtds_stream.py` | WIRED | 2 | Chainlink, Chainlink 60 s TWAP and Binance prices from Polymarket's RTDS WebSocket. |
+| `polymarket_exec/marketdata/universe.py` | WIRED | 1 | Which Polymarket Up/Down windows to follow, and their outcome token ids. |
 | `polymarket_exec/ops/__init__.py` | pkg | 3 | Operator controls and telemetry. |
 | `polymarket_exec/ops/controller.py` | DEAD? | 0 | Unified bot controller — tick loop using execution manager + risk service. |
 | `polymarket_exec/ops/dashboard/__init__.py` | pkg | 2 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |

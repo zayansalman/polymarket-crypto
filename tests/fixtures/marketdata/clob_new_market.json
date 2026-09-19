@@ -1,0 +1,44 @@
+{
+ "id": "4610306",
+ "question": "Dogecoin Up or Down - September 17, 6:20AM-6:25AM ET",
+ "market": "0x44c5dcfb5c17e7e1367d62ba50dc6e581489371674ec1229ba5d3ffca9e4ab60",
+ "slug": "doge-updown-5m-1789640400",
+ "description": "This market will resolve to \"Up\" if ... (trimmed in fixture)",
+ "assets_ids": [
+  "928418278557132166815334280270897925187552104377290215935342525292646419327",
+  "74034782249289360232835014759878476192308275296302561409923515513263342883075"
+ ],
+ "outcomes": [
+  "Up",
+  "Down"
+ ],
+ "event_message": {
+  "id": "1032440",
+  "ticker": "doge-updown-5m-1789640400",
+  "slug": "doge-updown-5m-1789640400",
+  "title": "Dogecoin Up or Down - September 17, 6:20AM-6:25AM ET",
+  "description": "This market will resolve to \"Up\" if ... (trimmed in fixture)"
+ },
+ "timestamp": "1789554484390",
+ "event_type": "new_market",
+ "tags": [],
+ "condition_id": "0x44c5dcfb5c17e7e1367d62ba50dc6e581489371674ec1229ba5d3ffca9e4ab60",
+ "active": false,
+ "clob_token_ids": [
+  "928418278557132166815334280270897925187552104377290215935342525292646419327",
+  "74034782249289360232835014759878476192308275296302561409923515513263342883075"
+ ],
+ "sports_market_type": "",
+ "line": "",
+ "game_start_time": "",
+ "order_price_min_tick_size": "0.01",
+ "group_item_title": "",
+ "taker_base_fee": "1000",
+ "fees_enabled": true,
+ "fee_schedule": {
+  "exponent": "1",
+  "rate": "0.07",
+  "taker_only": true,
+  "rebate_rate": "0.2"
+ }
+}

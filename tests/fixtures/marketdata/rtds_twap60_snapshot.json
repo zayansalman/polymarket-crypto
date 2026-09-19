@@ -1,0 +1,41 @@
+{
+ "payload": {
+  "data": [
+   {
+    "full_accuracy_value": "75909845368704719650816",
+    "timestamp": 1789556832000,
+    "value": 75909.84536870471
+   },
+   {
+    "full_accuracy_value": "75909674162282108551168",
+    "timestamp": 1789556833000,
+    "value": 75909.67416228211
+   },
+   {
+    "full_accuracy_value": "75909479397423082110976",
+    "timestamp": 1789556834000,
+    "value": 75909.47939742309
+   },
+   {
+    "full_accuracy_value": "75883501895407059861504",
+    "timestamp": 1789556888000,
+    "value": 75883.50189540705
+   },
+   {
+    "full_accuracy_value": "75882892046344441036800",
+    "timestamp": 1789556889000,
+    "value": 75882.89204634444
+   },
+   {
+    "full_accuracy_value": "75882547258510851178496",
+    "timestamp": 1789556890000,
+    "value": 75882.54725851085
+   }
+  ],
+  "symbol": "btc/usd",
+  "window_s": 60
+ },
+ "timestamp": 1789556891045,
+ "topic": "crypto_prices_twap_sixty",
+ "type": "subscribe"
+}

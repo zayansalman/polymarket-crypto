@@ -1,0 +1,22 @@
+{
+ "id": "4582819",
+ "market": "0x191a754c23ea0c1d99806e276dcdef4fc889b9df96d68a7bbd754cab93b4315b",
+ "assets_ids": [
+  "114913762780821793206690127425851936148121536583266522061531446056358211574528",
+  "100597603433723359547568025533603944114661331854577298918043161589393274295019"
+ ],
+ "winning_asset_id": "114913762780821793206690127425851936148121536583266522061531446056358211574528",
+ "winning_outcome": "Up",
+ "event_message": null,
+ "timestamp": "1789555023725",
+ "event_type": "market_resolved",
+ "tags": [
+  "Crypto",
+  "Bitcoin",
+  "Crypto Prices",
+  "Recurring",
+  "Up or Down",
+  "Hide From New",
+  "5M"
+ ]
+}

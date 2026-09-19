@@ -1,0 +1,8 @@
+{
+ "market": "0x191a754c23ea0c1d99806e276dcdef4fc889b9df96d68a7bbd754cab93b4315b",
+ "asset_id": "114913762780821793206690127425851936148121536583266522061531446056358211574528",
+ "old_tick_size": "0.01",
+ "new_tick_size": "0.001",
+ "timestamp": "1789554926589",
+ "event_type": "tick_size_change"
+}

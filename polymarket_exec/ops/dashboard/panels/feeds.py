@@ -1,13 +1,15 @@
 """FEEDS card: one row per live upstream feed — what it feeds, source, delay, status.
 
 Rows come from the always-on feed monitor (``polymarket_exec/ops/feed_monitor.py``),
-the venue flow recorder and the macro recorder, which check every feed directly — so
-the card is live whether or not the bot loop is running. Rows are plain data
-(``FeedRow``) so new venues are one more row.
+the market-data hub (``polymarket_exec/marketdata/hub.py``), the venue flow recorder
+and the macro recorder, which check every feed directly — so the card is live whether
+or not the bot loop is running. Rows are plain data (``FeedRow``) so new venues are one
+more row.
 
-Delay is the age of the latest print for the Chainlink WS stream, the round-trip
-time of the latest check for each monitored REST feed, and the age of the last
-successful pull for recorder feeds.
+Delay is the age of the latest print for the Chainlink WS stream and the RTDS price
+rows, the round-trip time of the latest check for each monitored REST feed, the event
+latency (p50 served to readers, for the slowest asset x timeframe), and the age of the
+last successful pull for recorder feeds.
 """
 from __future__ import annotations
 
@@ -15,6 +17,8 @@ from dataclasses import dataclass
 from html import escape
 
 import config as _config
+from polymarket_exec.marketdata import hub as md_hub
+from polymarket_exec.marketdata import rtds_stream as rs
 from polymarket_exec.ops import feed_monitor as fm
 from polymarket_exec.ops import flow_recorder as fr
 from polymarket_exec.ops import macro_recorder as mr
@@ -64,6 +68,19 @@ _MACRO_FEEDS = (
     (mr.FED_CALENDAR, "Fed calendar", "FOMC · speeches", "federalreserve.gov JSON"),
     (mr.FF_WEEK, "ForexFactory week", "forecasts · claims", "faireconomy JSON"),
 )
+
+# (price source, name, used for) — RTDS reference price rows, in card order.
+_PRICE_FEEDS = (
+    (rs.CHAINLINK, "Chainlink prices", "spot · vol"),
+    (rs.CHAINLINK_TWAP60, "Chainlink 60s TWAP", "5m·15m settle ref"),
+    (rs.BINANCE, "Binance prices", "1h·1d settle ref"),
+)
+# The CLOB market socket, connected, with no data frame for this long is flagged.
+BOOKS_STALE_S = 45.0
+# A market socket whose median event latency is above this is serving stale books.
+BOOKS_LAG_S = 5.0
+# A reference price whose newest print is older than this is flagged.
+PRICE_STALE_S = 10.0
 
 # A connected trade socket with no frame for this long is flagged (or QUIET if normal).
 WS_STALE_S = 120.0
@@ -164,6 +181,71 @@ def _flow_row(
     return FeedRow(name, role, source, delay, "OK", "on")
 
 
+def _books_row(md: md_hub.MarketDataSnapshot) -> FeedRow:
+    name, source = "Polymarket books", "CLOB market WS"
+    role = f"Up/Down books · trades ({md.markets} markets)"
+    st = md.clob
+    p50 = st.latency_ms_p50  # the worst group's served latency
+    delay = _ms(p50) if p50 is not None else "—"
+    slow = p50 is not None and p50 > SLOW_MS
+    wanted = [s for s in md.clob_shards.values() if s.desired > 0]
+    if st.connected:
+        if st.subscribed == 0:
+            return FeedRow(name, role, source, delay, "IDLE", "idle", False,
+                           "connected; no market tokens to follow yet")
+        seen = [t for t in (st.last_frame_at, st.connected_since) if t is not None]
+        quiet = md.taken_at - max(seen) if seen else 0.0
+        if quiet > BOOKS_STALE_S:
+            return FeedRow(name, role, source, delay, "STALE", "warn", True,
+                           f"connected, but no data for {_secs(quiet)}")
+        slowest = md.slowest_shard or "a market"
+        if p50 is not None and p50 > BOOKS_LAG_S * 1000:
+            return FeedRow(name, role, source, delay, "STALE", "warn", True,
+                           f"{slowest} is {_secs(p50 / 1000)} behind (served latency)")
+        detail = f"slowest: {slowest}" if slow else None
+        conns = [c for s in wanted for c in s.connections]
+        reconnecting = sum(1 for c in conns if not c.connected)
+        if reconnecting and detail is None:
+            detail = (f"{reconnecting} of {len(conns)} connections reconnecting; "
+                      "every market is still served")
+        return FeedRow(name, role, source, delay, "OK", "on", slow, detail)
+    if md.taken_at - md.started_at <= WS_CONNECT_GRACE_S:
+        return FeedRow(name, role, source, delay, "CONNECTING", "idle")
+    if md.tokens == 0:
+        detail = "no market tokens yet"
+        if md.gamma_errors:
+            detail += f" (Gamma lookups failing: {md.gamma_last_error or 'error'})"
+    else:
+        detail = st.last_error or "not connected (reconnecting)"
+        down = sum(1 for s in wanted if s.connected == 0)
+        if 0 < down < len(wanted):  # one socket group per asset x timeframe
+            detail = f"{down} of {len(wanted)} asset/timeframe feeds down; {detail}"
+    return FeedRow(name, role, source, delay, "DOWN", "down", slow, detail[:200])
+
+
+def _price_row(md: md_hub.MarketDataSnapshot, key: str, name: str, role: str) -> FeedRow:
+    source = "RTDS WS"
+    st = md.prices.get(key)
+    age = md.price_ages.get(key)
+    delay = _secs(age) if age is not None else "—"
+    stale = age is not None and age > PRICE_STALE_S
+    booting = md.taken_at - md.started_at <= WS_CONNECT_GRACE_S
+    if st is not None and st.connected:
+        if age is None:
+            if booting:
+                return FeedRow(name, role, source, delay, "CONNECTING", "idle")
+            return FeedRow(name, role, source, delay, "STALE", "warn", False,
+                           "connected, but no prints yet")
+        if stale:
+            return FeedRow(name, role, source, delay, "STALE", "warn", True,
+                           "connected, but no recent prints")
+        return FeedRow(name, role, source, delay, "OK", "on")
+    if booting:
+        return FeedRow(name, role, source, delay, "CONNECTING", "idle", stale)
+    detail = (st.last_error if st is not None else None) or "not connected (reconnecting)"
+    return FeedRow(name, role, source, delay, "DOWN", "down", stale, detail)
+
+
 def _macro_row(macro: mr.MacroSnapshot, key: str, name: str, role: str, source: str) -> FeedRow:
     st = macro.feeds.get(key)
     if st is None or st.last_attempt_at is None:
@@ -195,6 +277,7 @@ def build_rows(
     snap: fm.FeedsSnapshot | None,
     flow: fr.FlowSnapshot | None = None,
     macro: mr.MacroSnapshot | None = None,
+    marketdata: md_hub.MarketDataSnapshot | None = None,
 ) -> list[FeedRow]:
     if snap is None:
         # Feed monitor not running (only outside the dashboard app).
@@ -204,6 +287,9 @@ def build_rows(
         rows = [FeedRow(n, r, s, "—", "OFF", "idle") for n, r, s in names]
     else:
         rows = [_ws_row(snap)] + [_rest_row(snap, *feed) for feed in _REST_FEEDS]
+    if marketdata is not None:
+        rows.append(_books_row(marketdata))
+        rows += [_price_row(marketdata, *feed) for feed in _PRICE_FEEDS]
     if flow is not None:
         rows += [_flow_row(flow, *feed) for feed in _FLOW_FEEDS]
     if macro is not None:
@@ -215,8 +301,9 @@ def render(
     snap: fm.FeedsSnapshot | None,
     flow: fr.FlowSnapshot | None = None,
     macro: mr.MacroSnapshot | None = None,
+    marketdata: md_hub.MarketDataSnapshot | None = None,
 ) -> str:
-    rows = build_rows(snap, flow, macro)
+    rows = build_rows(snap, flow, macro, marketdata)
     issues = sum(r.level in ("warn", "down") for r in rows)
     note = "all OK" if not issues else f"{issues} issue{'s' if issues != 1 else ''}"
     body = "".join(
