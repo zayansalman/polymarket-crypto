@@ -1,10 +1,13 @@
 name: CI
 
+# develop is the integration branch every feature branch targets, so it has to
+# be covered: with main/master only, no PR into develop was ever tested and the
+# gates below only ran on the final develop -> main merge.
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 jobs:
   test:
