@@ -132,14 +132,26 @@ async def _lifespan(app: FastAPI):
     _feed_monitor.set_current(monitor)
     _paper.set_shared_chainlink_feed(monitor.chainlink_ws)
 
+    # Venue flow recorder: hourly trade-flow bars from Binance (spot, perp,
+    # liquidations) and Kraken (spot, futures) for the hourly BTC strategy,
+    # recorded whether or not the bot loop runs.
+    from polymarket_exec.ops import flow_recorder as _flow_recorder
+
+    recorder = _flow_recorder.FlowRecorder()
+    flow_stop_event = asyncio.Event()
+    flow_task = asyncio.create_task(recorder.run(flow_stop_event))
+    _flow_recorder.set_current(recorder)
+
     yield
 
     _paper.set_shared_chainlink_feed(None)
     _feed_monitor.set_current(None)
+    _flow_recorder.set_current(None)
     for stop_event, task in (
         (daily_stop_event, daily_task),
         (quote_stop_event, quote_task),
         (feeds_stop_event, feeds_task),
+        (flow_stop_event, flow_task),
     ):
         stop_event.set()
         task.cancel()
