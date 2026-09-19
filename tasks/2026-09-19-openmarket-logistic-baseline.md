@@ -1,6 +1,6 @@
 # OpenMarket — a public logistic regression trained on Polymarket BTC 15m markets
 
-Parked 2026-09-19. Search-only session: nothing was built, run, or measured here. This
+Parked 2026-09-19 as issue #257. Search-only session: nothing was built, run, or measured here. This
 note records what exists publicly so the next attempt at "logistic regression on
 hand-built features" starts from someone else's measured result instead of from zero.
 
