@@ -169,29 +169,51 @@ async def _settle_due(client: httpx.AsyncClient) -> None:
     """
     now = int(datetime.now(UTC).timestamp())
     for row in await _ledger.open_settlement_candidates():
-        end = _epoch_or_none(row["resolves_at"])
-        if end is None or now < end:
-            continue
-        settlement_price = await _market.fetch_close_at(client, row["binance_symbol"], end)
-        if settlement_price is None:
-            continue
-        reference = row["reference_price"]
-        if settlement_price == reference:
-            outcome_side = None  # exact tie -> resolves 50-50, see ledger.settle
-        else:
-            outcome_side = "Up" if settlement_price > reference else "Down"
-        n = await _ledger.settle(
+        # Per row, mirroring the entry half's per-asset isolation: one row
+        # whose price lookup misbehaves must not abort settlement for every
+        # other due window, on every tick, forever.
+        try:
+            await _settle_row(client, row, now)
+        except Exception:  # noqa: BLE001 — one poison row must not strand the rest
+            log.exception("daily_scan.settle_row_failed", window_slug=row["window_slug"])
+
+
+async def _settle_row(client: httpx.AsyncClient, row: dict, now: int) -> None:
+    """Settle one open row, if its resolution instant has passed."""
+    end = _epoch_or_none(row["resolves_at"])
+    if end is None:
+        log.warning("daily_scan.settle_bad_resolves_at", window_slug=row["window_slug"])
+        return
+    if now < end:
+        return  # still trading: not a failure, and the common case
+    settlement_price = await _market.fetch_close_at(client, row["binance_symbol"], end)
+    if settlement_price is None:
+        # fetch_close_at turns every HTTP error into None, so without this
+        # the row strands exactly like the bug scan_once fixes, but silently
+        # (AGENTS.md: no silent failures).
+        log.warning(
+            "daily_scan.settle_price_unavailable",
             window_slug=row["window_slug"],
-            outcome_side=outcome_side,
-            settlement_price=settlement_price,
-            resolved_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            symbol=row["binance_symbol"],
         )
-        if n:
-            log.info(
-                "daily_scan.settled",
-                window_slug=row["window_slug"],
-                outcome=outcome_side or "tie",
-            )
+        return
+    reference = row["reference_price"]
+    if settlement_price == reference:
+        outcome_side = None  # exact tie -> resolves 50-50, see ledger.settle
+    else:
+        outcome_side = "Up" if settlement_price > reference else "Down"
+    n = await _ledger.settle(
+        window_slug=row["window_slug"],
+        outcome_side=outcome_side,
+        settlement_price=settlement_price,
+        resolved_at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
+    if n:
+        log.info(
+            "daily_scan.settled",
+            window_slug=row["window_slug"],
+            outcome=outcome_side or "tie",
+        )
 
 
 def _epoch_or_none(value: str | None) -> int | None:
@@ -207,8 +229,17 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
     """Run the scan loop until ``stop_event`` is set (or forever if ``None``)."""
     async with httpx.AsyncClient(timeout=15.0) as client:
         while stop_event is None or not stop_event.is_set():
+            # Backstop: both halves of scan_once catch their own failures, so
+            # this fires only for a step added later without its own handler.
+            # The interval read is INSIDE it on purpose — it is a SQLite read
+            # that can raise, and it is the one statement whose failure would
+            # end the loop for the process's lifetime. Nothing supervises this
+            # task (app.py starts it with a bare create_task), so an escape
+            # here stops the scanner with nothing in the logs.
             try:
                 await scan_once(client)
+                interval = await _knobs.get("daily_scan_interval_seconds")
             except Exception:  # noqa: BLE001
                 log.exception("daily_scan.tick_failed")
-            await asyncio.sleep(await _knobs.get("daily_scan_interval_seconds"))
+                interval = _config.DAILY_SCAN_INTERVAL_SECONDS
+            await asyncio.sleep(interval)
