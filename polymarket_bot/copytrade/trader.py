@@ -13,14 +13,12 @@ prices tells those apart.
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
 import httpx
 import structlog
 
-import config as _config
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot.copytrade import ledger as _ledger
 from polymarket_bot.copytrade import targets as _targets
@@ -213,7 +211,15 @@ async def requote_due(client: httpx.AsyncClient, delay_s: int = 25) -> int:
 
 
 async def settle_due(client: httpx.AsyncClient) -> int:
-    """Settle every open copy whose market has resolved. Returns rows settled."""
+    """Settle every open copy whose market has resolved. Returns rows settled.
+
+    Resolution comes from the CLOB, not Gamma. Gamma drops the 15-minute markets
+    entirely once they end — they are returned by neither condition_ids nor slug
+    — and it leaves the hourly ones at ``closed: false`` long after the outcome
+    is decided, so a Gamma-based settler silently never fires for either. The
+    CLOB's market record carries ``closed`` plus an explicit ``winner`` flag per
+    token, which is the authoritative answer for both families.
+    """
     rows = await _ledger.open_rows()
     if not rows:
         return 0
@@ -222,44 +228,36 @@ async def settle_due(client: httpx.AsyncClient) -> int:
         by_cid.setdefault(r["condition_id"], []).append(r)
 
     settled = 0
-    cids = list(by_cid)
-    for i in range(0, len(cids), 20):
-        chunk = cids[i : i + 20]
+    for cid, group in by_cid.items():
         try:
-            resp = await client.get(
-                f"{_config.POLYMARKET_GAMMA_API}/markets",
-                params=[("condition_ids", c) for c in chunk],
-                timeout=20.0,
-            )
+            resp = await client.get(f"{CLOB}/markets/{cid}", timeout=20.0)
+            if resp.status_code == 404:
+                continue
             resp.raise_for_status()
-            markets = resp.json()
+            market = resp.json()
         except Exception as exc:  # noqa: BLE001
-            log.warning("copytrade.settle_lookup_failed", error=str(exc))
+            log.warning("copytrade.settle_lookup_failed", cid=cid[:12], error=str(exc))
             continue
-
-        for m in markets:
-            if not m.get("closed"):
-                continue
-            try:
-                prices = [float(p) for p in json.loads(m.get("outcomePrices") or "[]")]
-                outcomes = json.loads(m.get("outcomes") or "[]")
-            except Exception:  # noqa: BLE001
-                continue
-            if not prices or max(prices) < 0.99:
-                continue
-            winner = outcomes[prices.index(max(prices))]
-            now = int(time.time())
-            for r in by_cid.get(m.get("conditionId"), []):
-                won = str(r["outcome"]) == str(winner)
-                payout = r["size"] if won else 0.0
-                pnl = payout - (r["cost_usd"] or 0.0)
-                await _ledger.settle(r["id"], won=won, pnl=pnl, now=now)
-                settled += 1
-                log.info(
-                    "copytrade.settled",
-                    target=r["target_label"],
-                    outcome=r["outcome"],
-                    winner=winner,
-                    pnl=round(pnl, 2),
-                )
+        if not market.get("closed"):
+            continue
+        winners = [
+            str(t.get("outcome"))
+            for t in (market.get("tokens") or [])
+            if t.get("winner")
+        ]
+        if not winners:
+            continue  # closed but not yet resolved — leave it open
+        winner = winners[0]
+        now = int(time.time())
+        for r in group:
+            won = str(r["outcome"]) == winner
+            payout = r["size"] if won else 0.0
+            pnl = payout - (r["cost_usd"] or 0.0)
+            await _ledger.settle(r["id"], won=won, pnl=pnl, now=now)
+            settled += 1
+            log.info(
+                "copytrade.settled", target=r["target_label"],
+                market=r["window_slug"], ours=r["outcome"], winner=winner,
+                pnl=round(pnl, 2),
+            )
     return settled
