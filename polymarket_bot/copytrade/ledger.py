@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS copy_trades (
   real_price    REAL,
   real_fee      REAL,
   real_cost_usd REAL,
+  -- Shares actually obtainable at re-quote. Less than `size` when the book was
+  -- too thin: the realistic payout must be on THIS, not the intended size.
+  real_size     REAL,
   real_slippage REAL,
   real_pnl      REAL,
   requoted_at   INTEGER,
@@ -92,6 +95,7 @@ async def init() -> None:
         # Columns added after the table first shipped.
         for col, decl in (
             ("their_size", "REAL"), ("real_pnl", "REAL"),
+            ("real_size", "REAL"),
             ("target_exited", "INTEGER"),
             ("real_price", "REAL"), ("real_fee", "REAL"),
             ("real_cost_usd", "REAL"), ("real_slippage", "REAL"),
@@ -224,12 +228,13 @@ async def needs_requote(older_than: int, now: int) -> list[dict]:
 
 
 async def set_requote(row_id: int, *, price: float | None, fee: float,
-                      cost: float, slippage: float | None, now: int) -> None:
+                      cost: float, slippage: float | None, size: float,
+                      now: int) -> None:
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE copy_trades SET real_price=?, real_fee=?, real_cost_usd=?, "
-            "real_slippage=?, requoted_at=? WHERE id=?",
-            (price, fee, cost, slippage, now, row_id))
+            "real_slippage=?, real_size=?, requoted_at=? WHERE id=?",
+            (price, fee, cost, slippage, size, now, row_id))
         await conn.commit()
 
 
@@ -338,6 +343,8 @@ async def summary() -> dict:
                           AS filled_real,
                       SUM(CASE WHEN real_price IS NULL THEN cost_usd ELSE 0 END)
                           AS lost_to_unfilled,
+                      SUM(CASE WHEN real_price IS NOT NULL AND real_size < size * 0.99
+                               THEN 1 ELSE 0 END) AS partial,
                       SUM(CASE WHEN their_size IS NOT NULL AND size > their_size * 1.05
                                THEN 1 ELSE 0 END) AS upsized,
                       (SELECT COUNT(*) FROM copy_trades

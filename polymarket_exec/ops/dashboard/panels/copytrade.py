@@ -118,6 +118,13 @@ def _execution_html(summary: dict) -> str:
             + (f" &middot; {100 * slip:+.2f}c/share" if slip is not None else "")
             + "</span></div>"
         )
+    partial = t.get("partial") or 0
+    if partial:
+        rows += (
+            "<div class='copy-result'>"
+            "<span>partial fills — book too thin for the whole order</span>"
+            f"<span class='copy-warn'>{partial} of {n}</span></div>"
+        )
     diverged = t.get("diverged") or 0
     if diverged:
         rows += (

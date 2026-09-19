@@ -214,7 +214,7 @@ async def requote_due(client: httpx.AsyncClient, delay_s: int = 25) -> int:
         if not asks:
             # Nothing to cross: a real order would have rested unfilled.
             await _ledger.set_requote(r["id"], price=None, fee=0.0, cost=0.0,
-                                      slippage=None, now=now)
+                                      slippage=None, size=0.0, now=now)
             done += 1
             continue
         want = r["size"] or 0.0
@@ -227,14 +227,17 @@ async def requote_due(client: httpx.AsyncClient, delay_s: int = 25) -> int:
             cost += take * px
         if got <= 0:
             await _ledger.set_requote(r["id"], price=None, fee=0.0, cost=0.0,
-                                      slippage=None, now=now)
+                                      slippage=None, size=0.0, now=now)
             done += 1
             continue
         px = cost / got
         fee = got * FEE_RATE * px * (1 - px)
         slip = (px + fee / got) - (r["their_price"] or px)
+        # `got` can be short of `want` when the book is thin. Recording the
+        # intended size here would credit a full payout against a partial cost
+        # at settlement, which overstates exactly what this is meant to expose.
         await _ledger.set_requote(r["id"], price=px, fee=fee, cost=cost + fee,
-                                  slippage=slip, now=now)
+                                  slippage=slip, size=got, now=now)
         done += 1
         log.info("copytrade.requoted", target=r["target_label"],
                  decision_px=round(r["our_price"] or 0, 3), real_px=round(px, 3),
@@ -334,7 +337,11 @@ async def settle_due(client: httpx.AsyncClient) -> int:
             elif r.get("real_price") is None:
                 real_pnl = 0.0
             else:
-                real_pnl = payout - (r["real_cost_usd"] or 0.0)
+                # Payout on the shares actually obtainable, not the intended
+                # size — a partial fill wins less, and costs less.
+                got = r.get("real_size")
+                got = r["size"] if got is None else got
+                real_pnl = (got if won else 0.0) - (r["real_cost_usd"] or 0.0)
             await _ledger.settle(r["id"], won=won, pnl=pnl,
                                  real_pnl=real_pnl, now=now)
             settled += 1

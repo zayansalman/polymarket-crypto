@@ -405,3 +405,14 @@ def test_skips_are_scored_on_what_they_refused() -> None:
     assert "SKIPS, SCORED" in html
     assert "saved us $4.20" in html   # refusing losers: the cap earning its keep
     assert "cost us $2.50" in html    # refusing winners: the rule costing us
+
+
+def test_partial_fills_are_reported() -> None:
+    """A thin book fills part of the order; paper pretends it filled whole."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {"execution": {"n": 9, "filled_decision": 40.0, "filled_real": 41.0,
+                             "unfilled": 1, "lost_to_unfilled": 3.0,
+                             "upsized": 0, "diverged": 0, "partial": 4},
+               "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "partial fills" in html and "4 of 9" in html
