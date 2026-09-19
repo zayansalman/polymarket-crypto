@@ -24,7 +24,9 @@ class WsStatus:
 def _default_connect(url: str) -> Any:
     import websockets
 
-    return websockets.connect(url, open_timeout=15, ping_interval=20)
+    # Binance's liquidation stream echoes CLOSE but never closes TCP, so every close
+    # waits out close_timeout (websockets defaults to 10 s) and holds up shutdown.
+    return websockets.connect(url, open_timeout=15, ping_interval=20, close_timeout=1)
 
 
 async def run_ws_forever(

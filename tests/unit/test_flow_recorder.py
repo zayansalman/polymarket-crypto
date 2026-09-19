@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from contextlib import suppress
 from pathlib import Path
 
 import httpx
 import pytest
 import pytest_asyncio
+from websockets.http11 import Request
+from websockets.server import ServerProtocol
 
 import config as _config
 import db as _db
@@ -183,6 +187,60 @@ def test_dashboard_lifespan_registers_and_clears_the_recorder(
     with TestClient(app):
         assert isinstance(fr.current(), fr.FlowRecorder)
     assert fr.current() is None
+
+
+async def _peer_that_keeps_tcp_open(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """Accept the WS handshake and echo CLOSE, but leave TCP open (as Binance's /market does)."""
+    proto = ServerProtocol()
+    # Hang up after 15 s of silence so a client that never times out fails the test
+    # instead of hanging it.
+    with suppress(ConnectionError, asyncio.TimeoutError):
+        while data := await asyncio.wait_for(reader.read(65_536), timeout=15):
+            proto.receive_data(data)
+            for event in proto.events_received():
+                if isinstance(event, Request):
+                    proto.send_response(proto.accept(event))
+            for chunk in proto.data_to_send():
+                writer.write(chunk)  # the b"" end-of-stream marker writes nothing
+    writer.close()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_shutdown_is_quick_when_a_venue_keeps_tcp_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # uvicorn gives lifespan teardown no time limit and main.py holds data/bot.lock
+    # until it ends, so a slow close here locks a restarted dashboard out.
+    async def idle(stop_event: asyncio.Event) -> None:
+        await stop_event.wait()
+
+    monkeypatch.setattr(_db, "DB_PATH", tmp_path / "t.db")
+    monkeypatch.setattr("polymarket_bot.daily.scanner.run_forever", idle)  # keep it offline
+    monkeypatch.setattr(fr.FlowRecorder, "run", _REAL_RUN)
+    monkeypatch.setattr(
+        fr, "_default_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(_handler())),
+    )
+    server = await asyncio.start_server(_peer_that_keeps_tcp_open, "127.0.0.1", 0)
+    url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    for name in ("KRAKEN_SPOT_WS", "KRAKEN_FUTURES_WS", "BINANCE_FORCE_ORDER_WS"):
+        monkeypatch.setattr(fr, name, url)
+    from polymarket_exec.ops.dashboard.app import app
+
+    async with server:
+        async with app.router.lifespan_context(app):
+            for _ in range(500):
+                feeds = fr.current().snapshot().feeds
+                if all(feeds[key].connected for key in fr.WS_KEYS):
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail("the WS feeds never connected to the local peer")
+            started = time.monotonic()
+        elapsed = time.monotonic() - started
+    assert elapsed < 3, f"shutdown took {elapsed:.1f} s"
 
 
 def test_liquidation_frames_for_any_symbol_count_as_live_data() -> None:
