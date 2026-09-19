@@ -88,10 +88,11 @@ def _decisions_html(counts: list) -> str:
 
 def _execution_html(summary: dict) -> str:
     """Optimal paper fill vs the same order re-priced when it would land."""
-    t = (summary or {}).get("total") or {}
+    t = (summary or {}).get("execution") or (summary or {}).get("total") or {}
     staked = t.get("staked") or 0.0
     real = t.get("real_staked") or 0.0
     slip = t.get("real_slip")
+    unfilled = t.get("unfilled") or 0
     if not staked or not real:
         return ""
     diff = real - staked
@@ -107,7 +108,14 @@ def _execution_html(summary: dict) -> str:
         "<div class='copy-result'><span>cost of being late</span>"
         f"<span class='{cls}'>{money}"
         + (f" &middot; {100*slip:+.2f}c/share" if slip is not None else "")
-        + "</span></div></div>"
+        + "</span></div>"
+        + (
+            "<div class='copy-result'><span>orders that would NOT have filled"
+            "</span>"
+            f"<span class='copy-bad'>{unfilled} of {t.get('n') or 0}</span></div>"
+            if unfilled else ""
+        )
+        + "</div>"
     )
 
 

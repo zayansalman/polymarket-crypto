@@ -204,7 +204,9 @@ async def summary() -> dict:
         cur = await conn.execute(
             """SELECT COUNT(*) AS n,
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END) AS wins,
-                      SUM(pnl) AS pnl, SUM(cost_usd) AS staked, SUM(size) AS shares
+                      SUM(pnl) AS pnl, SUM(cost_usd) AS staked, SUM(size) AS shares,
+                      SUM(real_cost_usd) AS real_staked,
+                      AVG(real_slippage) AS real_slip
                FROM copy_trades WHERE state='settled'"""
         )
         total = dict(await cur.fetchone() or {})
@@ -213,4 +215,14 @@ async def summary() -> dict:
             "FROM copy_trades WHERE state='open'"
         )
         openp = dict(await cur.fetchone() or {})
-    return {"per_target": per_target, "total": total, "open": openp}
+        cur = await conn.execute(
+            """SELECT COUNT(*) AS n,
+                      SUM(cost_usd) AS staked,
+                      SUM(real_cost_usd) AS real_staked,
+                      AVG(real_slippage) AS real_slip,
+                      SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END) AS unfilled
+               FROM copy_trades WHERE requoted_at IS NOT NULL"""
+        )
+        execq = dict(await cur.fetchone() or {})
+    return {"per_target": per_target, "total": total, "open": openp,
+            "execution": execq}
