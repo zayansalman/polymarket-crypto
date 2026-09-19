@@ -168,12 +168,13 @@ def test_the_panel_reports_execution_realism_not_just_the_paper_price() -> None:
     """A paper fill assumes the ladder survives; the card must show both."""
     state = _watcher.WatcherState(
         target=_targets.DEFAULT_TARGET, label="t", enabled=True, connected=True)
-    summary = {"total": {"n": 3, "wins": 2, "pnl": 1.0, "staked": 100.0,
-                         "real_staked": 103.5, "real_slip": 0.012},
-               "per_target": [], "open": {"n": 0, "staked": 0}}
+    summary = {"execution": {"n": 3, "filled_decision": 100.0,
+                             "filled_real": 103.5, "real_slip": 0.012,
+                             "unfilled": 0, "lost_to_unfilled": 0.0},
+               "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
     html = panel.render(state=state, target=None, summary=summary)
     assert "EXECUTION REALISM" in html
-    assert "cost of being late" in html
+    assert "cost of arriving late" in html
     assert "$103.50" in html and "+$3.50" in html
 
 
@@ -190,16 +191,21 @@ def test_the_panel_shows_skips_with_their_reason() -> None:
     assert "already settled" in html
 
 
-def test_a_cheaper_realistic_cost_is_not_called_an_improvement_when_orders_failed() -> None:
-    """Unfilled orders cost $0, which makes the total look better than reality."""
+def test_dead_orders_are_reported_separately_from_price_movement() -> None:
+    """A dead order costs $0 and would otherwise flatter the total.
+
+    Price drift and failure-to-fill are different problems with different
+    fixes, so averaging them into one number hides both.
+    """
     state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
-    summary = {"execution": {"n": 8, "staked": 84.57, "real_staked": 72.57,
-                             "real_slip": -0.01, "unfilled": 2},
+    summary = {"execution": {"n": 8, "filled_decision": 60.0, "filled_real": 61.2,
+                             "real_slip": 0.004, "unfilled": 2,
+                             "lost_to_unfilled": 24.57},
                "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
     html = panel.render(state=state, target=None, summary=summary)
-    assert "lower only because some orders did not fill" in html
-    assert "copy-bad" in html
-    assert "orders that would NOT have filled" in html
+    assert "would NOT have filled" in html
+    assert "2 of 8" in html and "$24.57" in html
+    assert "cost of arriving late" in html and "+$1.20" in html
 
 
 @pytest.mark.asyncio

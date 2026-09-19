@@ -87,42 +87,51 @@ def _decisions_html(counts: list) -> str:
 
 
 def _execution_html(summary: dict) -> str:
-    """Optimal paper fill vs the same order re-priced when it would land."""
-    t = (summary or {}).get("execution") or (summary or {}).get("total") or {}
-    staked = t.get("staked") or 0.0
-    real = t.get("real_staked") or 0.0
-    slip = t.get("real_slip")
-    unfilled = t.get("unfilled") or 0
-    if not staked or not real:
+    """Optimal paper fill vs the same order re-priced when it would land.
+
+    Two different things go wrong and they must not be averaged: the price can
+    move against us, and the order can fail to fill at all. A dead order costs
+    $0, which flatters the total unless it is broken out.
+    """
+    t = (summary or {}).get("execution") or {}
+    n = t.get("n") or 0
+    if not n:
         return ""
-    diff = real - staked
-    # A lower realistic cost is NOT good news when it is lower because orders
-    # failed to fill. Only call it an improvement when everything filled.
-    cls = "copy-good" if (diff < 0 and not unfilled) else "copy-bad"
-    money = f"{'+' if diff >= 0 else '-'}${abs(diff):,.2f}"
-    caveat = (
-        " — lower only because some orders did not fill" if diff < 0 and unfilled
-        else ""
-    )
+    fd = t.get("filled_decision") or 0.0
+    fr = t.get("filled_real") or 0.0
+    unfilled = t.get("unfilled") or 0
+    lost = t.get("lost_to_unfilled") or 0.0
+    slip = t.get("real_slip")
+
+    rows = ""
+    if fd:
+        move = fr - fd
+        cls = "copy-bad" if move > 0 else "copy-good"
+        sign = "+" if move >= 0 else "-"
+        rows += (
+            "<div class='copy-result'><span>filled: price at decision</span>"
+            f"<span>${fd:,.2f}</span></div>"
+            "<div class='copy-result'><span>filled: re-priced ~25s later</span>"
+            f"<span>${fr:,.2f}</span></div>"
+            "<div class='copy-result'><span>cost of arriving late</span>"
+            f"<span class='{cls}'>{sign}${abs(move):,.2f}"
+            + (f" &middot; {100 * slip:+.2f}c/share" if slip is not None else "")
+            + "</span></div>"
+        )
+    if unfilled:
+        rows += (
+            "<div class='copy-result'>"
+            "<span>orders whose book was gone — would NOT have filled</span>"
+            f"<span class='copy-bad'>{unfilled} of {n}"
+            + (f" &middot; ${lost:,.2f} of paper stake" if lost else "")
+            + "</span></div>"
+        )
     return (
         "<div class='copy-results'>"
-        "<div class='copy-results-h'>EXECUTION REALISM</div>"
-        "<div class='copy-result'><span>priced at decision (optimistic)</span>"
-        f"<span>${staked:,.2f}</span></div>"
-        "<div class='copy-result'><span>re-priced ~25s later (realistic)</span>"
-        f"<span>${real:,.2f}</span></div>"
-        "<div class='copy-result'><span>cost of being late</span>"
-        f"<span class='{cls}'>{money}"
-        + (f" &middot; {100*slip:+.2f}c/share" if slip is not None else "")
-        + escape(caveat)
-        + "</span></div>"
-        + (
-            "<div class='copy-result'><span>orders that would NOT have filled"
-            "</span>"
-            f"<span class='copy-bad'>{unfilled} of {t.get('n') or 0}</span></div>"
-            if unfilled else ""
-        )
-        + "</div>"
+        "<div class='copy-results-h'>EXECUTION REALISM — paper assumes the "
+        "displayed ladder survives; this re-walks the same order when it would "
+        "actually land</div>"
+        f"{rows}</div>"
     )
 
 

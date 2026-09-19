@@ -78,6 +78,7 @@ async def consider(
     scale = float(await _knobs.get("copy_scale"))
     max_shares = float(await _knobs.get("copy_max_shares"))
     max_slippage = float(await _knobs.get("copy_max_slippage_cents")) / 100.0
+    skip_small = bool(await _knobs.get("copy_skip_below_min"))
 
     try:
         asks = await _asks(client, fill.token_id)
@@ -111,7 +112,7 @@ async def consider(
         scale=scale,
         max_shares=max_shares,
         min_shares=MIN_ORDER_SHARES,
-        skip_below_min=True,
+        skip_below_min=skip_small,
         max_slippage=max_slippage if max_slippage > 0 else None,
     )
     if copy is None:

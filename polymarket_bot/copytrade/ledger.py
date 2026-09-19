@@ -244,7 +244,15 @@ async def summary() -> dict:
                       SUM(cost_usd) AS staked,
                       SUM(real_cost_usd) AS real_staked,
                       AVG(real_slippage) AS real_slip,
-                      SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END) AS unfilled
+                      SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END) AS unfilled,
+                      -- On the rows that DID fill, how the price itself moved.
+                      -- Mixing these with the dead orders hides both.
+                      SUM(CASE WHEN real_price IS NOT NULL THEN cost_usd ELSE 0 END)
+                          AS filled_decision,
+                      SUM(CASE WHEN real_price IS NOT NULL THEN real_cost_usd ELSE 0 END)
+                          AS filled_real,
+                      SUM(CASE WHEN real_price IS NULL THEN cost_usd ELSE 0 END)
+                          AS lost_to_unfilled
                FROM copy_trades WHERE requoted_at IS NOT NULL"""
         )
         execq = dict(await cur.fetchone() or {})

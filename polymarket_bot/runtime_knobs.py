@@ -62,6 +62,13 @@ KNOBS: dict[str, Knob] = {
         "runtime.copy.scale", 1.0, "float",
         "Fraction of their size to mirror", 0.01, 5.0, group="Copy trade",
     ),
+    # Their clips are often 1-5 shares, below the venue's 5-share floor. True
+    # skips those fills; False rounds the copy UP to the floor, which means
+    # taking a larger bet than they did. Skipping is the honest default.
+    "copy_skip_below_min": Knob(
+        "runtime.copy.skip_below_min", True, "bool",
+        "Skip fills under the venue minimum", group="Copy trade",
+    ),
     "copy_max_shares": Knob(
         "runtime.copy.max_shares", 50.0, "float",
         "Max shares per copy", 5.0, 5000.0, unit="sh", group="Copy trade",
