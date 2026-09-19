@@ -261,7 +261,8 @@ class ClobShard:
             for change in event.changes:
                 book = self._book_for(conn, change.asset_id)
                 if book is not None:
-                    book.apply(change.side, change.price, change.size, event.ts_ms, received_ms)
+                    book.apply(change.side, change.price, change.size, event.ts_ms,
+                               received_ms, change.hash)
                     self._after_apply(conn, book, event.ts_ms, received_ms)
         elif isinstance(event, BookEvent):
             live = not event.snapshot
@@ -270,7 +271,7 @@ class ClobShard:
             book = self._book_for(conn, event.asset_id)
             if book is not None:
                 book.reset(event.bids, event.asks, event.tick_size, event.last_trade_price,
-                           event.ts_ms, received_ms)
+                           event.ts_ms, received_ms, event.hash)
                 self._after_apply(conn, book, event.ts_ms if live else None, received_ms)
         elif isinstance(event, LastTradeEvent):
             self._observe_latency(conn, received_ms - event.ts_ms)

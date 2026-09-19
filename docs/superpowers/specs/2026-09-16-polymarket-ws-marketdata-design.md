@@ -207,18 +207,21 @@ Live check (2026-09-17 08:21 UTC, one process, `demand_linger_s=10`):
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. Shares the market channel's TLS context (`clob_stream.tls_context`): building one blocks the loop ~13 ms, and ~28 sockets opening at once froze it for 215-340 ms. |
 | `universe.py` | `MarketUniverse`: current + next window per wanted asset x timeframe (`set_wanted`); tokens from `new_market`, else one Gamma read per window. `select()` rolls windows over from the tokens already known (no I/O); the hub runs it every 2 s (and at once on a demand change) apart from the lookups, so a slow Gamma read never holds up a window that starts. |
 | `clob_shard.py` | `ClobShard`: one asset x timeframe's N connections, per-connection books, the freshest served, events pushed once, lagging connections replaced. |
-| `hub.py` | `MarketDataHub`: the public API; demand (`want` / `release` / `wanted`, `pinned=`, `demand_linger_s`); one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status plus the per-market grid. A stop cancels Gamma lookups in flight, so `run` returns within ~1 s. |
+| `rest_poll.py` | `BookPoller`: a REST `/book` read twice a second per token of the hot markets, racing the sockets. One request in flight per token, doubling backoff on a bad reply, nothing for a token nobody wants. |
+| `hub.py` | `MarketDataHub`: the public API; demand (`want` / `release` / `wanted` / `hot`, `pinned=`, `demand_linger_s`); one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status plus the per-market grid. A stop cancels Gamma lookups in flight, so `run` returns within ~1 s. |
 
 ## API (`polymarket_exec/marketdata/hub.py`)
 
 ```python
 hub = hub_module.current()          # set by the dashboard lifespan
                                     # (MarketDataHub(hedge={"btc-5m": 2, ...}) to build one)
-demand = hub.want("btc", "5m", "bot loop")   # stream it (any thread); idempotent
+demand = hub.want("btc", "5m", "bot loop", hot=True)   # stream it (any thread); idempotent
 with hub.want("eth", "1h", "panel"):         # or hold it for a block
     ...
 demand.release()                    # or hub.release("bot loop") for all of it
 hub.wanted()                        # {("btc", "5m"): frozenset({"bot loop"}), ...}
+await hub.wait_ready("btc", "5m", 10)       # both books live? (after a fresh want)
+hub.book_top(token_id, max_age_s=2.0)       # the freshest book, or None — never an old one
 hub.top(token_id)                   # TopOfBook | None (.live: see below)
 hub.levels(token_id, "bid", 10)     # ((price, size), ...) best first | None
 hub.market("btc", "5m", "next")     # MarketRef | None
@@ -249,6 +252,43 @@ window end, the resolution reached the socket after ~2.5 min for 5m/15m, 12-28 m
 1h and ~15 min for 1d. `MarketUniverse(await_resolution_s=0)` drops every ended window
 after the 30 s; a mapping (e.g. `{"1h": 600}`) sets the wait per timeframe.
 
+## Who reads the books (2026-09-19)
+
+Everything in the app that needs a Polymarket order book reads the hub, except the live
+executor:
+
+- `polymarket_bot/paper.py:_fetch_clob_book` — the BTC loop, and with it the hourly
+  engine and the shadow roster. Same signature and `BookTop`, so nothing else changed.
+  The loop wants btc 5m (`owner="bot loop"`, hot) while it runs.
+- `polymarket_exec/ops/dashboard/quote_feed.py` — the order ticket wants its selected
+  market (`owner="order ticket"`, hot) while a dashboard is open, and lets it go on a
+  selection change or when nobody has rendered for 30 s.
+- `polymarket_exec/execution/live.py:_book_context` keeps its REST read: at order time
+  it needs `tick_size` and `min_order_size`, which the market channel does not carry.
+  For the same reason the order ticket still reads REST once per window.
+
+`book_top(token_id, max_age_s)` serves the freshest book we hold and returns None rather
+than an old one, so a caller falls back to its own read instead of pricing off a book
+that stopped updating. Age is our own receive time, never "now minus the event stamp":
+this machine runs ~66 ms behind the CLOB's stamps. `snapshot().reads` counts how reads
+were served (stream / REST / too old / nothing).
+
+### The fresh REST poll
+
+A market someone prices decisions off (`want(..., hot=True)`) gets a REST `/book` read
+2x a second per token alongside the sockets, and `book_top` serves whichever source
+holds the newer book. Measured 2026-09-17/19: a REST round trip is p50 201 ms, so a
+reply is already ~100 ms old when it lands, and racing the two on one clock the stream
+showed each book state first in 437 of 440 samples at 5 polls/s and 1094 of 1157 at
+~20 polls/s (median 8-22 ms earlier). The poll is there for the case that average hides:
+one connection stalling for seconds.
+
+A reply is newer only when its CONTENT is — the book `hash` first (the same hash is the
+same book, whatever the stamps say), then the snapshot timestamp. `TopOfBook.book_hash`
+carries the hash the venue sent with the event that last changed the book.
+`snapshot().rest_poll` counts replies, wins, by how much and the round trip; the FEEDS
+Connection hover shows them.
+
 ## FEEDS card
 
 Columns: Feed | Connection | Used for | Used by | Delay | Status. Connection says how
@@ -260,7 +300,9 @@ recorder"); the RTDS price rows say "none yet (kept warm)" until strategies read
 
 Four rows under the feed-monitor rows:
 
-- "Polymarket books" (WebSocket · CLOB · on demand). Used by = the owners of the
+- "Polymarket books" (WebSocket · CLOB · on demand; the Connection hover adds the fresh
+  REST poll: tokens, rate, how often it was ahead of the sockets and by how much, and
+  the round trip). Used by = the owners of the
   markets in use. Its delay and status come from the markets in use only: delay = the
   worst served latency p50, flagged past 2 s and STALE past 5 s with the market named;
   STALE after 45 s without data; DOWN when a market in use has no connection up after
@@ -269,7 +311,7 @@ Four rows under the feed-monitor rows:
   in use. Under it, a grid of every available market (assets as rows, timeframes as
   columns): the served latency for a market in use (coloured by its health; "connecting"
   or "down" when there is none), "lingering" and "available" otherwise. Hover: used by,
-  connections up/total, p50/p90, KiB/s. Lingering and available markets never count as
+  connections up/total, p50/p90, KiB/s, and "fresh REST poll" for a hot market. Lingering and available markets never count as
   issues.
 - "Chainlink prices", "Chainlink 60s TWAP", "Binance prices" (WebSocket · RTDS; delay =
   age of the newest print; STALE past 10 s).

@@ -22,11 +22,13 @@ They are **bidirectionally coupled**: the FastAPI dashboard imports `polymarket_
 | Risk limits / kill-switch / daily-loss halt | `polymarket_exec/execution/gate.py` |
 | Live order placement | `polymarket_exec/execution/live.py` |
 | Add/modify a market or price feed | `polymarket_exec/connectors/` |
+| Where the app reads Polymarket order books | the hub, everywhere but the live executor: `polymarket_bot/paper.py:_fetch_clob_book` (the BTC loop, the hourly engine and the shadow roster through it) and `polymarket_exec/ops/dashboard/quote_feed.py` (the order ticket; REST still reads `min_order_size` once a window). `polymarket_exec/execution/live.py:_book_context` still reads REST at order time (it needs `tick_size` and `min_order_size`) |
 | Feed health checks behind the FEEDS card | `polymarket_exec/ops/feed_monitor.py` (checks) + `ops/dashboard/panels/feeds.py` (card: Connection / Used for / Used by per row — static facts in its `_REST_FEEDS` / `_FLOW_FEEDS` / `_MACRO_FEEDS` tables — plus the Polymarket market grid) |
 | Venue trade-flow feeds (Binance spot/perp/liquidations, Kraken spot/futures) | `polymarket_exec/ops/flow_recorder.py` (recording) + `connectors/venue_flow.py`, `connectors/venue_messages.py`, `connectors/ws_runner.py` + `storage/venue_flow_store.py` (tables `venue_flow_hourly`, `venue_snapshot`) |
 | Macro feeds (BLS/BEA/Census release schedules, Fed calendar, ForexFactory week + consensus) | `polymarket_exec/ops/macro_recorder.py` (recording; a new source is one more `MacroSource`) + `connectors/macro_calendar.py` (parsers, categories) + `storage/macro_store.py` (tables `macro_events`, `macro_consensus`; each source's schedule survives restarts in `config` keys `macro.feed_state.*`) |
-| Want a live Polymarket market (stream it on demand) | `hub.want(asset, timeframe, owner)` in `polymarket_exec/marketdata/hub.py` — returns a `Demand` (`release()` or a `with` block gives it up; `hub.release(owner)` drops all of an owner's); reads return None until the market streams; a released market lingers `demand_linger_s` (60 s), then its sockets stop |
-| Live Polymarket books/prices for strategies (Up/Down books, trades, resolutions; Chainlink, Chainlink TWAP and Binance prices over WebSockets) | `polymarket_exec/marketdata/hub.py` (public API: `current()`, `want`/`release`/`wanted`, `top`, `quote`, `price`, `listen`, `snapshot`; `hedge=` sets connections per asset x timeframe, `pinned=` fixed demand) + `marketdata/clob_shard.py` (redundant connections, freshest served) + `marketdata/universe.py` (resolves only the wanted markets) + `marketdata/{clob_stream,rtds_stream,order_book,clob_messages}.py`; design in `docs/superpowers/specs/2026-09-16-polymarket-ws-marketdata-design.md` |
+| Want a live Polymarket market (stream it on demand) | `hub.want(asset, timeframe, owner, hot=False)` in `polymarket_exec/marketdata/hub.py` — returns a `Demand` (`release()` or a `with` block gives it up; `hub.release(owner)` drops all of an owner's); reads return None until the market streams; a released market lingers `demand_linger_s` (60 s), then its sockets stop. `hot=True` (an owner pricing decisions off it) also runs the fresh REST `/book` poll on its current window |
+| A strategy needs live prices | `hub.want(asset, timeframe, owner, hot=True)`, then `await hub.wait_ready(asset, timeframe, timeout_s)` and read `hub.quote(asset, timeframe)` / `hub.book_top(token_id, max_age_s)` per decision, or `hub.listen()` to be pushed every change. Module-level `hub.want` / `hub.release` / `hub.book_top` / `hub.wait_ready` work with or without a hub in the process |
+| Live Polymarket books/prices for strategies (Up/Down books, trades, resolutions; Chainlink, Chainlink TWAP and Binance prices over WebSockets) | `polymarket_exec/marketdata/hub.py` (public API: `current()`, `want`/`release`/`wanted`/`hot`, `top`, `book_top`, `wait_ready`, `quote`, `price`, `listen`, `snapshot`; `hedge=` sets connections per asset x timeframe, `pinned=` fixed demand, `poll_hz=` the fresh REST rate) + `marketdata/clob_shard.py` (redundant connections, freshest served) + `marketdata/rest_poll.py` (the REST `/book` poll racing the sockets on hot markets) + `marketdata/universe.py` (resolves only the wanted markets) + `marketdata/{clob_stream,rtds_stream,order_book,clob_messages}.py`; design in `docs/superpowers/specs/2026-09-16-polymarket-ws-marketdata-design.md` |
 | Dashboard panel / UI | `polymarket_exec/ops/dashboard/panels/` |
 | An env knob / default | `config.py` + document in `.env.example` |
 | A new DB column | `db.py` migration dict (NOT the `SCHEMA` literal) |
@@ -79,17 +81,17 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1291.
+- **Tests:** 1316.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
 <!-- BEGIN GENERATED:inventory -->
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 31 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 32 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
 | `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 19 | Structured JSON logging with structlog. Module + trade_id context. |
+| `logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -147,12 +149,13 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/execution/live.py` | WIRED | 7 | Live execution on the Polymarket CLOB via py-clob-client. |
 | `polymarket_exec/execution/paper.py` | WIRED | 1 | Paper execution manager — explicit order lifecycle with SQLite persistence. |
 | `polymarket_exec/execution/risk.py` | WIRED | 1 | Venue-independent risk service — pre-trade and post-trade risk controls. |
-| `polymarket_exec/marketdata/__init__.py` | pkg | 3 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
+| `polymarket_exec/marketdata/__init__.py` | pkg | 5 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
 | `polymarket_exec/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
 | `polymarket_exec/marketdata/clob_shard.py` | WIRED | 1 | One asset x timeframe's market-channel connections: N redundant sockets, the freshest served. |
-| `polymarket_exec/marketdata/clob_stream.py` | WIRED | 3 | Reconnecting connection to the Polymarket CLOB market channel (books, trades, lifecycle). |
-| `polymarket_exec/marketdata/hub.py` | WIRED | 3 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
-| `polymarket_exec/marketdata/order_book.py` | WIRED | 2 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
+| `polymarket_exec/marketdata/clob_stream.py` | WIRED | 4 | Reconnecting connection to the Polymarket CLOB market channel (books, trades, lifecycle). |
+| `polymarket_exec/marketdata/hub.py` | WIRED | 5 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
+| `polymarket_exec/marketdata/order_book.py` | WIRED | 3 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
+| `polymarket_exec/marketdata/rest_poll.py` | WIRED | 1 | A light REST /book poll running alongside the sockets on the markets in use. |
 | `polymarket_exec/marketdata/rtds_stream.py` | WIRED | 2 | Chainlink, Chainlink 60 s TWAP and Binance prices from Polymarket's RTDS WebSocket. |
 | `polymarket_exec/marketdata/universe.py` | WIRED | 1 | Which Polymarket Up/Down windows to follow, and their outcome token ids. |
 | `polymarket_exec/ops/__init__.py` | pkg | 3 | Operator controls and telemetry. |
