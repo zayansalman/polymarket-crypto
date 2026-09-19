@@ -1,6 +1,6 @@
 # SPY "closes above X" — model survey notes (parked 2026-09-19)
 
-Backlog issue: TBD
+Backlog issue: #256
 
 Desk research only. **No code, no data, no backtest.** Nothing here has been run or measured.
 Parked at this point so it is recoverable later.
