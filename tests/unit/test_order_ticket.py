@@ -10,6 +10,9 @@ import pytest
 
 from polymarket_exec.connectors import updown_quote as uq
 from polymarket_exec.connectors.updown_quote import UpDownQuote, UpDownQuoteClient
+from polymarket_exec.marketdata import hub as hub_mod
+from polymarket_exec.marketdata import universe as uq_universe
+from polymarket_exec.marketdata.order_book import TopOfBook
 from polymarket_exec.ops.dashboard import quote_feed
 from polymarket_exec.ops.dashboard.panels import controls
 
@@ -156,6 +159,140 @@ class TestQuoteFeed:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+
+
+def _hub_quote(asset: str, timeframe: str, *, live: bool) -> hub_mod.MarketQuote:
+    """The hub's books for the window the REST poll would read right now."""
+    slug = uq.window_slug(asset, timeframe, datetime.now(UTC))
+    market = uq_universe.MarketRef(asset, timeframe, slug, 1.0, 2.0, "tok-up", "tok-down")
+    up = TopOfBook("tok-up", 0.60, 0.61, 7.0, 8.0, 0.01, None, 1_000, 1_000, live=live)
+    down = TopOfBook("tok-down", 0.39, 0.40, 3.0, 4.0, 0.01, None, 1_000, 1_000, live=live)
+    return hub_mod.MarketQuote(market, up, down, live)
+
+
+def _offline_hub(*, live: bool | None) -> hub_mod.MarketDataHub:
+    """A real hub (real want/release), with its quote reads answered by the test.
+
+    ``live=None`` stands for a hub that has no window for the selection yet.
+    """
+    hub = hub_mod.MarketDataHub(assets=("btc", "eth"), timeframes=("5m", "15m"))
+
+    def quote(asset: str, timeframe: str, which: str = uq_universe.CURRENT):
+        return None if live is None else _hub_quote(asset, timeframe, live=live)
+
+    hub.quote = quote  # type: ignore[method-assign]
+    return hub
+
+
+class TestTicketOnTheHub:
+    """The ticket follows the operator's selection on the market-data hub (#242)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(quote_feed, "POLL_SECONDS", 0.01)
+        monkeypatch.setattr(quote_feed, "_wanted", None)
+        monkeypatch.setattr(quote_feed, "_latest", None)
+        monkeypatch.setattr(quote_feed, "_demand", None)
+        monkeypatch.setattr(quote_feed, "_min_sizes", {})
+        yield
+        hub_mod.set_current(None)
+
+    async def _run(self, transport: httpx.MockTransport, steps) -> None:
+        """Run the real poller against ``transport`` while ``steps`` drives it."""
+        real_client = httpx.AsyncClient
+        monkey = lambda **kw: real_client(transport=transport)  # noqa: E731
+        stop = asyncio.Event()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(quote_feed.httpx, "AsyncClient", monkey)
+            task = asyncio.create_task(_REAL_RUN_FOREVER(stop))
+            try:
+                await steps()
+            finally:
+                stop.set()
+                await asyncio.wait_for(task, timeout=2)
+
+    @pytest.mark.asyncio
+    async def test_hub_quotes_replace_the_rest_poll_once_min_order_size_is_known(
+        self,
+    ) -> None:
+        hub = _offline_hub(live=True)
+        hub_mod.set_current(hub)
+        transport = _transport()
+
+        async def steps() -> None:
+            quote_feed.snapshot("eth", "15m")
+            await _until(lambda: quote_feed.snapshot("eth", "15m") is not None)
+            await asyncio.sleep(0.1)  # many poll intervals
+            quote = quote_feed.snapshot("eth", "15m")
+            assert (quote.up_ask, quote.down_ask) == (0.61, 0.40)  # the hub's books
+            assert (quote.up_bid, quote.down_bid) == (0.60, 0.39)
+            assert quote.min_order_size == 5.0  # carried from the one REST read
+            assert transport.calls["books"] == 1  # type: ignore[attr-defined]
+
+        await self._run(transport, steps)
+
+    @pytest.mark.asyncio
+    async def test_a_hub_that_is_not_live_keeps_the_rest_poll(self) -> None:
+        hub_mod.set_current(_offline_hub(live=False))
+        transport = _transport()
+
+        async def steps() -> None:
+            quote_feed.snapshot("eth", "15m")
+            await _until(lambda: transport.calls["books"] >= 3)  # type: ignore[attr-defined]
+            quote = quote_feed.snapshot("eth", "15m")
+            assert (quote.up_ask, quote.down_ask) == (0.59, 0.42)  # the REST books
+
+        await self._run(transport, steps)
+
+    @pytest.mark.asyncio
+    async def test_demand_follows_the_selection_and_goes_on_shutdown(self) -> None:
+        hub = _offline_hub(live=None)
+        hub_mod.set_current(hub)
+
+        async def steps() -> None:
+            quote_feed.snapshot("eth", "15m")
+            await _until(lambda: ("eth", "15m") in hub.wanted())
+            assert hub.wanted()[("eth", "15m")] == frozenset({quote_feed.OWNER})
+            quote_feed.snapshot("btc", "5m")
+            await _until(lambda: ("btc", "5m") in hub.wanted())
+            assert ("eth", "15m") not in hub.wanted()  # released with the selection
+
+        await self._run(_transport(), steps)
+        assert dict(hub.wanted()) == {}  # the ticket lets go when the poller stops
+
+    @pytest.mark.asyncio
+    async def test_a_selection_the_hub_does_not_carry_still_gets_rest_prices(self) -> None:
+        hub = hub_mod.MarketDataHub(assets=("btc",), timeframes=("5m",))
+        hub_mod.set_current(hub)
+        transport = _transport()
+
+        async def steps() -> None:
+            quote_feed.snapshot("eth", "15m")  # not on this hub's grid
+            await _until(lambda: transport.calls["books"] >= 2)  # type: ignore[attr-defined]
+            assert quote_feed.snapshot("eth", "15m").up_ask == 0.59
+            assert dict(hub.wanted()) == {}
+
+        await self._run(transport, steps)
+
+    @pytest.mark.asyncio
+    async def test_no_demand_without_a_dashboard_open(self) -> None:
+        hub = _offline_hub(live=None)
+        hub_mod.set_current(hub)
+
+        async def steps() -> None:
+            await asyncio.sleep(0.05)
+            assert dict(hub.wanted()) == {}  # nobody asked for a render
+
+        await self._run(_transport(), steps)
+
+
+async def _until(pred, timeout: float = 2.0) -> None:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not pred():
+        if loop.time() > end:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.005)
 
 
 def _render(**kw) -> str:
