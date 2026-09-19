@@ -1,4 +1,4 @@
-"""A light REST ``/book`` poll running alongside the sockets on the markets in use.
+"""A light REST /book poll running alongside the sockets on the markets in use.
 
 The market channel is normally first: racing a WebSocket against polling on one
 clock, the stream showed each book state first in 437 of 440 samples at 5 polls/s
