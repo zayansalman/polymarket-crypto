@@ -148,3 +148,17 @@ def test_drift_is_reported_when_a_target_leaves_its_measured_markets() -> None:
     assert "TARGET DRIFT" in html
     assert "have left the markets they were measured on" in html
     assert "0/40" in html and "83/89" in html
+
+
+def test_every_target_is_a_taker_not_a_quoter() -> None:
+    """The whole point of the screen: a maker's profit is a copier's cost."""
+    for t in _targets.TARGETS.values():
+        assert t.taker_share >= 0.55, f"{t.label} rests too much of its notional"
+        assert t.edge_cents > 0, t.label
+        assert t.in_scope >= 0.6, f"{t.label} has drifted off measured markets"
+
+
+def test_the_registry_covers_mid_price_entries() -> None:
+    """A registry of only 99c scalpers is the failure mode this replaced."""
+    mid = [t for t in _targets.TARGETS.values() if t.avg_entry < 0.6]
+    assert len(mid) >= 5, "screen collapsed back onto near-certainty buyers"
