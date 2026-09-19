@@ -31,7 +31,7 @@ import httpx
 import config as _config
 from polymarket_bot.daily.types import DailyMarketView
 from polymarket_bot.pairarb.market_index import parse_market
-from polymarket_exec.connectors.updown_quote import window_slug
+from polymarket_exec.connectors.updown_quote import daily_reference_instant, window_slug
 from tools.venue_recorder import GAMMA_API, SPOT_SYMBOL, classify, discover
 
 # Short config-facing asset key -> the full name Gamma's slug spells out.
@@ -51,17 +51,22 @@ _SLUG_ASSET_TO_SHORT = {v: k for k, v in _GAMMA_ASSET_NAME.items()}
 # (slug shape "{asset}-updown-{rung}-{ts}") by slug shape alone — NOT by the
 # startDate..endDate span, which is the TRADING window and can be ~2 days
 # wide even though the actual resolution always compares two specific
-# noon-ET closes exactly 24h apart (see fetch_close_at).
+# noon-ET closes on consecutive days (see fetch_close_at).
 _DAILY_SLUG_MARKER = "-up-or-down-on-"
 
 
-def _epoch(value: Any) -> int | None:
+def _parse_dt(value: Any) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
     try:
-        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _epoch(value: Any) -> int | None:
+    dt = _parse_dt(value)
+    return int(dt.timestamp()) if dt is not None else None
 
 
 async def _fetch_by_slug(client: httpx.AsyncClient, slug: str) -> dict[str, Any] | None:
@@ -132,13 +137,15 @@ async def fetch_close_at(
 
     NOT the market's ``startDate`` — checked a live market's own resolution
     text (Gamma ``description``) and it resolves on the Binance 1-minute
-    close at *noon ET, 24h before ``endDate``* (e.g. Solana's Aug-30 market:
-    "Up if the Aug 29 noon-ET close is lower than the Aug 30 noon-ET
-    close"), not at ``startDate`` — the trading window opens up to ~2 days
-    before settlement, well before the actual comparison period starts.
-    Every market in this family shares one question template (only the
-    asset/date change), so the caller derives ``reference_ts = endDate -
-    86400`` rather than trusting ``startDate``.
+    close at *noon ET on the calendar day before ``endDate``* (e.g. Solana's
+    Aug-30 market: "Up if the Aug 29 noon-ET close is lower than the Aug 30
+    noon-ET close"), not at ``startDate`` — the trading window opens up to
+    ~2 days before settlement, well before the actual comparison period
+    starts. Every market in this family shares one question template (only
+    the asset/date change), so the caller derives ``reference_ts`` from that
+    prior noon ET (``updown_quote.daily_reference_instant``) rather than
+    trusting ``startDate``. Noon ET is wall-clock: subtracting a flat 86400s
+    is right 363 days a year and an hour wrong on the two DST switch days.
     """
     try:
         resp = await client.get(
@@ -217,14 +224,16 @@ async def build_market_view(
     mt = parse_market(market)
     if mt is None:
         return None
-    end = _epoch(market.get("endDate"))
-    if end is None:
+    end_dt = _parse_dt(market.get("endDate"))
+    if end_dt is None:
         return None
+    end = int(end_dt.timestamp())
     remaining = max(0, end - int(datetime.now(UTC).timestamp()))
-    # See fetch_close_at: the comparison window is the 24h ending at
-    # endDate, not [startDate, endDate] (startDate is when trading OPENED,
-    # which can be up to ~2 days earlier).
-    reference_ts = end - 86400
+    # See fetch_close_at: the comparison runs between two noon-ET closes, not
+    # [startDate, endDate] (startDate is when trading OPENED, which can be up
+    # to ~2 days earlier). Noon ET is wall-clock, so on the two DST switch
+    # days a year the two noons are 23h or 25h apart, never 86400s.
+    reference_ts = int(daily_reference_instant(end_dt).timestamp())
 
     slug_asset, _family, _rung, _evidence = classify(market)
     symbol = SPOT_SYMBOL.get(slug_asset) or SPOT_SYMBOL.get(short_asset)
