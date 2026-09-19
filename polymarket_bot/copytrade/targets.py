@@ -58,6 +58,33 @@ TARGETS: dict[str, Target] = {
     t.key: t
     for t in (
         Target(
+            address="0x39fa5aed3e0a26e89acf8088b8a8ad132481cf2a",
+            label="gegegu84",
+            edge_cents=2.15, t_stat=13.84, markets=112, avg_stake_usd=9.0,
+            runway_p10_min=4.3, edge_left_30min=2.15,
+            assets="btc, eth 1h", cadence="intraday",
+            note="highest edge per share of the crypto set at a t of 13.8, but "
+                 "trades in $9 clips - the edge is real and the size is tiny.",
+        ),
+        Target(
+            address="0x6c2be10fb07747a3c751c77774938a15fbcf36f4",
+            label="lmcaimiku",
+            edge_cents=1.14, t_stat=5.26, markets=41, avg_stake_usd=999.0,
+            runway_p10_min=2.3, edge_left_30min=1.14,
+            assets="btc, eth 1h", cadence="intraday",
+            note="only 9 days of history - the shortest record here. Included "
+                 "for overnight coverage; do not size it on this evidence.",
+        ),
+        Target(
+            address="0x57169c875485b2eae4895119bde41bff12dcbbf6",
+            label="hdai298yf98763h",
+            edge_cents=0.15, t_stat=19.28, markets=214, avg_stake_usd=137.0,
+            runway_p10_min=3.1, edge_left_30min=0.15,
+            assets="btc, eth 1h", cadence="intraday",
+            note="the highest t-stat in the whole screen, on the thinnest edge. "
+                 "A good test of whether a 0.15c edge survives real execution.",
+        ),
+        Target(
             address="0x83451c358d50b3f8982124fc741e8bda4b4edd93",
             label="Oldstreet",
             edge_cents=0.23, t_stat=8.85, markets=800, avg_stake_usd=843.0,

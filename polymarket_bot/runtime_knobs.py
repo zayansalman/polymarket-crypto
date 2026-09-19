@@ -72,7 +72,7 @@ KNOBS: dict[str, Knob] = {
     ),
     "copy_target_wallet": Knob(
         "runtime.copy.target_wallet", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "enum",
-        "Copy target wallet", choices=("0x83451c358d50b3f8982124fc741e8bda4b4edd93", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "0x83e8f2ea25df8e71fcaf2271c9edaae02860b9bc", "0xfcaaa4cbd0a7553ac886eb5456d4806f128c5add", "0xe3164027a2be859579fcd84fce34513f0bc9bcf9", "0xe06cac28c493a2536e5b111e20e5f7a5f3843eb4"), group="Copy trade",
+        "Copy target wallet", choices=("0x39fa5aed3e0a26e89acf8088b8a8ad132481cf2a", "0x6c2be10fb07747a3c751c77774938a15fbcf36f4", "0x57169c875485b2eae4895119bde41bff12dcbbf6", "0x83451c358d50b3f8982124fc741e8bda4b4edd93", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "0x83e8f2ea25df8e71fcaf2271c9edaae02860b9bc", "0xfcaaa4cbd0a7553ac886eb5456d4806f128c5add", "0xe3164027a2be859579fcd84fce34513f0bc9bcf9", "0xe06cac28c493a2536e5b111e20e5f7a5f3843eb4"), group="Copy trade",
     ),
     "copy_poll_interval_seconds": Knob(
         "runtime.copy.poll_interval_seconds", 30.0, "float",
