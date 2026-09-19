@@ -1,8 +1,9 @@
 # Polymarket WebSocket market data — `polymarket_exec/marketdata/`
 
-Status: built (2026-09-16). Consumers are not migrated yet: the order ticket, the feed
+Status: built (2026-09-16); markets are streamed on demand since 2026-09-17 (see
+"On-demand streams"). Consumers are not migrated yet: the order ticket, the feed
 monitor, `paper._fetch_clob_book`, `live._book_context` and the daily scanner still
-poll REST. Moving them onto the hub is the next step.
+poll REST. Moving them onto the hub (each calling `hub.want`) is the next step.
 
 ## Goal
 
@@ -154,25 +155,72 @@ hedged BTC included), at 32% of a core and 85 MiB RSS. The unhedged ETH groups s
 stalled for up to ~7 s; hedging them would add roughly 450 KiB/s at that level of
 activity.
 
+## On-demand streams (2026-09-17)
+
+Streaming the whole grid all the time cost 2.0-2.9 MiB/s (~170-245 GiB a day) and
+24-32% of a core, and those sockets competed for this link with the markets actually
+used. So the grid (assets x timeframes) is now the set of AVAILABLE markets, and the
+market channel only carries the markets something uses:
+
+- `hub.want(asset, timeframe, owner) -> Demand` registers a use (any thread or event
+  loop; idempotent per owner and market). The market's first owner starts its socket
+  group at once (the hub's loops are woken, not left to their 2 s tick; hedging rules
+  unchanged) and subscribes its current and next window. `Demand.release()`, leaving a
+  `with` block, or `hub.release(owner, asset=None, timeframe=None)` gives uses up;
+  `hub.wanted()` shows the owners by market. `MarketDataHub(pinned=...)` sets fixed
+  demand that cannot be released (the dashboard lifespan passes none for now).
+- After the last release the market keeps streaming for `demand_linger_s` (60 s), so
+  an owner that lets go and takes it again every tick causes no churn. Then its tokens
+  are dropped: each connection closes its socket (an emptied socket would still receive
+  the platform-wide `new_market` broadcast), which is not counted as a reconnect, and
+  the group drops its books and its served-latency record.
+- Reads for a market that is not streaming return None (`quote`, `market`, `top`,
+  `levels`), never an old book.
+- The universe resolves tokens (Gamma) only for markets that stream. `new_market`
+  announcements are kept for every grid market, and looked-up tokens while their window
+  is current or next, so wanting a market again is instant when they are known. With
+  no socket open, no announcements arrive, so a first want after a quiet spell usually
+  needs one Gamma read per window.
+- The RTDS prices (Chainlink, Chainlink 60 s TWAP, Binance) stay always on: a few
+  KiB/s, and strategies need their history warm.
+- `snapshot().grid` has one `GridMarket` per available market: state (STREAMING,
+  LINGERING, AVAILABLE), owners, streaming since, linger time left, connections
+  up/total, served latency p50/p90, bytes/s and tokens; `clob_kib_s` and `rtds_kib_s`
+  are the totals (characters per second over the last 10 whole seconds; RTDS after
+  decompression).
+
+Live check (2026-09-17 08:21 UTC, one process, `demand_linger_s=10`):
+
+| Phase | Result |
+|---|---|
+| Nothing wanted, 30 s | no CLOB socket, 0 CLOB bytes, no Gamma read; RTDS 5.2 KiB/s steady (12.6 KiB/s in the first 10 s, history snapshots); 1.1% of a core |
+| btc-5m + btc-1h wanted, 60 s | first socket 0.8 s after `want`, first live quotes after 0.9-1.2 s (4 Gamma reads); 4 sockets; CLOB 631 KiB/s (951 frames/s; 250 KiB/s in an earlier run); served latency p50/p90/max btc-5m 50/100/312 ms, btc-1h 60/180/334 ms; no reconnects or recycles; 12.6% of a core, 77 MiB RSS |
+| Released | LINGERING for 10 s (quotes still live, 479 KiB/s); AVAILABLE at 10.0 s; all 4 sockets closed 10.2-10.3 s after the release, not counted as reconnects; reads None; 0 CLOB bytes in the next 11.5 s |
+
 ## Modules
 
 | Module | Role |
 |---|---|
 | `clob_messages.py` | Pure `parse_frame(text) -> [event]`; unknown or malformed objects become `Unknown`. |
 | `order_book.py` | `OrderBook` per token; `top()` is O(1) and returns a frozen `TopOfBook`. |
-| `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog on the followed tokens' events (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s. |
+| `clob_stream.py` | `ClobMarketStream`: diffs as operation frames, PING 10 s, 45 s silence watchdog on the followed tokens' events (resubscribe, then reconnect), reconnect when >10 s behind its best, 1-30 s jittered backoff, stop within ~1 s; no tokens, no socket (an emptied set closes it). `Throughput` counts frames and characters per second for both streams. |
 | `rtds_stream.py` | `RtdsPriceStream`: `PricePoint`s per (source, asset), 900-point history, gap count, 30 s silence reconnect. Shares the market channel's TLS context (`clob_stream.tls_context`): building one blocks the loop ~13 ms, and ~28 sockets opening at once froze it for 215-340 ms. |
-| `universe.py` | `MarketUniverse`: current + next window per asset x timeframe; tokens from `new_market`, else one Gamma read per window. `select()` rolls windows over from the tokens already known (no I/O); the hub runs it every 2 s apart from the lookups, so a slow Gamma read never holds up a window that starts. |
+| `universe.py` | `MarketUniverse`: current + next window per wanted asset x timeframe (`set_wanted`); tokens from `new_market`, else one Gamma read per window. `select()` rolls windows over from the tokens already known (no I/O); the hub runs it every 2 s (and at once on a demand change) apart from the lookups, so a slow Gamma read never holds up a window that starts. |
 | `clob_shard.py` | `ClobShard`: one asset x timeframe's N connections, per-connection books, the freshest served, events pushed once, lagging connections replaced. |
-| `hub.py` | `MarketDataHub`: the public API; one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status. A stop cancels Gamma lookups in flight, so `run` returns within ~1 s. |
+| `hub.py` | `MarketDataHub`: the public API; demand (`want` / `release` / `wanted`, `pinned=`, `demand_linger_s`); one `ClobShard` per asset x timeframe (`hedge=` sets the connections), merged into one status plus the per-market grid. A stop cancels Gamma lookups in flight, so `run` returns within ~1 s. |
 
 ## API (`polymarket_exec/marketdata/hub.py`)
 
 ```python
 hub = hub_module.current()          # set by the dashboard lifespan
                                     # (MarketDataHub(hedge={"btc-5m": 2, ...}) to build one)
+demand = hub.want("btc", "5m", "bot loop")   # stream it (any thread); idempotent
+with hub.want("eth", "1h", "panel"):         # or hold it for a block
+    ...
+demand.release()                    # or hub.release("bot loop") for all of it
+hub.wanted()                        # {("btc", "5m"): frozenset({"bot loop"}), ...}
 hub.top(token_id)                   # TopOfBook | None (.live: see below)
-hub.levels(token_id, "bid", 10)     # ((price, size), ...) best first
+hub.levels(token_id, "bid", 10)     # ((price, size), ...) best first | None
 hub.market("btc", "5m", "next")     # MarketRef | None
 hub.quote("btc", "5m")              # MarketQuote(market, up, down, live) | None
 hub.price("chainlink_twap60", "btc")        # PricePoint | None
@@ -185,6 +233,8 @@ listener.close()
 ```
 
 Reads are safe from any thread: they return frozen objects that are replaced whole.
+They return None for a market that is not streaming (want it first; its first book
+arrives ~0.2 s after the socket subscribes, plus a Gamma read if its tokens are unknown).
 `TopOfBook.live` is False while no connection that is up serves the token (the socket
 dropped, or a new one has not delivered its snapshot yet): the values are the last ones
 seen, and `levels` returns the last levels seen. `MarketQuote.live` needs both tops live.
@@ -201,10 +251,25 @@ after the 30 s; a mapping (e.g. `{"1h": 600}`) sets the wait per timeframe.
 
 ## FEEDS card
 
-Four rows under the feed-monitor rows: "Polymarket books" (CLOB market WS; delay =
-the worst group's served latency p50, flagged past 2 s and STALE past 5 s with the group
-named; STALE after 45 s without data; DOWN when a group has no connection up, e.g.
-"1 of 24 asset/timeframe feeds down; btc-5m: ..."; OK notes connections that are
-reconnecting while their markets are still served), and "Chainlink prices",
-"Chainlink 60s TWAP", "Binance prices" (RTDS WS; delay = age of the newest print;
-STALE past 10 s). The full FEEDS redesign is a later change.
+Columns: Feed | Connection | Used for | Used by | Delay | Status. Connection says how
+the data arrives and how often ("WebSocket · RTDS", "WebSocket · CLOB · on demand",
+"REST · every 10 s", "REST · hourly", "REST · every 6 h"; REST cadences come from the
+monitor and the recorders), with the endpoint on hover. Used by names the components
+that consume the feed today (e.g. "bot loop · shadow roster · FEEDS check", "flow
+recorder"); the RTDS price rows say "none yet (kept warm)" until strategies read them.
+
+Four rows under the feed-monitor rows:
+
+- "Polymarket books" (WebSocket · CLOB · on demand). Used by = the owners of the
+  markets in use. Its delay and status come from the markets in use only: delay = the
+  worst served latency p50, flagged past 2 s and STALE past 5 s with the market named;
+  STALE after 45 s without data; DOWN when a market in use has no connection up after
+  its own 30 s grace (e.g. "1 of 2 markets in use down; btc-5m: ..."); OK notes
+  connections that are reconnecting or markets still connecting; IDLE when nothing is
+  in use. Under it, a grid of every available market (assets as rows, timeframes as
+  columns): the served latency for a market in use (coloured by its health; "connecting"
+  or "down" when there is none), "lingering" and "available" otherwise. Hover: used by,
+  connections up/total, p50/p90, KiB/s. Lingering and available markets never count as
+  issues.
+- "Chainlink prices", "Chainlink 60s TWAP", "Binance prices" (WebSocket · RTDS; delay =
+  age of the newest print; STALE past 10 s).

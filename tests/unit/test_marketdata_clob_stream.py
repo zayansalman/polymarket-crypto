@@ -187,26 +187,56 @@ async def test_token_changes_go_out_as_operation_diffs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_emptying_the_set_unsubscribes_and_keeps_the_socket() -> None:
+async def test_emptying_the_set_closes_the_socket_without_a_reconnect() -> None:
     clock = Clock()
-    conn = Connector()
+    first, second = FakeWs(), FakeWs()
+    conn = Connector([first, second])
     stream = _stream(conn, clock)
     stream.set_tokens({"a"})
     async with running(stream):
-        await until(lambda: conn.made and conn.made[0].sent)
-        ws = conn.made[0]
+        await until(lambda: first.sent)
         stream.set_tokens(set())
-        await until(lambda: len(ws.sent) == 2)
-        clock.t += 500  # nothing subscribed: the watchdog stays quiet
+        await until(lambda: first.exited)
+        st = stream.status()
+        assert (st.connected, st.subscribed, st.reconnects, st.last_error) == (
+            False, 0, 0, None)
+        assert len(first.sent) == 1  # closed, not unsubscribed
+        clock.t += 500  # idle: no watchdog, no reconnect
         await asyncio.sleep(0.02)
-        assert stream.status().resyncs == 0 and stream.status().subscribed == 0
-        stream.set_tokens({"c"})
-        await until(lambda: len(ws.frames()) == 3)
-    assert ws.frames()[1:] == [
-        {"assets_ids": ["a"], "operation": "unsubscribe"},
-        {"assets_ids": ["c"], "operation": "subscribe", "custom_feature_enabled": True},
-    ]
-    assert len(conn.made) == 1
+        assert len(conn.made) == 1 and stream.session == 1
+        stream.set_tokens({"c"})  # wanted again: a new socket, no backoff
+        await until(lambda: second.sent)
+        assert second.frames() == [
+            {"assets_ids": ["c"], "type": "market", "custom_feature_enabled": True}]
+        assert (stream.status().reconnects, stream.session) == (0, 2)
+
+
+class GatedWs(FakeWs):
+    """A socket whose handshake finishes only when the test says so."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+
+    async def __aenter__(self) -> GatedWs:
+        await self.gate.wait()
+        return self
+
+
+@pytest.mark.asyncio
+async def test_a_set_emptied_during_the_handshake_closes_the_new_socket() -> None:
+    ws = GatedWs()
+    conn = Connector([ws])
+    stream = _stream(conn)
+    stream.set_tokens({"a"})
+    async with running(stream):
+        await until(lambda: conn.made)
+        stream.set_tokens(set())
+        ws.gate.set()
+        await until(lambda: ws.exited)
+        await asyncio.sleep(0.02)
+        assert ws.sent == [] and len(conn.made) == 1
+        assert (stream.status().connected, stream.status().reconnects) == (False, 0)
 
 
 @pytest.mark.asyncio
@@ -275,15 +305,19 @@ async def test_rate_and_latency_percentiles() -> None:
         for _ in range(10):  # data frames, but snapshots carry no latency sample
             ws.push(snapshot)
         await until(lambda: stream.status().frames_total == 30)
+        ws.push("PONG")  # bytes, but not a data frame
+        await until(lambda: stream.status().last_pong_at is not None)
         clock.t = 1_002.5
         st = stream.status()
         assert st.frames_per_s == 3.0  # 30 frames over the last 10 whole seconds
         assert (st.latency_ms_p50, st.latency_ms_p90, st.latency_ms_max) == (11.0, 19.0, 20.0)
         assert sorted(stream.latency_samples()) == list(range(1, 21))
-        sent_bytes = sum(len(_trade(1_000_000 - d)) for d in range(1, 21)) + 10 * len(snapshot)
+        sent_bytes = (sum(len(_trade(1_000_000 - d)) for d in range(1, 21))
+                      + 10 * len(snapshot) + len("PONG"))
         assert st.bytes_total == sent_bytes
+        assert st.bytes_per_s == sent_bytes / 10
         clock.t = 1_020.0
-        assert stream.status().frames_per_s == 0.0
+        assert (stream.status().frames_per_s, stream.status().bytes_per_s) == (0.0, 0.0)
 
 
 @pytest.mark.asyncio

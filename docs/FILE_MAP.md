@@ -88,7 +88,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
-| `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: one row per live upstream feed — what it feeds, source, delay, status. |
+| `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
 | `polymarket_exec/ops/dashboard/panels/market_selector.py` | WIRED | 1 | Topbar market selector: asset buttons over timeframe buttons. |
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |

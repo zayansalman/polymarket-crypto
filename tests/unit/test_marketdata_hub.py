@@ -45,11 +45,13 @@ class FakeWs:
     def __init__(self) -> None:
         self.sent: list[str] = []
         self.incoming: asyncio.Queue = asyncio.Queue()
+        self.exited = False
 
     async def __aenter__(self) -> FakeWs:
         return self
 
     async def __aexit__(self, *exc) -> bool:
+        self.exited = True
         return False
 
     async def send(self, text: str) -> None:
@@ -73,11 +75,14 @@ class Connector:
 
 
 def _hub(clock: dict | None = None, **kw) -> hub_mod.MarketDataHub:
+    """A hub on the fake venue; btc 5m is wanted (by "test") unless ``pinned`` says else."""
     clock = clock if clock is not None else {"t": T0}
     kw.setdefault("clob_connect", Connector())
     kw.setdefault("rtds_connect", Connector())
     kw.setdefault("assets", ("btc",))
     kw.setdefault("timeframes", ("5m",))
+    kw.setdefault("pinned", [(asset, tf, "test") for asset in kw["assets"]
+                             for tf in kw["timeframes"]])
     return hub_mod.MarketDataHub(
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(_gamma)),
         time_fn=lambda: clock["t"], **kw,
@@ -145,7 +150,7 @@ async def test_trades_tick_sizes_and_unfollowed_tokens() -> None:
     hub.handle_clob_event(tick, 3_001)  # the channel repeats it
     assert hub.top(UP).tick_size == 0.001 and _drain(listener) == []
     hub.handle_clob_event(cm.BookEvent("m", "stranger", ((0.1, 1.0),), (), 1, "h"), 4_000)
-    assert hub.top("stranger") is None and hub.levels("stranger", "bid", 5) == ()
+    assert hub.top("stranger") is None and hub.levels("stranger", "bid", 5) is None
     # Unfollowing a token drops its book.
     _follow(hub, DOWN)
     assert hub.top(UP) is None and hub.top(DOWN) is not None
@@ -355,7 +360,8 @@ async def test_windows_roll_on_time_while_a_lookup_hangs() -> None:
     hub = hub_mod.MarketDataHub(
         ("btc",), ("5m", "15m"), hedge={}, clob_connect=Connector(), rtds_connect=Connector(),
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(gamma)),
-        time_fn=lambda: clock["t"], refresh_s=0.01)
+        time_fn=lambda: clock["t"], refresh_s=0.01,
+        pinned=[("btc", "5m", "test"), ("btc", "15m", "test")])
     listener = hub.listen()
     stop = asyncio.Event()
     task = asyncio.create_task(_REAL_RUN(hub, stop))
@@ -386,7 +392,8 @@ async def test_stop_does_not_wait_for_gamma_lookups() -> None:
     hub = hub_mod.MarketDataHub(
         ("btc", "eth"), ("5m", "15m", "1h", "1d"), hedge={}, clob_connect=Connector(),
         rtds_connect=Connector(), time_fn=lambda: T0,
-        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(hanging_gamma)))
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(hanging_gamma)),
+        pinned=[(a, tf, "test") for a in ("btc", "eth") for tf in ("5m", "15m", "1h", "1d")])
     stop = asyncio.Event()
     task = asyncio.create_task(_REAL_RUN(hub, stop))
     await asyncio.wait_for(asked.wait(), timeout=2)
@@ -548,6 +555,10 @@ def test_snapshot_before_running() -> None:
     assert len(snap.clob_shards["btc-5m"].connections) == 2 and snap.slowest_shard is None
     assert set(snap.prices) == set(rs.SOURCES)
     assert all(age is None for age in snap.price_ages.values())
+    market = snap.grid["btc-5m"]  # pinned: wanted from the start
+    assert (market.state, market.owners, market.since) == (hub_mod.STREAMING, ("test",), T0)
+    assert (market.connections_up, market.connections, market.bytes_per_s) == (0, 2, 0.0)
+    assert (snap.clob_kib_s, snap.rtds_kib_s) == (0.0, 0.0)
 
 
 def test_default_grid_and_registry() -> None:
@@ -562,6 +573,208 @@ def test_default_grid_and_registry() -> None:
     finally:
         hub_mod.set_current(None)
     assert hub_mod.current() is None
+
+
+# --- demand: only the markets someone uses are streamed ------------------------------
+
+SNAPSHOT = (FIXTURES / "clob_book_snapshot_array.json").read_text()
+
+
+def test_want_is_idempotent_and_release_drops_demand() -> None:
+    hub = _hub(pinned=(), timeframes=("5m", "1h"))
+    assert hub.wanted() == {}
+    assert hub.grid == (("btc", "5m"), ("btc", "1h"))
+    demand = hub.want("btc", "5m", "bot loop")
+    assert demand == hub.want("btc", "5m", "bot loop")  # the same claim
+    assert (demand.asset, demand.timeframe, demand.owner) == ("btc", "5m", "bot loop")
+    hub.want("btc", "5m", "order ticket")
+    hub.want("btc", "1h", "bot loop")
+    assert hub.wanted() == {("btc", "5m"): {"bot loop", "order ticket"},
+                            ("btc", "1h"): {"bot loop"}}
+    demand.release()
+    demand.release()  # twice is harmless
+    assert hub.wanted()[("btc", "5m")] == {"order ticket"}
+    assert hub.release("bot loop") == 1  # the rest of its demand: btc 1h
+    assert hub.release("bot loop") == 0
+    assert hub.wanted() == {("btc", "5m"): {"order ticket"}}
+    with hub.want("btc", "1h", "panel") as held:
+        assert held.owner == "panel" and hub.wanted()[("btc", "1h")] == {"panel"}
+    assert ("btc", "1h") not in hub.wanted()
+    hub.want("btc", "1h", "order ticket")
+    assert hub.release("order ticket", timeframe="1h") == 1
+    assert hub.release("order ticket", asset="eth") == 0
+    assert hub.release("order ticket", asset="btc") == 1
+    assert hub.wanted() == {}
+    view = hub.wanted()
+    with pytest.raises(TypeError):
+        view[("btc", "5m")] = frozenset({"x"})  # read-only
+    for bad in (("hype", "5m", "x"), ("btc", "4h", "x"), ("btc", "5m", ""),
+                ("btc", "5m", "  ")):
+        with pytest.raises(ValueError):
+            hub.want(*bad)
+
+
+def test_pinned_demand_stays() -> None:
+    hub = _hub(pinned=[("btc", "5m", "dashboard")])
+    assert hub.wanted() == {("btc", "5m"): {"dashboard"}}
+    assert hub.release("dashboard") == 0
+    hub.want("btc", "5m", "dashboard").release()  # a no-op for pinned demand
+    hub.want("btc", "5m", "strategy")
+    assert hub.release("strategy") == 1
+    assert hub.wanted() == {("btc", "5m"): {"dashboard"}}
+    with pytest.raises(ValueError):
+        _hub(pinned=[("btc", "4h", "dashboard")])
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_streamed_or_looked_up_until_a_market_is_wanted() -> None:
+    clob, rtds = Connector(), Connector()
+    hub = _hub(clob_connect=clob, rtds_connect=rtds, pinned=())
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        await until(lambda: rtds.made and rtds.made[0].sent)  # prices are always on
+        await asyncio.sleep(0.05)
+        assert clob.made == [] and hub.snapshot().gamma_lookups == 0
+        assert hub.quote("btc", "5m") is None and hub.market("btc", "5m") is None
+        assert hub.top(UP) is None and hub.levels(UP, "bid", 5) is None
+        hub.want("btc", "5m", "strategy")  # applied at once, not at the next 2 s tick
+        await until(lambda: len(clob.made) == 2 and all(ws.sent for ws in clob.made))
+        assert hub.snapshot().gamma_lookups == 2  # btc 5m current and next only
+        clob.made[0].incoming.put_nowait(SNAPSHOT)
+        await until(lambda: hub.top(UP) is not None)
+        assert hub.quote("btc", "5m").live and hub.levels(UP, "bid", 1) == ((0.8, 282.0),)
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_a_market_can_be_wanted_from_another_threads_event_loop() -> None:
+    clob = Connector()
+    hub = _hub(clob_connect=clob, pinned=(), hedge={})
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    demands: list = []
+
+    def strategy_thread() -> None:
+        async def main() -> None:
+            demands.append(hub.want("btc", "5m", "bot loop"))
+
+        asyncio.run(main())
+
+    try:
+        await asyncio.sleep(0.02)
+        thread = threading.Thread(target=strategy_thread)
+        thread.start()
+        await asyncio.to_thread(thread.join, 2)
+        await until(lambda: clob.made and clob.made[0].sent)
+        assert hub.wanted() == {("btc", "5m"): {"bot loop"}}
+        released = threading.Thread(target=demands[0].release)
+        released.start()
+        await asyncio.to_thread(released.join, 2)
+        assert hub.wanted() == {}
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_a_released_market_lingers_then_stops_and_drops_its_books() -> None:
+    clock = {"t": T0}
+    clob = Connector()
+    hub = _hub(clock, clob_connect=clob, pinned=(), hedge={}, refresh_s=0.01,
+               demand_linger_s=60.0)
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        demand = hub.want("btc", "5m", "strategy")
+        await until(lambda: clob.made and clob.made[0].sent)
+        socket = clob.made[0]
+        socket.incoming.put_nowait(SNAPSHOT)
+        await until(lambda: hub.top(UP) is not None)
+        demand.release()
+        clock["t"] = T0 + 30
+        hub.want("btc", "5m", "strategy")  # back within the linger: no churn
+        demand.release()
+        clock["t"] = T0 + 89  # 59 s after the last release: still streaming
+        await asyncio.sleep(0.05)
+        assert not socket.exited and len(clob.made) == 1
+        assert hub.quote("btc", "5m").live and hub.levels(UP, "bid", 1) == ((0.8, 282.0),)
+        lingering = hub.snapshot().grid["btc-5m"]
+        assert (lingering.state, lingering.owners, lingering.since) == (
+            hub_mod.LINGERING, (), T0)
+        assert lingering.linger_left_s == pytest.approx(1.0)
+        clock["t"] = T0 + 90
+        assert hub.snapshot().grid["btc-5m"].state == hub_mod.AVAILABLE
+        await until(lambda: socket.exited)
+        assert hub.top(UP) is None and hub.top(DOWN) is None
+        assert hub.levels(UP, "bid", 5) is None and hub.quote("btc", "5m") is None
+        assert hub.market("btc", "5m") is None
+        assert hub._shards["btc-5m"].desired == frozenset()
+        await asyncio.sleep(0.05)
+        assert len(clob.made) == 1  # stopped, not reconnecting
+        snap = hub.snapshot()
+        assert (snap.markets, snap.tokens, snap.subscribed, snap.clob.reconnects) == (0, 0, 0, 0)
+        hub.want("btc", "5m", "strategy")  # wanted again: tokens known, a new socket
+        await until(lambda: len(clob.made) == 2 and clob.made[1].sent)
+        assert hub.snapshot().gamma_lookups == 2
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_shows_each_markets_state_owners_and_throughput() -> None:
+    clock = {"t": T0}
+    clob, rtds = Connector(), Connector()
+    hub = _hub(clock, clob_connect=clob, rtds_connect=rtds, pinned=(), refresh_s=0.01,
+               assets=("btc", "eth"), timeframes=("5m", "1h"))
+    change = _price_change([(UP, "0.8", "300", "BUY"), (DOWN, "0.2", "300", "SELL")],
+                           ts=int(T0 * 1000) - 40)
+    price = _binance_print(T0 - 1)
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    try:
+        hub.want("btc", "5m", "order ticket")
+        hub.want("btc", "5m", "bot loop")
+        hub.want("eth", "1h", "panel").release()  # lingering
+        await until(lambda: len(clob.made) == 3 and all(ws.sent for ws in clob.made)
+                    and rtds.made and rtds.made[0].sent)
+        btc = [ws for ws in clob.made if UP in json.loads(ws.sent[0])["assets_ids"]]
+        btc[0].incoming.put_nowait(SNAPSHOT)
+        btc[0].incoming.put_nowait(change)
+        rtds.made[0].incoming.put_nowait(price)
+        await until(lambda: hub.top(UP) is not None and hub.top(UP).bid_size == 300.0
+                    and hub.price(rs.BINANCE, "btc") is not None)
+        clock["t"] = T0 + 1.5  # rates cover the last 10 whole seconds
+        snap = hub.snapshot()
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert list(snap.grid) == ["btc-5m", "btc-1h", "eth-5m", "eth-1h"]
+    assert (snap.assets, snap.timeframes, snap.demand_linger_s) == (
+        ("btc", "eth"), ("5m", "1h"), 60.0)
+    btc5 = snap.grid["btc-5m"]
+    assert (btc5.asset, btc5.timeframe, btc5.state, btc5.owners, btc5.since) == (
+        "btc", "5m", hub_mod.STREAMING, ("bot loop", "order ticket"), T0)
+    assert (btc5.connections_up, btc5.connections, btc5.tokens, btc5.linger_left_s) == (
+        2, 2, 4, None)
+    assert (btc5.served_latency_ms_p50, btc5.served_latency_ms_p90) == (40.0, 40.0)
+    assert btc5.bytes_per_s == pytest.approx((len(SNAPSHOT) + len(change)) / 10)
+    eth1 = snap.grid["eth-1h"]
+    assert (eth1.state, eth1.owners, eth1.since, eth1.connections_up, eth1.connections) == (
+        hub_mod.LINGERING, (), T0, 1, 1)
+    assert eth1.linger_left_s == pytest.approx(58.5)
+    for idle in (snap.grid["btc-1h"], snap.grid["eth-5m"]):
+        assert (idle.state, idle.owners, idle.since, idle.linger_left_s) == (
+            hub_mod.AVAILABLE, (), None, None)
+        assert (idle.connections_up, idle.tokens, idle.bytes_per_s) == (0, 0, 0.0)
+        assert idle.served_latency_ms_p50 is None and idle.served_latency_ms_p90 is None
+    assert snap.grid["btc-1h"].connections == 2 and snap.grid["eth-5m"].connections == 1
+    assert snap.clob_kib_s == pytest.approx(btc5.bytes_per_s / 1024)
+    assert snap.clob.bytes_per_s == pytest.approx(btc5.bytes_per_s)
+    assert snap.rtds_kib_s == pytest.approx(len(price) / 10 / 1024)
 
 
 def test_dashboard_lifespan_registers_and_clears_the_hub(

@@ -83,6 +83,7 @@ class ShardStatus:
     stalls_avoided: int  # a connection fell >1 s behind while another one kept serving
     recycles: int
     stall_episodes: tuple[int, ...]  # per connection: times it fell >1 s behind
+    bytes_per_s: float = 0.0  # every connection together, over the last 10 whole seconds
 
 
 class _Conn:
@@ -216,13 +217,19 @@ class ClobShard:
             stalls_avoided=self._stalls_avoided,
             recycles=sum(c.recycles for c in self._conns),
             stall_episodes=tuple(c.stall_episodes for c in self._conns),
+            bytes_per_s=sum(st.bytes_per_s for st in conns),
         )
 
     # --- the hub's loop ------------------------------------------------------------------
 
     def set_tokens(self, tokens: Iterable[str]) -> None:
+        """Follow ``tokens``; books of the others are dropped. With none, the connections
+        close and the served-latency record starts over for the next time."""
         wanted = frozenset(tokens)
         self._wanted = wanted
+        if not wanted:
+            self._served_latency.clear()
+            self._newest_served_ms = None
         for conn in self._conns:
             conn.stream.set_tokens(wanted)
             for held in (conn.books, conn.trades_seen):

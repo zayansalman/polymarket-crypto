@@ -22,10 +22,11 @@ They are **bidirectionally coupled**: the FastAPI dashboard imports `polymarket_
 | Risk limits / kill-switch / daily-loss halt | `polymarket_exec/execution/gate.py` |
 | Live order placement | `polymarket_exec/execution/live.py` |
 | Add/modify a market or price feed | `polymarket_exec/connectors/` |
-| Feed health checks behind the FEEDS card | `polymarket_exec/ops/feed_monitor.py` (checks) + `ops/dashboard/panels/feeds.py` (card) |
+| Feed health checks behind the FEEDS card | `polymarket_exec/ops/feed_monitor.py` (checks) + `ops/dashboard/panels/feeds.py` (card: Connection / Used for / Used by per row — static facts in its `_REST_FEEDS` / `_FLOW_FEEDS` / `_MACRO_FEEDS` tables — plus the Polymarket market grid) |
 | Venue trade-flow feeds (Binance spot/perp/liquidations, Kraken spot/futures) | `polymarket_exec/ops/flow_recorder.py` (recording) + `connectors/venue_flow.py`, `connectors/venue_messages.py`, `connectors/ws_runner.py` + `storage/venue_flow_store.py` (tables `venue_flow_hourly`, `venue_snapshot`) |
 | Macro feeds (BLS/BEA/Census release schedules, Fed calendar, ForexFactory week + consensus) | `polymarket_exec/ops/macro_recorder.py` (recording; a new source is one more `MacroSource`) + `connectors/macro_calendar.py` (parsers, categories) + `storage/macro_store.py` (tables `macro_events`, `macro_consensus`; each source's schedule survives restarts in `config` keys `macro.feed_state.*`) |
-| Live Polymarket books/prices for strategies (Up/Down books, trades, resolutions; Chainlink, Chainlink TWAP and Binance prices over WebSockets) | `polymarket_exec/marketdata/hub.py` (public API: `current()`, `top`, `quote`, `price`, `listen`; `hedge=` sets connections per asset x timeframe) + `marketdata/clob_shard.py` (redundant connections, freshest served) + `marketdata/{clob_stream,rtds_stream,universe,order_book,clob_messages}.py`; design in `docs/superpowers/specs/2026-09-16-polymarket-ws-marketdata-design.md` |
+| Want a live Polymarket market (stream it on demand) | `hub.want(asset, timeframe, owner)` in `polymarket_exec/marketdata/hub.py` — returns a `Demand` (`release()` or a `with` block gives it up; `hub.release(owner)` drops all of an owner's); reads return None until the market streams; a released market lingers `demand_linger_s` (60 s), then its sockets stop |
+| Live Polymarket books/prices for strategies (Up/Down books, trades, resolutions; Chainlink, Chainlink TWAP and Binance prices over WebSockets) | `polymarket_exec/marketdata/hub.py` (public API: `current()`, `want`/`release`/`wanted`, `top`, `quote`, `price`, `listen`, `snapshot`; `hedge=` sets connections per asset x timeframe, `pinned=` fixed demand) + `marketdata/clob_shard.py` (redundant connections, freshest served) + `marketdata/universe.py` (resolves only the wanted markets) + `marketdata/{clob_stream,rtds_stream,order_book,clob_messages}.py`; design in `docs/superpowers/specs/2026-09-16-polymarket-ws-marketdata-design.md` |
 | Dashboard panel / UI | `polymarket_exec/ops/dashboard/panels/` |
 | An env knob / default | `config.py` + document in `.env.example` |
 | A new DB column | `db.py` migration dict (NOT the `SCHEMA` literal) |
@@ -78,7 +79,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1262.
+- **Tests:** 1291.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
@@ -167,7 +168,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
-| `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: one row per live upstream feed — what it feeds, source, delay, status. |
+| `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
 | `polymarket_exec/ops/dashboard/panels/market_selector.py` | WIRED | 1 | Topbar market selector: asset buttons over timeframe buttons. |
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |
