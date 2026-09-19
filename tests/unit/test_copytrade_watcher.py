@@ -188,3 +188,15 @@ def test_the_panel_shows_skips_with_their_reason() -> None:
     assert "DECISIONS (24h)" in html
     assert "3 copied of 15 fills examined" in html
     assert "already settled" in html
+
+
+def test_a_cheaper_realistic_cost_is_not_called_an_improvement_when_orders_failed() -> None:
+    """Unfilled orders cost $0, which makes the total look better than reality."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {"execution": {"n": 8, "staked": 84.57, "real_staked": 72.57,
+                             "real_slip": -0.01, "unfilled": 2},
+               "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "lower only because some orders did not fill" in html
+    assert "copy-bad" in html
+    assert "orders that would NOT have filled" in html

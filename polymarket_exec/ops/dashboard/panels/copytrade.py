@@ -96,8 +96,14 @@ def _execution_html(summary: dict) -> str:
     if not staked or not real:
         return ""
     diff = real - staked
-    cls = "copy-bad" if diff > 0 else "copy-good"
+    # A lower realistic cost is NOT good news when it is lower because orders
+    # failed to fill. Only call it an improvement when everything filled.
+    cls = "copy-good" if (diff < 0 and not unfilled) else "copy-bad"
     money = f"{'+' if diff >= 0 else '-'}${abs(diff):,.2f}"
+    caveat = (
+        " — lower only because some orders did not fill" if diff < 0 and unfilled
+        else ""
+    )
     return (
         "<div class='copy-results'>"
         "<div class='copy-results-h'>EXECUTION REALISM</div>"
@@ -108,6 +114,7 @@ def _execution_html(summary: dict) -> str:
         "<div class='copy-result'><span>cost of being late</span>"
         f"<span class='{cls}'>{money}"
         + (f" &middot; {100*slip:+.2f}c/share" if slip is not None else "")
+        + escape(caveat)
         + "</span></div>"
         + (
             "<div class='copy-result'><span>orders that would NOT have filled"

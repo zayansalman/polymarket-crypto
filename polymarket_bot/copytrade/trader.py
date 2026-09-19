@@ -81,6 +81,15 @@ async def consider(
 
     try:
         asks = await _asks(client, fill.token_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            # The window had already closed by the time we saw the fill. The
+            # target entered in the last seconds; a follower cannot be there.
+            await note("skipped", "market already closed when we saw the fill "
+                                  f"({fill.lag_seconds:.0f}s behind)")
+        else:
+            await note("skipped", f"book request failed (HTTP {exc.response.status_code})")
+        return False
     except Exception as exc:  # noqa: BLE001
         log.warning("copytrade.book_failed", token=fill.token_id[:16], error=str(exc))
         await note("skipped", f"book unavailable ({type(exc).__name__})")
