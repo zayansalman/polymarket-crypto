@@ -417,3 +417,48 @@ body {
 .halt-row .gr-btn { padding: 3px 8px; }
 .halt-status { font-family: var(--font-mono); font-weight: 700; }
 .halt-status.warn { color: var(--warn, #c98a3a); }
+
+/* COPY TRADE card ------------------------------------------------------- */
+.copy-evidence {
+  font-size: 11px; color: var(--muted); line-height: 1.5;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.copy-evidence b { color: var(--fg); }
+.copy-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  font-size: 11px; color: var(--muted); padding: 8px 0;
+}
+.copy-stats b { color: var(--fg); }
+.copy-error { font-size: 11px; color: var(--bad); padding: 4px 0; }
+.copy-fills { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
+/* Two rows per fill: the card sits in a half-width column, so a single-row
+   grid truncates the market title to "Silve..." — and which market a fill is
+   on is the whole point of watching a target that might drift. */
+.copy-fill {
+  display: grid; align-items: baseline; gap: 2px 10px; padding: 6px 0;
+  grid-template-columns: 62px 78px 1fr auto auto;
+  font-size: 11px; border-top: 1px solid var(--border);
+}
+.copy-fill .copy-title { grid-column: 1 / -1; white-space: normal; }
+.copy-fill .copy-other-tag { grid-column: 1 / -1; justify-self: start; }
+/* A fill on a market the target was never measured on still shows, dimmed:
+   a target drifting elsewhere is the failure we most need to see. */
+.copy-fill-other { opacity: 0.55; }
+.copy-when, .copy-lag { color: var(--muted); }
+.copy-buy { color: var(--good); }
+.copy-sell { color: var(--bad); }
+.copy-size, .copy-notional { font-variant-numeric: tabular-nums; }
+.copy-notional { text-align: right; }
+.copy-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-backfill { font-style: italic; opacity: 0.7; }
+.copy-other-tag {
+  font-size: 10px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 3px; padding: 0 4px; white-space: nowrap;
+}
+.copy-bad { color: var(--bad); }
+@media (max-width: 900px) {
+  .copy-fill { grid-template-columns: 58px 74px 1fr auto; }
+  .copy-lag { grid-column: 1 / -1; }
+}
+.copy-link { color: inherit; text-decoration: underline dotted; }
+.copy-link:hover { color: var(--fg); text-decoration: underline; }

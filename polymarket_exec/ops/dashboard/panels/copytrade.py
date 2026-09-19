@@ -21,6 +21,8 @@ from html import escape
 
 from polymarket_bot.copytrade.targets import Target
 
+PROFILE_URL = "https://polymarket.com/profile/"
+
 
 def _ago(ts: float, now: float) -> str:
     if not ts:
@@ -65,12 +67,19 @@ def render(*, state, target: Target | None, now: float | None = None) -> str:
             "</section>"
         )
 
+    # The wallet name links to its Polymarket profile: the measured stats are
+    # historical, and whether a target is still running the strategy we measured
+    # is only answerable by looking at what it is doing right now.
+    link = (
+        f"<a class='copy-link' href='{PROFILE_URL}{escape(state.target)}' "
+        f"target='_blank' rel='noopener'>{escape(state.label)}</a>"
+    )
     if not state.enabled:
-        status = "<span class='win'>switched off</span>"
+        status = f"<span class='win'>switched off &middot; {link}</span>"
     elif state.connected:
-        status = f"<span class='win'>watching {escape(state.label)}</span>"
+        status = f"<span class='win'>watching {link}</span>"
     else:
-        status = "<span class='win copy-bad'>feed down</span>"
+        status = f"<span class='win copy-bad'>feed down &middot; {link}</span>"
 
     followed = state.followed_fills
     ev = ""

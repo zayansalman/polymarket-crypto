@@ -117,3 +117,13 @@ def test_the_panel_uses_no_browser_dialogs() -> None:
 
 def test_the_panel_renders_before_the_watcher_has_started() -> None:
     assert "not started" in panel.render(state=None, target=None)
+
+
+def test_the_wallet_links_to_its_polymarket_profile() -> None:
+    """Measured stats are historical; the profile says what it is doing now."""
+    state = _watcher.WatcherState(
+        target=_targets.DEFAULT_TARGET, label="kodeoed", enabled=True, connected=True
+    )
+    html = panel.render(state=state, target=_targets.get(_targets.DEFAULT_TARGET))
+    assert f"https://polymarket.com/profile/{_targets.DEFAULT_TARGET}" in html
+    assert "rel='noopener'" in html
