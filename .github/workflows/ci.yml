@@ -1,10 +1,14 @@
 name: CI
 
 on:
+  # `develop` is the integration branch every feature branch is PR'd into;
+  # `main` only ever receives develop. Without `develop` here, CI ran on the
+  # develop -> main PR alone, so each feature PR merged into develop unchecked
+  # and a break only surfaced at release time, attributed to the whole batch.
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 jobs:
   test:
