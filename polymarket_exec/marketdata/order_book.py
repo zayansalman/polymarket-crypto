@@ -14,6 +14,10 @@ from polymarket_exec.marketdata.clob_messages import BUY, SELL
 
 Level = tuple[float, float]  # (price, size)
 
+# Where a top came from: the market-channel sockets, or a REST ``/book`` read.
+STREAM = "stream"
+REST = "rest"
+
 
 @dataclass(frozen=True, slots=True)
 class TopOfBook:
@@ -29,6 +33,7 @@ class TopOfBook:
     # False when the hub has no connection up serving this token: the values are the
     # last ones seen and no longer update.
     live: bool = True
+    source: str = STREAM  # STREAM | REST
 
     @property
     def crossed(self) -> bool:

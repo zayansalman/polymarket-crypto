@@ -67,7 +67,7 @@ from polymarket_exec.marketdata.clob_messages import (
 )
 from polymarket_exec.marketdata.clob_shard import ClobShard, ShardStatus
 from polymarket_exec.marketdata.clob_stream import StreamStatus, run_until_stopped
-from polymarket_exec.marketdata.order_book import Level, TopOfBook
+from polymarket_exec.marketdata.order_book import STREAM, Level, TopOfBook
 from polymarket_exec.marketdata.rtds_stream import PricePoint, RtdsPriceStream, SourceStatus
 from polymarket_exec.marketdata.universe import (
     ASSETS,
@@ -89,6 +89,7 @@ RESOLVED_MEMORY = 512
 # A market nobody wants any more keeps streaming this long, so an owner that lets go
 # and takes it again (e.g. every tick) does not open and close sockets each time.
 DEMAND_LINGER_S = 60.0
+READY_POLL_S = 0.02  # how often ``wait_ready`` looks
 
 Pair = tuple[str, str]  # (asset, timeframe)
 
@@ -185,6 +186,36 @@ class GridMarket:
 
 
 @dataclass(frozen=True)
+class ReadStats:
+    """How ``book_top`` reads were served (one count per call)."""
+
+    reads: int  # from_stream + from_rest + stale + missing
+    from_stream: int  # the market-channel sockets
+    from_rest: int  # a REST /book read that was ahead of the sockets
+    stale: int  # what we held was older than the caller's max_age_s
+    missing: int  # nothing to serve: the caller falls back to its own read
+
+
+class _ReadCounter:
+    """``book_top`` outcomes, counted from any thread (observation only)."""
+
+    __slots__ = ("_lock", "_counts")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._counts = dict.fromkeys(("from_stream", "from_rest", "stale", "missing"), 0)
+
+    def bump(self, outcome: str) -> None:
+        with self._lock:
+            self._counts[outcome] += 1
+
+    def stats(self) -> ReadStats:
+        with self._lock:
+            counts = dict(self._counts)
+        return ReadStats(reads=sum(counts.values()), **counts)
+
+
+@dataclass(frozen=True)
 class MarketDataSnapshot:
     """What the FEEDS card shows."""
 
@@ -209,6 +240,7 @@ class MarketDataSnapshot:
     clob_kib_s: float = 0.0  # market channel, every connection
     rtds_kib_s: float = 0.0  # reference prices (after decompression)
     demand_linger_s: float = DEMAND_LINGER_S
+    reads: ReadStats = ReadStats(0, 0, 0, 0, 0)  # how strategy reads were served
 
 
 def shard_name(asset: str, timeframe: str) -> str:
@@ -441,6 +473,7 @@ class MarketDataHub:
         self._listeners: tuple[Listener, ...] = ()
         self._listeners_lock = threading.Lock()
         self._closed_listener_drops = 0
+        self._reads = _ReadCounter()
         self._started_at = time_fn()
 
     @property
@@ -584,6 +617,66 @@ class MarketDataHub:
         live = up is not None and down is not None and up.live and down.live
         return MarketQuote(ref, up, down, live)
 
+    def book_top(self, token_id: str, max_age_s: float | None = None) -> TopOfBook | None:
+        """The freshest book we hold for ``token_id`` — never an old one instead.
+
+        What a strategy calls per decision. It serves the streamed top while a
+        connection that is up is serving that token, and the fresh REST poll's read
+        whenever that one is ahead of the sockets. ``max_age_s`` is how old the read
+        may be, measured on OUR clock (when it arrived): this machine runs ~66 ms
+        behind the venue's event stamps, so "now minus the event time" is not
+        staleness. None means the caller should read the book itself.
+        """
+        streamed = self.top(token_id)
+        if streamed is not None and not streamed.live:
+            streamed = None  # the last values seen, no longer updating
+        best = self._freshest(streamed, self._rest_top(token_id))
+        if best is None:
+            self._reads.bump("missing")
+            return None
+        if max_age_s is not None and self._age_s(best) > max_age_s:
+            self._reads.bump("stale")
+            return None
+        self._reads.bump("from_stream" if best.source == STREAM else "from_rest")
+        return best
+
+    def _rest_top(self, token_id: str) -> TopOfBook | None:
+        """The fresh REST poll's last read for ``token_id``, when it beat the sockets."""
+        return None
+
+    @staticmethod
+    def _freshest(streamed: TopOfBook | None, rest: TopOfBook | None) -> TopOfBook | None:
+        """The one holding the newer book; the stream wins a tie (it keeps updating)."""
+        if rest is None:
+            return streamed
+        if streamed is None:
+            return rest
+        streamed_ts = -1 if streamed.server_ts_ms is None else streamed.server_ts_ms
+        rest_ts = -1 if rest.server_ts_ms is None else rest.server_ts_ms
+        return rest if rest_ts > streamed_ts else streamed
+
+    def _age_s(self, top: TopOfBook) -> float:
+        if top.received_ms is None:
+            return float("inf")
+        return max(0.0, self._time_fn() - top.received_ms / 1000)
+
+    async def wait_ready(self, asset: str, timeframe: str, timeout_s: float = 10.0,
+                         which: str = CURRENT) -> bool:
+        """Wait until both of a market's books are live, or ``timeout_s`` passes.
+
+        What a caller that has just wanted a market uses before its first read: the
+        sockets need to connect and deliver their snapshot first.
+        """
+        loop = asyncio.get_running_loop()
+        end = loop.time() + max(0.0, timeout_s)
+        while True:
+            quote = self.quote(asset, timeframe, which)
+            if quote is not None and quote.live:
+                return True
+            if loop.time() >= end:
+                return False
+            await asyncio.sleep(READY_POLL_S)
+
     def price(self, source: str, asset: str) -> PricePoint | None:
         """Newest print from ``source`` (chainlink | chainlink_twap60 | binance)."""
         return self._rtds.latest(source, asset)
@@ -633,6 +726,7 @@ class MarketDataHub:
             clob_kib_s=clob.bytes_per_s / 1024,
             rtds_kib_s=self._rtds.bytes_per_s() / 1024,
             demand_linger_s=self._linger_s,
+            reads=self._reads.stats(),
         )
 
     def _grid_markets(self, now: float, shards: dict[str, ShardStatus]
@@ -808,3 +902,28 @@ def set_current(hub: MarketDataHub | None) -> None:
 
 def current() -> MarketDataHub | None:
     return _current
+
+
+# The same calls against whichever hub this process runs, for code that must work with
+# and without one (the BTC loop runs outside the dashboard too): no hub -> no data, and
+# the caller falls back to its own REST read.
+
+def want(asset: str, timeframe: str, owner: str) -> Demand | None:
+    """Stream a market for ``owner`` if a hub is running; None when there is none."""
+    hub = _current
+    return None if hub is None else hub.want(asset, timeframe, owner)
+
+
+def release(owner: str, asset: str | None = None, timeframe: str | None = None) -> int:
+    hub = _current
+    return 0 if hub is None else hub.release(owner, asset, timeframe)
+
+
+def book_top(token_id: str, max_age_s: float | None = None) -> TopOfBook | None:
+    hub = _current
+    return None if hub is None else hub.book_top(token_id, max_age_s)
+
+
+async def wait_ready(asset: str, timeframe: str, timeout_s: float = 10.0) -> bool:
+    hub = _current
+    return False if hub is None else await hub.wait_ready(asset, timeframe, timeout_s)
