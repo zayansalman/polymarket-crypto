@@ -107,8 +107,7 @@ def render(
         f"<b class='mono dim' data-cost='max'>${shares:,.2f}</b></div>"
         "</div>"
         "<div class='tk-foot'>"
-        f"<span id='ctl-saved'>{saved} {shares:g} sh</span> · min {minsh:g} sh · "
-        "paper + live · applies next tick"
+        f"<span id='ctl-saved'>{saved} {shares:g} sh</span> · min {minsh:g} sh"
         "</div>"
         "</section>"
     )
