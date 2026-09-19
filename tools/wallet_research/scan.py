@@ -21,12 +21,19 @@ UNIVERSES = {
         "24h": ["btc-up-or-down-daily", "eth-up-or-down-daily", "solana-up-or-down-daily",
                 "xrp-up-or-down-daily", "bnb-up-or-down-daily", "hype-up-or-down-daily"],
     },
+    # 15-minute crypto. Distinct from the deleted 5m family: these are the
+    # markets the surviving taker wallets actually trade.
+    "crypto15m": {
+        "15m": ["btc-up-or-down-15m", "eth-up-or-down-15m",
+                "sol-up-or-down-15m", "xrp-up-or-down-15m"],
+    },
     # Gold/silver/oil/SPY exist as dailies only - no hourly equivalents exist.
     "macro": {
         "24h": ["gold-daily-up-or-down", "silver-daily-up-or-down", "oil-daily-up-or-down",
                 "spy-daily-up-or-down", "spy-open-daily-up-or-down"],
     },
 }
+_FAMILY_OF: dict[str, str] = {}
 HOURLY: list[str] = []
 DAILY: list[str] = []
 
@@ -92,7 +99,7 @@ async def phase_markets(cl: httpx.AsyncClient, con: sqlite3.Connection, since_ts
     """
     now = int(time.time())
     for series in HOURLY + DAILY:
-        family = "1h" if series in HOURLY else "24h"
+        family = _FAMILY_OF.get(series, "1h" if series in HOURLY else "24h")
         kept = 0
         lo = since_ts
         while lo < now:
@@ -192,8 +199,11 @@ async def main() -> None:
     a = ap.parse_args()
     since = int(time.time()) - a.days * 86400
     global HOURLY, DAILY, DB
-    HOURLY = UNIVERSES[a.universe].get("1h", [])
-    DAILY = UNIVERSES[a.universe].get("24h", [])
+    uni = UNIVERSES[a.universe]
+    HOURLY = uni.get("1h", []) + uni.get("15m", [])
+    DAILY = uni.get("24h", [])
+    global _FAMILY_OF
+    _FAMILY_OF = {s: fam for fam, names in uni.items() for s in names}
     if a.db:
         DB = Path(a.db)
     print(f"universe {a.universe}: {len(HOURLY)} hourly + {len(DAILY)} daily series", flush=True)
