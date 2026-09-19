@@ -5,8 +5,9 @@ import asyncio
 import json
 
 import pytest
+import websockets
 
-from polymarket_exec.connectors.ws_runner import WsStatus, run_ws_forever
+from polymarket_exec.connectors.ws_runner import WsStatus, _default_connect, run_ws_forever
 
 
 class _FakeWs:
@@ -90,3 +91,21 @@ async def test_no_subscribe_message_when_none() -> None:
         timeout=5,
     )
     assert ws.sent == []
+
+
+def test_default_connect_bounds_the_close_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Binance's liquidation stream echoes CLOSE but never closes TCP, so each close
+    # waits the whole close_timeout (10 s by default in websockets) and stalls shutdown.
+    calls: list[tuple[str, dict]] = []
+    opener = object()
+
+    def fake_connect(url: str, **kwargs) -> object:
+        calls.append((url, kwargs))
+        return opener
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+    assert _default_connect("wss://example.test/ws") is opener
+    [(url, kwargs)] = calls
+    assert url == "wss://example.test/ws"
+    close_timeout = kwargs.get("close_timeout")
+    assert close_timeout is not None and 0 < close_timeout <= 1
