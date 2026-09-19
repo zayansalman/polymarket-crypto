@@ -180,9 +180,16 @@ async def execution_view_html() -> str:
 
     _cw = _copy_watcher.current()
     _cstate = _cw.state if _cw is not None else None
+    from polymarket_bot.copytrade import ledger as _copy_ledger
+
+    try:
+        _csummary = await _copy_ledger.summary()
+    except Exception:  # noqa: BLE001 — a missing table must not blank the page
+        _csummary = {}
     copytrade_html = copytrade_panel.render(
         state=_cstate,
         target=_copy_targets.get(_cstate.target) if _cstate else None,
+        summary=_csummary,
     )
     settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
     settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)

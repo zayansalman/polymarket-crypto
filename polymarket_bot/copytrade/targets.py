@@ -43,6 +43,8 @@ class Target:
     """Edge remaining for a copier entering 30 minutes late, from tape replay."""
     assets: str
     note: str = ""
+    cadence: str = "daily"
+    """'daily' settles once a day; 'intraday' settles every 15-60 minutes."""
 
     @property
     def key(self) -> str:
@@ -55,6 +57,19 @@ class Target:
 TARGETS: dict[str, Target] = {
     t.key: t
     for t in (
+        Target(
+            address="0x83451c358d50b3f8982124fc741e8bda4b4edd93",
+            label="Oldstreet",
+            edge_cents=0.23, t_stat=8.85, markets=800, avg_stake_usd=843.0,
+            runway_p10_min=2.1, edge_left_30min=0.11,
+            assets="btc, eth 15m + 1h", cadence="intraday",
+            note="thinnest edge of the set and the only one where lag really "
+                 "bites (this repo measures 9.56c slippage at 11-30s lag). "
+                 "Included because its markets settle every 15-60 min, so it is "
+                 "the only target that produces settled paper results overnight "
+                 "- treat its numbers as the honest cost of a late copy, not as "
+                 "a forecast of the daily wallets.",
+        ),
         Target(
             address="0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4",
             label="kodeoed",

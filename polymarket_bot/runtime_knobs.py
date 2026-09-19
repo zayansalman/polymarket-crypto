@@ -54,9 +54,25 @@ KNOBS: dict[str, Knob] = {
     # and each entry carries the measurement that earned it a place
     # (copytrade/targets.py). A typo'd address would poll a wallet with no
     # measured edge, which is worse than no copying at all.
+    "copy_follow_all": Knob(
+        "runtime.copy.follow_all", True, "bool",
+        "Follow every registered target", group="Copy trade",
+    ),
+    "copy_scale": Knob(
+        "runtime.copy.scale", 1.0, "float",
+        "Fraction of their size to mirror", 0.01, 5.0, group="Copy trade",
+    ),
+    "copy_max_shares": Knob(
+        "runtime.copy.max_shares", 50.0, "float",
+        "Max shares per copy", 5.0, 5000.0, unit="sh", group="Copy trade",
+    ),
+    "copy_max_slippage_cents": Knob(
+        "runtime.copy.max_slippage_cents", 3.0, "float",
+        "Skip a copy above this slippage", 0.0, 50.0, unit="c", group="Copy trade",
+    ),
     "copy_target_wallet": Knob(
         "runtime.copy.target_wallet", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "enum",
-        "Copy target wallet", choices=("0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "0x83e8f2ea25df8e71fcaf2271c9edaae02860b9bc", "0xfcaaa4cbd0a7553ac886eb5456d4806f128c5add", "0xe3164027a2be859579fcd84fce34513f0bc9bcf9", "0xe06cac28c493a2536e5b111e20e5f7a5f3843eb4",), group="Copy trade",
+        "Copy target wallet", choices=("0x83451c358d50b3f8982124fc741e8bda4b4edd93", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "0x83e8f2ea25df8e71fcaf2271c9edaae02860b9bc", "0xfcaaa4cbd0a7553ac886eb5456d4806f128c5add", "0xe3164027a2be859579fcd84fce34513f0bc9bcf9", "0xe06cac28c493a2536e5b111e20e5f7a5f3843eb4"), group="Copy trade",
     ),
     "copy_poll_interval_seconds": Knob(
         "runtime.copy.poll_interval_seconds", 30.0, "float",

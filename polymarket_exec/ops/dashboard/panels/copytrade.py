@@ -57,7 +57,60 @@ def _fill_row(f, now: float) -> str:
     )
 
 
-def render(*, state, target: Target | None, now: float | None = None) -> str:
+def _results_html(summary: dict) -> str:
+    """Settled paper P&L per target — the number the morning read-out is for."""
+    if not summary:
+        return ""
+    total = summary.get("total") or {}
+    n = total.get("n") or 0
+    rows = ""
+    for r in sorted(summary.get("per_target") or [], key=lambda r: -(r.get("pnl") or 0)):
+        rn = r.get("n") or 0
+        wins = r.get("wins") or 0
+        pnl = r.get("pnl") or 0.0
+        staked = r.get("staked") or 0.0
+        slip = r.get("slip") or 0.0
+        cls = "copy-good" if pnl > 0 else "copy-bad"
+        rows += (
+            "<div class='copy-result'>"
+            f"<span>{escape(str(r.get('target_label') or '-'))}</span>"
+            f"<span>{rn} settled</span>"
+            f"<span>{(100 * wins / rn) if rn else 0:.0f}% won</span>"
+            f"<span>${staked:,.2f} staked</span>"
+            f"<span>slip {100 * slip:+.2f}c</span>"
+            f"<span class='{cls}'>${pnl:+,.2f}</span>"
+            "</div>"
+        )
+    if not rows:
+        openp = summary.get("open") or {}
+        return (
+            "<div class='copy-results'><div class='gr-toggle-hint'>"
+            f"{openp.get('n') or 0} copies open, "
+            f"${openp.get('staked') or 0:,.2f} staked — nothing settled yet."
+            "</div></div>"
+        )
+    tp = total.get("pnl") or 0.0
+    tw = total.get("wins") or 0
+    openp = summary.get("open") or {}
+    cls = "copy-good" if tp > 0 else "copy-bad"
+    return (
+        "<div class='copy-results'>"
+        "<div class='copy-results-h'>PAPER RESULTS</div>"
+        f"{rows}"
+        "<div class='copy-result copy-result-total'>"
+        f"<span><b>total</b></span><span>{n} settled</span>"
+        f"<span>{(100 * tw / n) if n else 0:.0f}% won</span>"
+        f"<span>${total.get('staked') or 0:,.2f} staked</span>"
+        f"<span>{openp.get('n') or 0} open</span>"
+        f"<span class='{cls}'><b>${tp:+,.2f}</b></span>"
+        "</div></div>"
+    )
+
+
+def render(
+    *, state, target: Target | None, summary: dict | None = None,
+    now: float | None = None,
+) -> str:
     now = time.time() if now is None else now
     if state is None:
         return (
@@ -77,7 +130,11 @@ def render(*, state, target: Target | None, now: float | None = None) -> str:
     if not state.enabled:
         status = f"<span class='win'>switched off &middot; {link}</span>"
     elif state.connected:
-        status = f"<span class='win'>watching {link}</span>"
+        extra = (
+            f" +{len(state.watching) - 1} more"
+            if len(state.watching) > 1 else ""
+        )
+        status = f"<span class='win'>watching {link}{extra}</span>"
     else:
         status = f"<span class='win copy-bad'>feed down &middot; {link}</span>"
 
@@ -113,9 +170,10 @@ def render(*, state, target: Target | None, now: float | None = None) -> str:
         f"<span>median lag <b>{state.median_lag:.0f}s</b></span>"
         "</div>"
         f"{err}"
+        f"{_results_html(summary or {})}"
         "<div class='gr-toggle-hint' style='margin:8px 0'>"
-        "observation only — this places no orders and writes no positions."
+        "PAPER — copies are priced against the live ask ladder and charged the taker fee, but no real order is ever sent."
         "</div>"
-        f"<div class='copy-fills'>{rows}</div>"
+        f"<div class='copy-fills' data-keep-scroll='copy-fills'>{rows}</div>"
         "</section>"
     )

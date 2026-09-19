@@ -29,7 +29,9 @@ import structlog
 import config as _config
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot import strategies as _strategies
+from polymarket_bot.copytrade import ledger as _ledger
 from polymarket_bot.copytrade import targets as _targets
+from polymarket_bot.copytrade import trader as _trader
 
 log = structlog.get_logger(__name__)
 
@@ -54,10 +56,13 @@ class ObservedFill:
     price: float
     title: str
     slug: str
+    condition_id: str
+    token_id: str
     followed: bool
     """True when this is one of the daily Up-or-Down markets we mirror."""
     observed_at: float = 0.0
     backfill: bool = False
+    resolves_at: int | None = None
     """Seen on the first poll, so its age is the backlog's, not the feed's."""
 
     @property
@@ -76,6 +81,9 @@ class WatcherState:
 
     target: str = ""
     label: str = ""
+    watching: list[str] = field(default_factory=list)
+    copies_opened: int = 0
+    settled_total: int = 0
     enabled: bool = False
     connected: bool = False
     last_poll: float = 0.0
@@ -115,23 +123,43 @@ class CopyWatcher:
     def __init__(self) -> None:
         self.state = WatcherState()
         self._seen: set[str] = set()
+        self._polled: set[str] = set()
 
-    async def _target_address(self) -> str:
-        raw = await _knobs.get("copy_target_wallet")
-        text = str(raw or "").strip().lower()
-        if _targets.get(text) is None:
-            return _targets.DEFAULT_TARGET
-        return text
+    @staticmethod
+    def _is_followed(slug: str, target) -> bool:
+        return _is_followed_impl(slug, target)
+
+    async def _addresses(self) -> list[str]:
+        """Which wallets to watch this tick.
+
+        Following all of them is the default: each is an independent experiment
+        and the point of a paper lab is running more than one at once.
+        """
+        if bool(await _knobs.get("copy_follow_all")):
+            return list(_targets.TARGETS)
+        raw = str(await _knobs.get("copy_target_wallet") or "").strip().lower()
+        return [raw if _targets.get(raw) else _targets.DEFAULT_TARGET]
 
     async def poll_once(self, client: httpx.AsyncClient) -> None:
-        """One pass. Catches its own failures so the loop cannot die here."""
-        address = await self._target_address()
-        target = _targets.get(address)
-        self.state.target = address
-        self.state.label = target.label if target else address[:10]
+        """One pass over every watched wallet, then settle anything resolved."""
         self.state.enabled = await _strategies.enabled(STRATEGY)
         if not self.state.enabled:
             return
+        addresses = await self._addresses()
+        self.state.watching = addresses
+        for address in addresses:
+            await self._poll_target(client, address)
+        try:
+            settled = await _trader.settle_due(client)
+            if settled:
+                self.state.settled_total += settled
+        except Exception:  # noqa: BLE001
+            log.exception("copytrade.settle_failed")
+
+    async def _poll_target(self, client: httpx.AsyncClient, address: str) -> None:
+        target = _targets.get(address)
+        self.state.target = address
+        self.state.label = target.label if target else address[:10]
 
         limit = int(await _knobs.get("copy_observe_limit"))
         try:
@@ -156,7 +184,8 @@ class CopyWatcher:
 
         # The first poll is a backfill of history; only fills seen after that
         # measure the transport.
-        is_backfill = self.state.polls == 1
+        is_backfill = address not in self._polled
+        self._polled.add(address)
         fresh: list[ObservedFill] = []
         for row in rows:
             if row.get("type") != "TRADE":
@@ -177,11 +206,23 @@ class CopyWatcher:
                     price=float(row.get("price") or 0.0),
                     title=str(row.get("title") or ""),
                     slug=slug,
-                    followed=FOLLOWED_SLUG_MARKER in slug,
+                    condition_id=str(row.get("conditionId") or ""),
+                    token_id=str(row.get("asset") or ""),
+                    followed=self._is_followed(slug, target),
                     observed_at=now,
                     backfill=is_backfill,
                 )
             )
+
+        # Copy anything new and followable. Backfill is history — copying it
+        # would book positions in markets that already settled.
+        if not is_backfill:
+            for f in fresh:
+                try:
+                    if await _trader.consider(client, f, address):
+                        self.state.copies_opened += 1
+                except Exception:  # noqa: BLE001
+                    log.exception("copytrade.copy_failed", tx=f.tx[:14])
 
         if fresh:
             self.state.fills = (fresh + self.state.fills)[: self.MAX_FILLS]
@@ -199,8 +240,21 @@ class CopyWatcher:
             self._seen = keep
 
 
+def _is_followed_impl(slug: str, target) -> bool:
+    """Whether a fill is on a market family this target was measured on.
+
+    Intraday targets trade ``*-up-or-down-<date>-<hour>am-et`` and the 15m
+    family; daily targets trade ``*-up-or-down-on-<date>``. Anything else is a
+    market the wallet was never measured on and must not be copied blind.
+    """
+    if target is not None and target.cadence == "intraday":
+        return "-up-or-down-" in slug or "-updown-15m-" in slug
+    return FOLLOWED_SLUG_MARKER in slug
+
+
 async def run_forever(stop_event: asyncio.Event | None = None) -> None:
     """Poll until ``stop_event`` is set (or forever if ``None``)."""
+    await _ledger.init()
     watcher = CopyWatcher()
     set_current(watcher)
     async with httpx.AsyncClient(timeout=20.0) as client:

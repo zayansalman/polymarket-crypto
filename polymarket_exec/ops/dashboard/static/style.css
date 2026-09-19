@@ -462,3 +462,12 @@ body {
 }
 .copy-link { color: inherit; text-decoration: underline dotted; }
 .copy-link:hover { color: var(--fg); text-decoration: underline; }
+.copy-results { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+.copy-results-h { font-size: 10px; letter-spacing: .08em; color: var(--muted); padding-bottom: 4px; }
+.copy-result {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.copy-result > span:last-child { margin-left: auto; }
+.copy-result-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
+.copy-good { color: var(--good); }

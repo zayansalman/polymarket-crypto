@@ -15,7 +15,8 @@ def _fill(**kw):
     base = dict(
         tx="0xabc", ts=1000, side="BUY", outcome="Up", size=100.0, price=0.99,
         title="Silver (XAGUSD) Up or Down on September 18?",
-        slug="xagusd-up-or-down-on-september-18-2026", followed=True,
+        slug="xagusd-up-or-down-on-september-18-2026",
+        condition_id="0xdeadbeef", token_id="1234", followed=True,
     )
     base.update(kw)
     return _watcher.ObservedFill(**base)
@@ -98,14 +99,14 @@ async def test_a_switched_off_watcher_does_not_call_the_api() -> None:
     assert w.state.polls == 0
 
 
-def test_the_panel_says_plainly_that_it_places_nothing() -> None:
+def test_the_panel_says_plainly_that_it_is_paper_only() -> None:
     state = _watcher.WatcherState(
         target=_targets.DEFAULT_TARGET, label="kodeoed", enabled=True,
         connected=True, last_poll=time.time(), polls=3,
     )
     state.fills = [_fill(observed_at=time.time())]
     html = panel.render(state=state, target=_targets.get(_targets.DEFAULT_TARGET))
-    assert "places no orders" in html
+    assert "paper" in html.lower()
 
 
 def test_the_panel_uses_no_browser_dialogs() -> None:
