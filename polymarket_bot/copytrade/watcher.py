@@ -44,6 +44,16 @@ STRATEGY = "copy_macro_daily"
 FOLLOWED_SLUG_MARKER = "-up-or-down-on-"
 
 
+def _fill_key(tx: str, size: float, price: float) -> str:
+    """Stable identity for one fill.
+
+    Built from PARSED values on both sides of the comparison: the API returns
+    10 and 10.0 interchangeably, and keying off the raw JSON meant a fill never
+    matched itself.
+    """
+    return f"{tx}:{size:.6f}:{price:.6f}"
+
+
 @dataclass
 class ObservedFill:
     """One fill by the target, as the dashboard shows it."""
@@ -126,7 +136,11 @@ class CopyWatcher:
 
     def __init__(self) -> None:
         self.state = WatcherState()
-        self._seen: set[str] = set()
+        # Per target: the newest fill timestamp already processed, plus the
+        # transaction keys seen AT that exact second (the API returns whole
+        # seconds, so several fills can share the watermark).
+        self._watermark: dict[str, int] = {}
+        self._at_watermark: dict[str, set[str]] = {}
         self._polled: set[str] = set()
 
     @staticmethod
@@ -194,24 +208,32 @@ class CopyWatcher:
         # measure the transport.
         is_backfill = address not in self._polled
         self._polled.add(address)
+        mark = self._watermark.get(address, 0)
+        at_mark = self._at_watermark.get(address, set())
         fresh: list[ObservedFill] = []
         for row in rows:
             if row.get("type") != "TRADE":
                 continue
             tx = str(row.get("transactionHash") or "")
             slug = str(row.get("slug") or "")
-            key = f"{tx}:{row.get('size')}:{row.get('price')}"
-            if key in self._seen:
+            ts = int(row.get("timestamp") or 0)
+            size = float(row.get("size") or 0.0)
+            price = float(row.get("price") or 0.0)
+            key = _fill_key(tx, size, price)
+            # A timestamp watermark is bounded by construction. The previous
+            # key-set was global across every target and was trimmed once it
+            # passed a cap, which made thousands of old fills look new again on
+            # the next poll.
+            if ts < mark or (ts == mark and key in at_mark):
                 continue
-            self._seen.add(key)
             fresh.append(
                 ObservedFill(
                     tx=tx,
                     ts=int(row.get("timestamp") or 0),
                     side=str(row.get("side") or ""),
                     outcome=str(row.get("outcome") or ""),
-                    size=float(row.get("size") or 0.0),
-                    price=float(row.get("price") or 0.0),
+                    size=size,
+                    price=price,
                     title=str(row.get("title") or ""),
                     slug=slug,
                     condition_id=str(row.get("conditionId") or ""),
@@ -221,6 +243,19 @@ class CopyWatcher:
                     backfill=is_backfill,
                 )
             )
+
+        if fresh:
+            newest = max(f.ts for f in fresh)
+            if newest > mark:
+                self._watermark[address] = newest
+                self._at_watermark[address] = {
+                    _fill_key(f.tx, f.size, f.price) for f in fresh if f.ts == newest
+                }
+            else:
+                at_mark |= {
+                    _fill_key(f.tx, f.size, f.price) for f in fresh if f.ts == mark
+                }
+                self._at_watermark[address] = at_mark
 
         # Copy anything new and followable. Backfill is history — copying it
         # would book positions in markets that already settled.
@@ -248,10 +283,6 @@ class CopyWatcher:
                 median_lag=round(self.state.median_lag, 1),
             )
 
-        # Bound the dedupe set to the same horizon as the fills we keep.
-        if len(self._seen) > self.MAX_FILLS * 10:
-            keep = {f"{f.tx}:{f.size}:{f.price}" for f in self.state.fills}
-            self._seen = keep
 
 
 def _is_followed_impl(slug: str, target) -> bool:

@@ -119,6 +119,30 @@ async def decision_counts(since: int) -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def reachability(since: int) -> list[dict]:
+    """Per target: how often we could actually get in.
+
+    A wallet that enters in the last seconds of a window is uncopyable however
+    good its edge, because the market has closed before a follower sees the
+    fill. This is the screen criterion the offline research could not measure —
+    only live polling reveals it.
+    """
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            """SELECT target_label,
+                      COUNT(*) AS seen,
+                      SUM(CASE WHEN decision='copied' THEN 1 ELSE 0 END) AS copied,
+                      SUM(CASE WHEN reason LIKE 'market already closed%'
+                               THEN 1 ELSE 0 END) AS too_late,
+                      AVG(lag_seconds) AS lag
+               FROM copy_decisions
+               WHERE ts>=? AND decision IN ('copied','skipped')
+               GROUP BY target_label
+               HAVING seen >= 3
+               ORDER BY copied DESC, seen DESC""", (since,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def needs_requote(older_than: int, now: int) -> list[dict]:
     """Open copies old enough that a real order would already have landed."""
     async with _db.connect() as conn:

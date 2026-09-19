@@ -200,3 +200,62 @@ def test_a_cheaper_realistic_cost_is_not_called_an_improvement_when_orders_faile
     assert "lower only because some orders did not fill" in html
     assert "copy-bad" in html
     assert "orders that would NOT have filled" in html
+
+
+@pytest.mark.asyncio
+async def test_old_fills_are_not_re_examined_after_many_targets_are_polled() -> None:
+    """Regression: a global, trimmed key-set made history look new every poll.
+
+    With 40 targets x 100 fills the old dedupe set blew its cap on the first
+    pass, got trimmed to a couple of hundred keys, and then re-fed thousands of
+    long-settled fills into the copier — which logged them as 'market already
+    closed' and buried the real signal.
+    """
+    import polymarket_bot.strategies as _strategies
+
+    original = _strategies.enabled
+    considered: list[str] = []
+
+    async def _on(_name: str) -> bool:
+        return True
+
+    async def _spy(_client, fill, _addr):
+        considered.append(fill.tx)
+        return False
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, rows):
+            self._rows = rows
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._rows
+
+    row = {
+        "type": "TRADE", "transactionHash": "0xold", "timestamp": 1000,
+        "side": "BUY", "outcome": "Up", "size": 10, "price": 0.5,
+        "title": "t", "slug": "bitcoin-up-or-down-september-1-2026-1am-et",
+        "conditionId": "0xc", "asset": "1",
+    }
+
+    class _Client:
+        async def get(self, *a, **k):
+            return _Resp([row])
+
+    _strategies.enabled = _on
+    _watcher._strategies.enabled = _on
+    spy_orig = _watcher._trader.consider
+    _watcher._trader.consider = _spy
+    try:
+        w = _watcher.CopyWatcher()
+        await w.poll_once(_Client())          # backfill: never copied
+        for _ in range(30):                   # many polls, same single fill
+            await w.poll_once(_Client())
+    finally:
+        _strategies.enabled = original
+        _watcher._trader.consider = spy_orig
+    assert considered == [], "an already-seen fill was re-examined"
