@@ -81,6 +81,33 @@ async def _shares_for(sig: DailySignal, view: DailyMarketView) -> float:
 
 
 async def scan_once(client: httpx.AsyncClient) -> None:
+    """One tick: settle whatever is due, then look for a new entry.
+
+    The two halves are INDEPENDENT and neither may swallow the other.
+    Settlement runs first and unconditionally because it needs nothing from
+    discovery — it settles off the ``reference_price``/``resolves_at``/
+    ``binance_symbol`` stamped on each open row (see :func:`_settle_due`).
+    This used to sit behind an early ``return`` on empty discovery, so any
+    tick that found no markets also skipped settlement: a live run left an
+    already-resolved doge window ``state='open'`` for over a day that way,
+    through a stretch where the UTC-date slug lookup fixed in #239 returned
+    nothing from noon ET to UTC midnight. A Gamma outage would do the same.
+
+    Each half logs its own failure rather than aborting the other, per
+    AGENTS.md's no-silent-failures rule.
+    """
+    try:
+        await _settle_due(client)
+    except Exception:  # noqa: BLE001 — a stuck settlement must not stop entries
+        log.exception("daily_scan.settle_failed")
+    try:
+        await _enter_best(client)
+    except Exception:  # noqa: BLE001 — a broken entry pass must not strand settlements
+        log.exception("daily_scan.entry_pass_failed")
+
+
+async def _enter_best(client: httpx.AsyncClient) -> None:
+    """Score every tracked asset and open at most one position this tick."""
     markets = await _market.discover_daily_markets(client)
     if not markets:
         log.warning("daily_scan.no_markets_found")
@@ -125,8 +152,6 @@ async def scan_once(client: httpx.AsyncClient) -> None:
                 edge=round(best.edge, 4),
                 entry_price=best.entry_price,
             )
-
-    await _settle_due(client)
 
 
 async def _settle_due(client: httpx.AsyncClient) -> None:
