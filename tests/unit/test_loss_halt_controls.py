@@ -297,7 +297,7 @@ class TestRibbonLossHalt:
 
     def test_headroom_uses_live_leg_in_live(self) -> None:
         html = _render(mode="live", live_pnl=-4.0, paper_pnl=-30.0)
-        assert "headroom <span class=''>$6.00</span>" in html  # 10 - 4, paper -30 ignored
+        assert "<span class=''>$6.00</span> left of $10.00" in html  # 10 - 4, paper -30 ignored
 
     def test_no_dialogs_in_controls(self) -> None:
         html = _render(mode="live")
