@@ -33,6 +33,9 @@ from polymarket_exec.ops import feed_monitor as fm
 from polymarket_exec.ops import flow_recorder as fr
 from polymarket_exec.ops import macro_recorder as mr
 
+# A Gamma lookup error older than this is history, not the reason a market has no tokens.
+GAMMA_ERROR_FRESH_S = 120.0
+
 # A REST round trip slower than this is flagged (status stays OK).
 SLOW_MS = 2000.0
 COLUMNS = 6
@@ -301,7 +304,9 @@ def _market_health(md: md_hub.MarketDataSnapshot, market: md_hub.GridMarket) -> 
         if booting:
             return _Health("CONNECTING", "idle", "looking up its windows")
         detail = "no market tokens yet"
-        if md.gamma_errors:
+        recent = (md.gamma_last_error_at is not None
+                  and md.taken_at - md.gamma_last_error_at <= GAMMA_ERROR_FRESH_S)
+        if md.gamma_errors and recent:
             detail += f" (Gamma lookups failing: {md.gamma_last_error or 'error'})"
         return _Health("DOWN", "down", detail)
     conns = shard.connections

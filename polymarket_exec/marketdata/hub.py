@@ -247,6 +247,7 @@ class MarketDataSnapshot:
     demand_linger_s: float = DEMAND_LINGER_S
     reads: ReadStats = ReadStats(0, 0, 0, 0, 0)  # how strategy reads were served
     rest_poll: PollStatus | None = None  # the fresh REST /book poll on the hot markets
+    gamma_last_error_at: float | None = None  # when it happened, so an old one stops showing
 
 
 def shard_name(asset: str, timeframe: str) -> str:
@@ -503,6 +504,7 @@ class MarketDataHub:
         window also gets the fresh REST poll racing the sockets.
         """
         key = self._check_market(asset, timeframe, owner)
+        owner = owner.strip()  # stored stripped, so release() with the same name matches
         with self._demand_lock:
             added = self._add_owner(key, owner, self._time_fn())
             if hot and owner not in self._hot_owners.get(key, frozenset()):
@@ -520,6 +522,7 @@ class MarketDataHub:
         keeps streaming for ``demand_linger_s``; then its sockets stop and its books go.
         """
         now = self._time_fn()
+        owner = owner.strip() if isinstance(owner, str) else owner  # want() stores it stripped
         dropped = 0
         with self._demand_lock:
             owners_by_market = dict(self._owners)
@@ -548,7 +551,7 @@ class MarketDataHub:
         return dropped
 
     def wanted(self) -> Mapping[Pair, frozenset[str]]:
-        """Owners by (asset, timeframe) for the markets wanted now (a read-only view)."""
+        """Owners by (asset, timeframe) for the markets wanted now (a snapshot, not live)."""
         return MappingProxyType(self._owners)
 
     def hot(self) -> frozenset[Pair]:
@@ -594,13 +597,17 @@ class MarketDataHub:
     def _apply_demand(self, now: float | None = None) -> frozenset[Pair]:
         """Tell the universe which markets to stream: the wanted ones, and those released
         less than ``demand_linger_s`` ago (the hub's loop)."""
-        now = self._time_fn() if now is None else now
         with self._demand_lock:
-            for key, released in list(self._released_at.items()):
-                if now - released >= self._linger_s:
-                    del self._released_at[key]
-                    self._since.pop(key, None)
-            streaming = frozenset(self._owners).union(self._released_at)
+            return self._apply_demand_locked(now)
+
+    def _apply_demand_locked(self, now: float | None = None) -> frozenset[Pair]:
+        """Same, with ``_demand_lock`` already held by the caller."""
+        now = self._time_fn() if now is None else now
+        for key, released in list(self._released_at.items()):
+            if now - released >= self._linger_s:
+                del self._released_at[key]
+                self._since.pop(key, None)
+        streaming = frozenset(self._owners).union(self._released_at)
         self._universe.set_wanted(streaming)
         return streaming
 
@@ -735,6 +742,7 @@ class MarketDataHub:
             gamma_lookups=universe.lookups,
             gamma_errors=universe.lookup_errors,
             gamma_last_error=universe.last_error,
+            gamma_last_error_at=universe.last_error_at,
             listeners=len(listeners),
             listener_drops=self._closed_listener_drops + sum(li.dropped for li in listeners),
             grid=self._grid_markets(now, shards),
@@ -834,8 +842,14 @@ class MarketDataHub:
             await nap(stop_event, wake, self._refresh_s)
 
     def _roll_once(self) -> None:
-        self._apply_demand()
-        self._apply_update(self._universe.select())
+        # Expire lingering markets and pick the windows in one step under the demand lock:
+        # a want() from another thread either lands before the expiry (and keeps the market
+        # streaming) or after this selection (and _poke() rolls again at once). In between,
+        # select() would drop the pair and close its sockets, losing the books for ~1 s.
+        with self._demand_lock:
+            self._apply_demand_locked()
+            update = self._universe.select()
+        self._apply_update(update)
 
     async def _lookup_once(self) -> None:
         self._apply_demand()
