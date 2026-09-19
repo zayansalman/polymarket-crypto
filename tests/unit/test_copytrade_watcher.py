@@ -162,3 +162,29 @@ def test_the_registry_covers_mid_price_entries() -> None:
     """A registry of only 99c scalpers is the failure mode this replaced."""
     mid = [t for t in _targets.TARGETS.values() if t.avg_entry < 0.6]
     assert len(mid) >= 5, "screen collapsed back onto near-certainty buyers"
+
+
+def test_the_panel_reports_execution_realism_not_just_the_paper_price() -> None:
+    """A paper fill assumes the ladder survives; the card must show both."""
+    state = _watcher.WatcherState(
+        target=_targets.DEFAULT_TARGET, label="t", enabled=True, connected=True)
+    summary = {"total": {"n": 3, "wins": 2, "pnl": 1.0, "staked": 100.0,
+                         "real_staked": 103.5, "real_slip": 0.012},
+               "per_target": [], "open": {"n": 0, "staked": 0}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "EXECUTION REALISM" in html
+    assert "cost of being late" in html
+    assert "$103.50" in html and "+$3.50" in html
+
+
+def test_the_panel_shows_skips_with_their_reason() -> None:
+    """Silently declining most fills must not look like having nothing to do."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    decisions = [
+        {"decision": "skipped", "reason": "empty book — market already settled", "n": 12},
+        {"decision": "copied", "reason": "mirrored at the live ask", "n": 3},
+    ]
+    html = panel.render(state=state, target=None, decisions=decisions)
+    assert "DECISIONS (24h)" in html
+    assert "3 copied of 15 fills examined" in html
+    assert "already settled" in html

@@ -57,6 +57,60 @@ def _fill_row(f, now: float) -> str:
     )
 
 
+def _decisions_html(counts: list) -> str:
+    """Every fill examined in the last day, and what happened to it.
+
+    Skips are shown with their reason because that is where the cost hides: a
+    copier that declines most of what it sees is not the strategy that was
+    screened, and silence would not say so.
+    """
+    if not counts:
+        return ""
+    total = sum(c.get("n") or 0 for c in counts)
+    copied = sum((c.get("n") or 0) for c in counts if c.get("decision") == "copied")
+    rows = ""
+    for c in counts[:8]:
+        n = c.get("n") or 0
+        d = str(c.get("decision") or "")
+        cls = "copy-good" if d == "copied" else "copy-muted"
+        rows += (
+            "<div class='copy-result'>"
+            f"<span class='{cls}'>{escape(d)}</span>"
+            f"<span>{escape(str(c.get('reason') or '')[:74])}</span>"
+            f"<span>{n}</span></div>"
+        )
+    return (
+        "<div class='copy-results'>"
+        f"<div class='copy-results-h'>DECISIONS (24h) — {copied} copied of "
+        f"{total} fills examined</div>{rows}</div>"
+    )
+
+
+def _execution_html(summary: dict) -> str:
+    """Optimal paper fill vs the same order re-priced when it would land."""
+    t = (summary or {}).get("total") or {}
+    staked = t.get("staked") or 0.0
+    real = t.get("real_staked") or 0.0
+    slip = t.get("real_slip")
+    if not staked or not real:
+        return ""
+    diff = real - staked
+    cls = "copy-bad" if diff > 0 else "copy-good"
+    money = f"{'+' if diff >= 0 else '-'}${abs(diff):,.2f}"
+    return (
+        "<div class='copy-results'>"
+        "<div class='copy-results-h'>EXECUTION REALISM</div>"
+        "<div class='copy-result'><span>priced at decision (optimistic)</span>"
+        f"<span>${staked:,.2f}</span></div>"
+        "<div class='copy-result'><span>re-priced ~25s later (realistic)</span>"
+        f"<span>${real:,.2f}</span></div>"
+        "<div class='copy-result'><span>cost of being late</span>"
+        f"<span class='{cls}'>{money}"
+        + (f" &middot; {100*slip:+.2f}c/share" if slip is not None else "")
+        + "</span></div></div>"
+    )
+
+
 def _drift_html(drift: dict) -> str:
     """How much of each target's recent flow is still on measured markets.
 
@@ -147,7 +201,7 @@ def _results_html(summary: dict) -> str:
 
 def render(
     *, state, target: Target | None, summary: dict | None = None,
-    now: float | None = None,
+    decisions: list | None = None, now: float | None = None,
 ) -> str:
     now = time.time() if now is None else now
     if state is None:
@@ -210,6 +264,8 @@ def render(
         f"{err}"
         f"{_drift_html(getattr(state, 'drift', {}) or {})}"
         f"{_results_html(summary or {})}"
+        f"{_execution_html(summary or {})}"
+        f"{_decisions_html(decisions or [])}"
         "<div class='gr-toggle-hint' style='margin:8px 0'>"
         "PAPER — copies are priced against the live ask ladder and charged the taker fee, but no real order is ever sent."
         "</div>"

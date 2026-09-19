@@ -472,3 +472,4 @@ body {
 .copy-result-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
 .copy-good { color: var(--good); }
 .copy-warn { color: var(--warn, #b8860b); }
+.copy-muted { color: var(--muted); }

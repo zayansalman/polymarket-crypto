@@ -154,6 +154,10 @@ class CopyWatcher:
         for address in addresses:
             await self._poll_target(client, address)
         try:
+            await _trader.requote_due(client)
+        except Exception:  # noqa: BLE001
+            log.exception("copytrade.requote_failed")
+        try:
             settled = await _trader.settle_due(client)
             if settled:
                 self.state.settled_total += settled
