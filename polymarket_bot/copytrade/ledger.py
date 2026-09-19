@@ -70,7 +70,13 @@ CREATE TABLE IF NOT EXISTS copy_decisions (
   reason       TEXT,
   our_price    REAL,
   our_size     REAL,
-  lag_seconds  REAL
+  lag_seconds  REAL,
+  -- What declining actually cost or saved. A skip is a decision, and a
+  -- decision with no measured outcome is just an opinion.
+  token_id     TEXT,
+  shadow_pnl   REAL,
+  shadow_won   INTEGER,
+  settled_at   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_copy_decisions_ts ON copy_decisions(ts);
 CREATE INDEX IF NOT EXISTS idx_copy_decisions_d ON copy_decisions(decision);
@@ -102,7 +108,7 @@ async def log_decision(**row: object) -> None:
     """Record every fill we looked at, copied or not."""
     cols = ("ts", "target", "target_label", "tx", "condition_id", "title",
             "outcome", "their_size", "their_price", "decision", "reason",
-            "our_price", "our_size", "lag_seconds")
+            "our_price", "our_size", "lag_seconds", "token_id")
     async with _db.connect() as conn:
         await conn.execute(
             f"INSERT INTO copy_decisions ({', '.join(cols)}) "
@@ -147,6 +153,47 @@ async def reachability(since: int) -> list[dict]:
                GROUP BY target_label
                HAVING seen >= 3
                ORDER BY copied DESC, seen DESC""", (since,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def unsettled_skips(older_than_ts: int) -> list[dict]:
+    """Declined fills old enough that their market should have resolved."""
+    async with _db.connect() as conn:
+        for col, decl in (("token_id", "TEXT"), ("shadow_pnl", "REAL"),
+                          ("shadow_won", "INTEGER"), ("settled_at", "INTEGER")):
+            try:
+                await conn.execute(
+                    f"ALTER TABLE copy_decisions ADD COLUMN {col} {decl}")
+            except Exception:  # noqa: BLE001
+                pass
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT * FROM copy_decisions WHERE decision='skipped' "
+            "AND settled_at IS NULL AND our_price IS NOT NULL "
+            "AND condition_id IS NOT NULL AND ts <= ? LIMIT 40",
+            (older_than_ts,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def settle_skip(row_id: int, *, won: bool, pnl: float, now: int) -> None:
+    async with _db.connect() as conn:
+        await conn.execute(
+            "UPDATE copy_decisions SET shadow_won=?, shadow_pnl=?, settled_at=? "
+            "WHERE id=?", (1 if won else 0, pnl, now, row_id))
+        await conn.commit()
+
+
+async def skip_scoreboard(since: int) -> list[dict]:
+    """Was declining right? Per reason, what the skipped trades would have done."""
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            """SELECT reason,
+                      COUNT(*) AS n,
+                      SUM(shadow_pnl) AS pnl,
+                      SUM(CASE WHEN shadow_won=1 THEN 1 ELSE 0 END) AS wins
+               FROM copy_decisions
+               WHERE decision='skipped' AND settled_at IS NOT NULL AND ts>=?
+               GROUP BY reason ORDER BY n DESC""", (since,))
         return [dict(r) for r in await cur.fetchall()]
 
 

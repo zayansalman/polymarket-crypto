@@ -188,14 +188,16 @@ async def execution_view_html() -> str:
         _csummary = await _copy_ledger.summary()
         _cdecisions = await _copy_ledger.decision_counts(int(_time.time()) - 86400)
         _creach = await _copy_ledger.reachability(int(_time.time()) - 86400)
+        _cskips = await _copy_ledger.skip_scoreboard(int(_time.time()) - 86400)
     except Exception:  # noqa: BLE001 — a missing table must not blank the page
-        _csummary, _cdecisions, _creach = {}, [], []
+        _csummary, _cdecisions, _creach, _cskips = {}, [], [], []
     copytrade_html = copytrade_panel.render(
         state=_cstate,
         target=_copy_targets.get(_cstate.target) if _cstate else None,
         summary=_csummary,
         decisions=_cdecisions,
         reach=_creach,
+        skips=_cskips,
     )
     settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
     settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)

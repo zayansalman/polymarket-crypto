@@ -172,6 +172,10 @@ class CopyWatcher:
         except Exception:  # noqa: BLE001
             log.exception("copytrade.requote_failed")
         try:
+            await _trader.settle_skips(client)
+        except Exception:  # noqa: BLE001
+            log.exception("copytrade.skip_settle_failed")
+        try:
             settled = await _trader.settle_due(client)
             if settled:
                 self.state.settled_total += settled

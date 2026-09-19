@@ -390,3 +390,18 @@ def test_a_target_exiting_while_we_hold_is_reported() -> None:
                "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
     html = panel.render(state=state, target=None, summary=summary)
     assert "target exited while we still held" in html
+
+
+def test_skips_are_scored_on_what_they_refused() -> None:
+    """A slippage cap is guesswork until the trades it refuses are priced."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    board = [
+        {"reason": "book moved +10.0c against us, over the 3c cap",
+         "n": 6, "pnl": -4.20, "wins": 1},
+        {"reason": "their clip 1.4sh is under the 5sh venue floor",
+         "n": 3, "pnl": 2.50, "wins": 3},
+    ]
+    html = panel.render(state=state, target=None, skips=board)
+    assert "SKIPS, SCORED" in html
+    assert "saved us $4.20" in html   # refusing losers: the cap earning its keep
+    assert "cost us $2.50" in html    # refusing winners: the rule costing us

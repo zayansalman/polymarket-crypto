@@ -64,7 +64,8 @@ async def consider(
             condition_id=fill.condition_id, title=fill.title,
             outcome=fill.outcome, their_size=fill.size, their_price=fill.price,
             decision=decision, reason=reason, our_price=our_price,
-            our_size=our_size, lag_seconds=round(fill.lag_seconds, 1))
+            our_size=our_size, lag_seconds=round(fill.lag_seconds, 1),
+            token_id=fill.token_id)
 
     if fill.side != "BUY":
         # They are exiting. If we still hold that position, our copy has
@@ -238,6 +239,46 @@ async def requote_due(client: httpx.AsyncClient, delay_s: int = 25) -> int:
         log.info("copytrade.requoted", target=r["target_label"],
                  decision_px=round(r["our_price"] or 0, 3), real_px=round(px, 3),
                  filled=round(got, 1), wanted=round(want, 1))
+    return done
+
+
+async def settle_skips(client: httpx.AsyncClient, min_age_s: int = 900) -> int:
+    """Score the fills we declined: would taking them have made money?
+
+    A skip is a decision. Without an outcome attached it is only an opinion,
+    and the slippage cap in particular is pure guesswork until the trades it
+    refuses are priced. This settles each declined fill at the price we would
+    have paid, so the cap can be tuned on evidence.
+    """
+    rows = await _ledger.unsettled_skips(int(time.time()) - min_age_s)
+    if not rows:
+        return 0
+    done = 0
+    seen: dict[str, dict] = {}
+    for r in rows:
+        cid = r["condition_id"]
+        if cid not in seen:
+            try:
+                resp = await client.get(f"{CLOB}/markets/{cid}", timeout=20.0)
+                seen[cid] = resp.json() if resp.status_code == 200 else {}
+            except Exception:  # noqa: BLE001
+                seen[cid] = {}
+        market = seen[cid]
+        if not market.get("closed"):
+            continue
+        winners = [str(t.get("outcome")) for t in (market.get("tokens") or [])
+                   if t.get("winner")]
+        if not winners:
+            continue
+        px = r["our_price"] or 0.0
+        size = r["our_size"] or max(MIN_ORDER_SHARES, r["their_size"] or 0.0)
+        if px <= 0 or size <= 0:
+            continue
+        fee = size * FEE_RATE * px * (1 - px)
+        won = str(r["outcome"]) == winners[0]
+        pnl = (size if won else 0.0) - size * px - fee
+        await _ledger.settle_skip(r["id"], won=won, pnl=pnl, now=int(time.time()))
+        done += 1
     return done
 
 

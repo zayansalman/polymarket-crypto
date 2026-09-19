@@ -189,6 +189,38 @@ def _drift_html(drift: dict) -> str:
     )
 
 
+def _skips_html(board: list) -> str:
+    """Was declining right? Each skip reason, scored on what it refused.
+
+    The slippage cap is guesswork until the trades it refuses are priced. A
+    reason whose refused trades would have LOST money is earning its keep; one
+    whose refused trades would have won is costing us.
+    """
+    scored = [r for r in (board or []) if (r.get("n") or 0) > 0]
+    if not scored:
+        return ""
+    rows = ""
+    for r in scored[:8]:
+        n = r.get("n") or 0
+        pnl = r.get("pnl") or 0.0
+        wins = r.get("wins") or 0
+        # Refusing losers is the cap working; refusing winners is it costing us.
+        good = pnl <= 0
+        cls = "copy-good" if good else "copy-bad"
+        verdict = "saved us" if good else "cost us"
+        rows += (
+            "<div class='copy-result'>"
+            f"<span>{escape(str(r.get('reason') or '')[:58])}</span>"
+            f"<span>{n} refused, {wins} would have won</span>"
+            f"<span class='{cls}'>{verdict} ${abs(pnl):,.2f}</span></div>"
+        )
+    return (
+        "<div class='copy-results'>"
+        "<div class='copy-results-h'>SKIPS, SCORED — what declining actually "
+        "did</div>" + rows + "</div>"
+    )
+
+
 def _reach_html(reach: list) -> str:
     """Per target: how often we could actually get in.
 
@@ -302,6 +334,7 @@ def _results_html(summary: dict) -> str:
 def render(
     *, state, target: Target | None, summary: dict | None = None,
     decisions: list | None = None, reach: list | None = None,
+    skips: list | None = None,
     now: float | None = None,
 ) -> str:
     now = time.time() if now is None else now
@@ -366,6 +399,7 @@ def render(
         f"{_drift_html(getattr(state, 'drift', {}) or {})}"
         f"{_results_html(summary or {})}"
         f"{_execution_html(summary or {})}"
+        f"{_skips_html(skips or [])}"
         f"{_reach_html(reach or [])}"
         f"{_decisions_html(decisions or [])}"
         "<div class='gr-toggle-hint' style='margin:8px 0'>"
