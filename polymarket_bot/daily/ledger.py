@@ -2,7 +2,7 @@
 
 Mirrors :mod:`polymarket_bot.shadow.ledger` (same ``INSERT OR IGNORE`` +
 settle-by-outcome shape, same after-fee PnL via
-:mod:`polymarket_bot.shadow.fees`), but keyed on ``window_slug`` alone: this
+:mod:`polymarket_bot.fees`), but keyed on ``window_slug`` alone: this
 market family's slug is already asset+day-specific (e.g.
 ``solana-up-or-down-on-august-30-2026``), so — unlike the 5m shadow ledger,
 which needs ``(window_slug, model_id)`` because several competing models
@@ -12,7 +12,7 @@ idempotent on the slug by itself.
 from __future__ import annotations
 
 import db as _db
-from polymarket_bot.shadow.fees import net_pnl_per_share
+from polymarket_bot.fees import net_pnl_per_share
 
 
 async def record_signal(

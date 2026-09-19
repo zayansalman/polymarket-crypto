@@ -1,10 +1,12 @@
 """Operator strategy switches: which strategies may open new positions.
 
-Several strategies run side by side in this process — the BTC Up/Down loop,
-the daily altcoin scanner, and the shadow forward-tester. Each one is an
+Several strategies run side by side in this process. Each one is an
 independent experiment, so each gets its own switch instead of a single
 "which strategy is active" selector: the point of the paper lab is watching
 more than one run at once.
+
+Everything registered here is visible in the dashboard — a strategy that
+trades where nobody can see it does not belong in this process.
 
 **Off means "open nothing new", never "abandon".** Every strategy reads its
 switch at the top of its tick, ahead of entry — settlement, exits and
@@ -21,7 +23,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import config as _config
 from db import get_config, set_config  # type: ignore[import-untyped]
 
 
@@ -55,18 +56,6 @@ STRATEGIES: dict[str, Strategy] = {
             "and opens one flat-size paper position on the strongest signal. "
             "Paper only — it has no live path."
         ),
-    ),
-    "shadow": Strategy(
-        name="shadow",
-        label="Shadow forward-tester",
-        description=(
-            "Records what each candidate parameter set WOULD have traded on "
-            "every BTC window, and settles those windows. Places no orders in "
-            "either mode."
-        ),
-        # The long-standing SHADOW_ENABLED env switch becomes this switch's
-        # default, so an operator who turned it off in .env still sees it off.
-        default=_config.SHADOW_ENABLED == "on",
     ),
 }
 

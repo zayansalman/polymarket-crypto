@@ -1,9 +1,9 @@
-"""Polymarket taker-fee math for the shadow forward-tester.
+"""Canonical Polymarket taker-fee math.
 
-Pure functions, stdlib only. The shadow tester settles each candidate
-strategy's would-be trade net of the Polymarket taker fee, so every
-PnL number flows through :func:`net_pnl_per_share`. The fee is charged
-on entry (per share bought) regardless of how the market resolves.
+Pure functions, stdlib only — the single source of venue fee truth for the
+live executor, the paper ledgers and the daily scanner alike, so a fee-true
+number means the same thing everywhere. The fee is charged on entry (per
+share bought) regardless of how the market resolves.
 
 Fee model (Polymarket): ``fee_per_share(p) = fee_rate * p * (1 - p)``,
 a symmetric parabola peaking at ``p = 0.5`` and vanishing at the

@@ -424,13 +424,13 @@ MONITOR_BY = "FEEDS check"
 CARD_COLUMNS = [
     # (feed, connection, used for, used by), in card order
     ("Chainlink BTC/USD", "WebSocket · RTDS", "spot · vol",
-     f"bot loop · shadow roster · {MONITOR_BY}"),
+     f"bot loop · {MONITOR_BY}"),
     ("Chainlink BTC/USD", "REST · every 10 s", "window open",
-     f"bot loop · shadow roster · {MONITOR_BY}"),
+     f"bot loop · {MONITOR_BY}"),
     ("Polymarket Gamma", "REST · every 10 s", "market lookup",
      f"bot loop · order ticket · daily scanner · market hub · {MONITOR_BY}"),
     ("Polymarket book", "REST · every 10 s", "UP/DOWN quotes",
-     f"bot loop · shadow roster · order ticket · live executor · {MONITOR_BY}"),
+     f"bot loop · order ticket · live executor · {MONITOR_BY}"),
     ("Binance BTCUSDT 1s", "REST · every 10 s", "vol backup", f"bot loop · {MONITOR_BY}"),
     ("Polymarket books", "WebSocket · CLOB · on demand",
      "Up/Down books · trades (2 of 24 in use)", "bot loop · order ticket"),
@@ -504,7 +504,7 @@ def test_render_shows_the_six_columns_and_the_endpoint_on_hover() -> None:
     assert ("<tr><td>Chainlink BTC/USD</td>"
             "<td class='feeds-conn' title='RTDS · crypto_prices_chainlink'>WebSocket · RTDS</td>"
             "<td class='feeds-role'>spot · vol</td>"
-            f"<td class='feeds-role'>bot loop · shadow roster · {MONITOR_BY}</td>"
+            f"<td class='feeds-role'>bot loop · {MONITOR_BY}</td>"
             "<td class='feeds-delay'>1.2s</td><td><span class='feed on'>OK</span></td>"
             "</tr>") in html
     assert "<td class='feeds-conn' title='CLOB /book'>REST · every 10 s</td>" in html

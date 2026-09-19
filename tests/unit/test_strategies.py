@@ -7,7 +7,7 @@ touching anything already open — settlement always keeps running.
 
 from __future__ import annotations
 
-import types
+
 from pathlib import Path
 
 import pytest
@@ -45,14 +45,13 @@ async def test_turning_a_strategy_off_persists() -> None:
 async def test_turning_one_off_leaves_the_others_on() -> None:
     await _strategies.set_enabled("daily_altcoin", False)
     assert await _strategies.enabled("btc_updown") is True
-    assert await _strategies.enabled("shadow") is True
 
 
 @pytest.mark.asyncio
 async def test_a_strategy_can_be_turned_back_on() -> None:
-    await _strategies.set_enabled("shadow", False)
-    await _strategies.set_enabled("shadow", True)
-    assert await _strategies.enabled("shadow") is True
+    await _strategies.set_enabled("daily_altcoin", False)
+    await _strategies.set_enabled("daily_altcoin", True)
+    assert await _strategies.enabled("daily_altcoin") is True
 
 
 @pytest.mark.asyncio
@@ -63,12 +62,16 @@ async def test_an_unknown_strategy_is_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_enabled_map_reports_one_entry_per_strategy() -> None:
-    await _strategies.set_enabled("shadow", False)
+    await _strategies.set_enabled("daily_altcoin", False)
     assert await _strategies.enabled_map() == {
         "btc_updown": True,
-        "daily_altcoin": True,
-        "shadow": False,
+        "daily_altcoin": False,
     }
+
+
+def test_the_shadow_forward_tester_is_gone() -> None:
+    # Removed outright: it recorded hypothetical trades no panel ever showed.
+    assert "shadow" not in _strategies.STRATEGIES
 
 
 def test_every_strategy_stores_under_its_own_runtime_key() -> None:
@@ -122,45 +125,6 @@ async def test_daily_scanner_on_still_scans(monkeypatch: pytest.MonkeyPatch) -> 
     await scanner.scan_once(None)
 
     assert calls == ["scan", "settle"]
-
-
-def _stub_shadow(monkeypatch: pytest.MonkeyPatch, calls: list[str]):
-    from polymarket_bot import paper
-
-    async def _record(*_a, **_kw):
-        calls.append("record")
-
-    async def _settle(*_a, **_kw):
-        calls.append("settle")
-
-    monkeypatch.setattr(paper.shadow_runner, "record_shadow", _record)
-    monkeypatch.setattr(paper, "_settle_due_shadows", _settle)
-    return paper
-
-
-@pytest.mark.asyncio
-async def test_shadow_off_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
-    paper = _stub_shadow(monkeypatch, calls)
-    await _strategies.set_enabled("shadow", False)
-
-    await paper._record_and_settle_shadow(
-        types.SimpleNamespace(window_slug="btc-updown-1h-1770000000"), None
-    )
-
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_shadow_on_records(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
-    paper = _stub_shadow(monkeypatch, calls)
-
-    await paper._record_and_settle_shadow(
-        types.SimpleNamespace(window_slug="btc-updown-1h-1770000000"), None
-    )
-
-    assert calls == ["record", "settle"]
 
 
 def _snapshot():

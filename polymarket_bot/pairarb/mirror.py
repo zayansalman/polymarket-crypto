@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from polymarket_bot.shadow.fees import taker_fee_per_share
+from polymarket_bot.fees import taker_fee_per_share
 
 # Polymarket rejects orders below 5 shares (venue-confirmed: gamma
 # ``orderMinSize`` = 5, CLOB ``min_order_size`` = 5). Note ``rewardsMinSize``

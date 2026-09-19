@@ -48,5 +48,5 @@ def test_the_switch_applies_on_click_with_no_apply_button() -> None:
 
 
 def test_the_header_counts_how_many_are_running() -> None:
-    html = panel.render(enabled={**ALL_ON, "shadow": False})
-    assert "2 of 3 on" in html
+    html = panel.render(enabled={**ALL_ON, "daily_altcoin": False})
+    assert "1 of 2 on" in html

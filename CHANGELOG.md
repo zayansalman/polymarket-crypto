@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — Remove the shadow forward-tester (2026-09-19)
+
+The shadow forward-tester recorded what candidate parameter sets *would* have
+traded on every BTC window — and no dashboard panel ever showed any of it. Work
+the operator cannot see is work the operator cannot learn from, so it is gone.
+Every strategy left in the process appears on the dashboard's STRATEGIES card.
+
+- Removed: `polymarket_bot/shadow/` (runner, signal roster, ledger, types), the
+  `_record_and_settle_shadow` path in `paper.py`, `SHADOW_ENABLED`, the
+  "shadow roster" tag on the FEEDS card, and its row on the STRATEGIES card
+  (now BTC Up/Down loop + daily altcoin scanner).
+- Removed with it: `tools/shadow_performance.py`, `tools/replay_race.py`,
+  `tools/race_status.py`, `tools/regime_attribution.py` — all four existed only
+  to analyse the race, and nothing feeds them any more.
+- Moved, not removed: the Polymarket taker-fee math is now
+  `polymarket_bot/fees.py`. It was only ever in `shadow/` by accident — the live
+  executor, the daily ledger and pairarb all import it. Math unchanged.
+- Recorded rows are left alone: `model_shadow_positions` is no longer created
+  or written, but existing data stays on disk. Nothing drops it.
+
 ## Unreleased — Archive the v0 strategy (2026-09-13)
 
 The operator shut down the v0 BTC 5-minute strategy to make room for new ones.

@@ -179,14 +179,14 @@ class TestStrategySwitches:
 
         client.post(
             "/api/runtime-config",
-            json={"key": "strategy", "value": {"name": "shadow", "enabled": False}},
+            json={"key": "strategy", "value": {"name": "btc_updown", "enabled": False}},
         )
-        assert asyncio.run(st.enabled("shadow")) is False
+        assert asyncio.run(st.enabled("btc_updown")) is False
         client.post(
             "/api/runtime-config",
-            json={"key": "strategy", "value": {"name": "shadow", "enabled": True}},
+            json={"key": "strategy", "value": {"name": "btc_updown", "enabled": True}},
         )
-        assert asyncio.run(st.enabled("shadow")) is True
+        assert asyncio.run(st.enabled("btc_updown")) is True
 
     def test_rejects_unknown_strategy(self, client: TestClient) -> None:
         r = client.post(
