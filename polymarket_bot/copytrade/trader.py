@@ -115,14 +115,22 @@ async def consider(
     )
     if copy is None:
         best = asks[0][0]
-        if fill.size * scale < MIN_ORDER_SHARES:
-            why = (f"their clip {fill.size:.1f}sh scales below the "
+        depth = sum(sz for _px, sz in asks)
+        want = max(MIN_ORDER_SHARES, fill.size * scale)
+        # Report the reason that actually applied. The floor only rejects when
+        # skip_below_min is on; blaming it otherwise is a wrong log, which is
+        # worse than none.
+        if skip_small and fill.size < MIN_ORDER_SHARES:
+            why = (f"their clip {fill.size:.1f}sh is under the "
                    f"{MIN_ORDER_SHARES:.0f}sh venue floor")
         elif max_slippage > 0 and (best - fill.price) > max_slippage:
             why = (f"book moved {100*(best-fill.price):+.1f}c against us, over the "
                    f"{100*max_slippage:.0f}c cap")
+        elif depth < want:
+            why = (f"only {depth:.1f}sh on the whole ask side, need {want:.1f}sh")
         else:
-            why = f"no fillable depth (best ask {best:.3f})"
+            why = (f"declined at best ask {best:.3f} vs their {fill.price:.3f} "
+                   f"({depth:.0f}sh depth)")
         await note("skipped", why, our_price=best)
         log.info("copytrade.skipped", target=label, reason=why)
         return False
