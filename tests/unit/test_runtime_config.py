@@ -157,3 +157,51 @@ class TestMarketSelectorGlow:
         assert "glow-neg' data-asset='btc'" in mks.render(
             selection=MarketSelection("btc", "5m"), open_pnl=pnl
         )
+
+
+class TestStrategySwitches:
+    """The STRATEGIES card posts through the same endpoint as every other knob."""
+
+    def test_turning_a_strategy_off_persists(self, client: TestClient) -> None:
+        from polymarket_bot import strategies as st
+
+        r = client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "daily_altcoin", "enabled": False}},
+        )
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["value"] == {"name": "daily_altcoin", "enabled": False}
+        assert asyncio.run(st.enabled("daily_altcoin")) is False
+
+    def test_turning_a_strategy_back_on_persists(self, client: TestClient) -> None:
+        from polymarket_bot import strategies as st
+
+        client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "shadow", "enabled": False}},
+        )
+        assert asyncio.run(st.enabled("shadow")) is False
+        client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "shadow", "enabled": True}},
+        )
+        assert asyncio.run(st.enabled("shadow")) is True
+
+    def test_rejects_unknown_strategy(self, client: TestClient) -> None:
+        r = client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "nope", "enabled": False}},
+        )
+        assert r.json()["status"] == "error"
+
+    def test_rejects_a_malformed_value(self, client: TestClient) -> None:
+        r = client.post(
+            "/api/runtime-config", json={"key": "strategy", "value": "daily_altcoin"}
+        )
+        assert r.json()["status"] == "error"
+
+    def test_page_renders_the_strategies_card(self, client: TestClient) -> None:
+        html = client.get("/").text
+        assert "STRATEGIES" in html
+        assert "id='strategy-daily_altcoin'" in html

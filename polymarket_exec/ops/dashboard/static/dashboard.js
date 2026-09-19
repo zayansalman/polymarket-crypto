@@ -320,6 +320,32 @@ function setKnob(name, kind) {
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
 }
 
+function setStrategy(name) {
+  var el = document.getElementById('strategy-' + name);
+  if (!el) return;
+  var on = el.checked;
+  var label = (el.getAttribute('aria-label') || name);
+  fetch('/api/runtime-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'strategy', value: { name: name, enabled: on } })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'ok') {
+        showToast(label + ' → ' + (on ? 'ON' : 'OFF'), 'success');
+      } else {
+        el.checked = !on;  // the switch must never show a state the bot isn't in
+        showToast('Update failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+      setTimeout(refreshAll, 300);
+    })
+    .catch(function(err) {
+      el.checked = !on;
+      showToast('Update failed: ' + err.message, 'error');
+    });
+}
+
 function setMarket(kind, value) {
   var sel = document.querySelector('.mkt-sel');
   if (!sel) return;

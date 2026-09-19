@@ -48,6 +48,7 @@ from config import (
 )
 import config as _config
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategies as _strategies
 from db import connect, get_config, journal_live_order, notify, set_config
 from logging_setup import get_logger
 from polymarket_exec.connectors.chainlink_settlement import (
@@ -1232,6 +1233,11 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
 
 
 async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
+    # Operator switch (STRATEGIES card): off gates ENTRIES only. Start/Stop
+    # still owns the loop itself, and every exit/settlement path below runs
+    # regardless, so switching off never strands an open position.
+    if not await _strategies.enabled("btc_updown"):
+        return
     if not snapshot.signal_side or snapshot.notional_usd <= 0:
         return
     async with connect() as db:
@@ -1592,7 +1598,9 @@ async def _record_and_settle_shadow(
     """Run the shadow forward-tester, fully isolated so it can never break the
     live trading loop. Records each candidate's would-be trade for this window
     and settles any now-resolvable shadow windows."""
-    if _config.SHADOW_ENABLED != "on":
+    # Operator switch (STRATEGIES card). Its default is the old SHADOW_ENABLED
+    # env value, so an operator who turned shadow off in .env still sees it off.
+    if not await _strategies.enabled("shadow"):
         return
     try:
         params = _strategy_params()

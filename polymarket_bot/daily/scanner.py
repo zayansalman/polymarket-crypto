@@ -18,6 +18,7 @@ import httpx
 import config as _config
 from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategies as _strategies
 from polymarket_bot import strategy as _strategy
 from polymarket_bot.daily import ledger as _ledger
 from polymarket_bot.daily import market as _market
@@ -81,6 +82,11 @@ async def _shares_for(sig: DailySignal, view: DailyMarketView) -> float:
 
 
 async def scan_once(client: httpx.AsyncClient) -> None:
+    # Operator switch (STRATEGIES card): off stops NEW entries only — the
+    # settlement pass below still runs, so an open window is never stranded.
+    if not await _strategies.enabled("daily_altcoin"):
+        await _settle_due(client)
+        return
     markets = await _market.discover_daily_markets(client)
     if not markets:
         log.warning("daily_scan.no_markets_found")
