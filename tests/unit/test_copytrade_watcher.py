@@ -375,3 +375,18 @@ def test_reachability_is_reported_per_target() -> None:
     html = panel.render(state=state, target=None, reach=reach)
     assert "REACHABILITY" in html
     assert "2 of 20 fills followed" in html
+
+
+def test_a_target_exiting_while_we_hold_is_reported() -> None:
+    """After they sell and we do not, the result is ours, not theirs.
+
+    Silently holding on would let the row keep reading as a faithful copy of a
+    wallet that is no longer in the trade.
+    """
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {"execution": {"n": 6, "filled_decision": 30.0, "filled_real": 30.0,
+                             "unfilled": 0, "lost_to_unfilled": 0.0,
+                             "upsized": 0, "diverged": 2},
+               "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "target exited while we still held" in html

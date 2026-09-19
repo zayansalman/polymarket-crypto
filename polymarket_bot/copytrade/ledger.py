@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS copy_trades (
   real_cost_usd REAL,
   real_slippage REAL,
   real_pnl      REAL,
-  requoted_at   INTEGER
+  requoted_at   INTEGER,
+  -- Set when the target exited a market we still hold. From that point our
+  -- copy is no longer tracking them, and the result is ours, not theirs.
+  target_exited INTEGER
 );
 -- Every fill considered, including the ones we declined and why. A copier that
 -- silently skips looks identical to one with nothing to do.
@@ -83,6 +86,7 @@ async def init() -> None:
         # Columns added after the table first shipped.
         for col, decl in (
             ("their_size", "REAL"), ("real_pnl", "REAL"),
+            ("target_exited", "INTEGER"),
             ("real_price", "REAL"), ("real_fee", "REAL"),
             ("real_cost_usd", "REAL"), ("real_slippage", "REAL"),
             ("requoted_at", "INTEGER"),
@@ -144,6 +148,23 @@ async def reachability(since: int) -> list[dict]:
                HAVING seen >= 3
                ORDER BY copied DESC, seen DESC""", (since,))
         return [dict(r) for r in await cur.fetchall()]
+
+
+async def open_on_market(target: str, condition_id: str, outcome: str) -> list[dict]:
+    """Open copies of one target on one outcome — used to spot their exit."""
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            "SELECT * FROM copy_trades WHERE state='open' AND target=? "
+            "AND condition_id=? AND outcome=?", (target, condition_id, outcome))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_target_exited(row_id: int, now: int) -> None:
+    async with _db.connect() as conn:
+        await conn.execute(
+            "UPDATE copy_trades SET target_exited=? WHERE id=? AND target_exited IS NULL",
+            (now, row_id))
+        await conn.commit()
 
 
 async def needs_requote(older_than: int, now: int) -> list[dict]:
@@ -271,7 +292,9 @@ async def summary() -> dict:
                       SUM(CASE WHEN real_price IS NULL THEN cost_usd ELSE 0 END)
                           AS lost_to_unfilled,
                       SUM(CASE WHEN their_size IS NOT NULL AND size > their_size * 1.05
-                               THEN 1 ELSE 0 END) AS upsized
+                               THEN 1 ELSE 0 END) AS upsized,
+                      (SELECT COUNT(*) FROM copy_trades
+                        WHERE target_exited IS NOT NULL) AS diverged
                FROM copy_trades WHERE requoted_at IS NOT NULL"""
         )
         execq = dict(await cur.fetchone() or {})

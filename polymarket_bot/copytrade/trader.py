@@ -67,7 +67,23 @@ async def consider(
             our_size=our_size, lag_seconds=round(fill.lag_seconds, 1))
 
     if fill.side != "BUY":
-        await note("skipped", "target sold; we mirror entries only")
+        # They are exiting. If we still hold that position, our copy has
+        # stopped tracking them from this moment, and the eventual result is
+        # ours rather than theirs. Record it on the row instead of letting a
+        # bare "we mirror entries only" imply nothing happened.
+        held = await _ledger.open_on_market(
+            target_address, fill.condition_id, fill.outcome)
+        for r in held:
+            await _ledger.mark_target_exited(r["id"], now_i)
+        if held:
+            await note("diverged",
+                       f"target SOLD {fill.size:.1f}sh @ {fill.price:.3f}; we "
+                       f"still hold {len(held)} copy(s) to resolution")
+            log.info("copytrade.target_exited", target=label,
+                     market=fill.slug, held=len(held),
+                     their_exit=round(fill.price, 3))
+        else:
+            await note("skipped", "target sold a position we do not hold")
         return False
     if not fill.followed:
         await note("skipped", "market outside the family this target was measured on")

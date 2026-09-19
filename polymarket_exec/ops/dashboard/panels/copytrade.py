@@ -118,6 +118,14 @@ def _execution_html(summary: dict) -> str:
             + (f" &middot; {100 * slip:+.2f}c/share" if slip is not None else "")
             + "</span></div>"
         )
+    diverged = t.get("diverged") or 0
+    if diverged:
+        rows += (
+            "<div class='copy-result'>"
+            "<span>target exited while we still held — copy no longer "
+            "tracking them</span>"
+            f"<span class='copy-warn'>{diverged}</span></div>"
+        )
     upsized = t.get("upsized") or 0
     if upsized:
         rows += (
