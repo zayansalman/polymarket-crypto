@@ -359,7 +359,8 @@ def _market(name: str, state: str = STREAMING, *, conns: tuple | None = None,
 
 def _md(*entries: tuple[md_hub.GridMarket, sh.ShardStatus], prices: dict | None = None,
         ages: dict | None = None, started_at: float = HT - 600, gamma_errors: int = 0,
-        gamma_last_error: str | None = None) -> md_hub.MarketDataSnapshot:
+        gamma_last_error: str | None = None,
+        gamma_last_error_at: float | None = None) -> md_hub.MarketDataSnapshot:
     """A hub snapshot of the default grid: the markets given, every other one AVAILABLE."""
     given = {f"{m.asset}-{m.timeframe}": (m, s) for m, s in entries}
     grid: dict[str, md_hub.GridMarket] = {}
@@ -377,6 +378,7 @@ def _md(*entries: tuple[md_hub.GridMarket, sh.ShardStatus], prices: dict | None 
         markets=sum(2 for m in grid.values() if m.state != AVAILABLE),
         tokens=sum(m.tokens for m in grid.values()), subscribed=clob.subscribed,
         gamma_lookups=60, gamma_errors=gamma_errors, gamma_last_error=gamma_last_error,
+        gamma_last_error_at=gamma_last_error_at,
         listeners=0, listener_drops=0, grid=grid, assets=ASSETS, timeframes=TIMEFRAMES,
         clob_kib_s=clob.bytes_per_s / 1024, rtds_kib_s=3.0,
     )
@@ -614,11 +616,16 @@ def test_books_row_states() -> None:
     assert (joining.status, joining.level, joining.delay, joining.detail) == (
         "OK", "on", "48ms", "eth-5m: connecting")
     no_tokens = _books(_market("btc-5m", conns=(_clob(**DOWN_CONN),), tokens=0, p50=None),
-                       gamma_errors=12,
+                       gamma_errors=12, gamma_last_error_at=HT - 5,
                        gamma_last_error="ConnectError: [Errno 8] nodename nor servname")
     assert (no_tokens.status, no_tokens.detail) == (
         "DOWN", "btc-5m: no market tokens yet (Gamma lookups failing: "
         "ConnectError: [Errno 8] nodename nor servname)")
+    # An old Gamma error is history: it no longer explains why a market has no tokens.
+    old_error = _books(_market("btc-5m", conns=(_clob(**DOWN_CONN),), tokens=0, p50=None),
+                       gamma_errors=12, gamma_last_error_at=HT - 600,
+                       gamma_last_error="ConnectError: an old one")
+    assert (old_error.status, old_error.detail) == ("DOWN", "btc-5m: no market tokens yet")
     looking_up = _books(_market("btc-5m", conns=(_clob(**DOWN_CONN),), tokens=0,
                                 since=HT - 2, p50=None))
     assert (looking_up.status, looking_up.level, looking_up.detail) == (

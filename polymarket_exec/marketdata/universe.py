@@ -95,6 +95,7 @@ class UniverseStatus:
     misses: int  # answered, but the market is not listed (yet)
     announced: int  # new_market announcements held
     last_error: str | None
+    last_error_at: float | None = None  # when that error happened
 
 
 def window_bounds(asset: str, timeframe: str, at: datetime) -> tuple[str, float, float]:
@@ -167,6 +168,7 @@ class MarketUniverse:
             self._resolution_wait_default = float(await_resolution_s)
         self._announced_cap = max(1, announced_cap)
         self._last_error: str | None = None
+        self._last_error_at: float | None = None
         self._grid = self._valid_grid()
         self._wanted = self._in_grid(wanted)
         self._prefixes = self._family_prefixes()
@@ -264,6 +266,7 @@ class MarketUniverse:
             misses=self._misses,
             announced=len(self._announced),
             last_error=self._last_error,
+            last_error_at=self._last_error_at,
         )
 
     # --- updates (the hub's loop) ---------------------------------------------------
@@ -411,3 +414,4 @@ class MarketUniverse:
         if text != self._last_error:
             log.warning("marketdata.universe_error", error=text)
         self._last_error = text
+        self._last_error_at = self._time_fn()
