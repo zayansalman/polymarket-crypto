@@ -118,6 +118,14 @@ def _execution_html(summary: dict) -> str:
             + (f" &middot; {100 * slip:+.2f}c/share" if slip is not None else "")
             + "</span></div>"
         )
+    upsized = t.get("upsized") or 0
+    if upsized:
+        rows += (
+            "<div class='copy-result'>"
+            "<span>copies larger than the target's own clip "
+            "(their bet was under the 5-share venue floor)</span>"
+            f"<span class='copy-muted'>{upsized} of {n}</span></div>"
+        )
     if unfilled:
         rows += (
             "<div class='copy-result'>"

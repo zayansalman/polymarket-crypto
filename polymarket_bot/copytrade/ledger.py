@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS copy_trades (
   window_slug   TEXT,
   title         TEXT,
   outcome       TEXT,
+  their_size    REAL,
   their_price   REAL,
   our_price     REAL,
   size          REAL,
@@ -80,6 +81,7 @@ async def init() -> None:
         await conn.executescript(SCHEMA)
         # Columns added after the table first shipped.
         for col, decl in (
+            ("their_size", "REAL"),
             ("real_price", "REAL"), ("real_fee", "REAL"),
             ("real_cost_usd", "REAL"), ("real_slippage", "REAL"),
             ("requoted_at", "INTEGER"),
@@ -166,7 +168,8 @@ async def record(**row: Any) -> bool:
     """Insert one open copy. True iff a new row was actually created."""
     cols = (
         "target", "target_label", "tx", "condition_id", "token_id", "window_slug",
-        "title", "outcome", "their_price", "our_price", "size", "fee", "cost_usd",
+        "title", "outcome", "their_size", "their_price", "our_price", "size",
+        "fee", "cost_usd",
         "slippage", "their_ts", "our_ts", "resolves_at",
     )
     placeholders = ", ".join("?" for _ in cols)
@@ -219,6 +222,8 @@ async def summary() -> dict:
                       SUM(cost_usd)                              AS staked,
                       SUM(real_cost_usd)                         AS real_staked,
                       AVG(real_slippage)                         AS real_slip,
+                      SUM(CASE WHEN their_size IS NOT NULL AND size > their_size * 1.05
+                               THEN 1 ELSE 0 END)                  AS upsized,
                       SUM(size)                                  AS shares,
                       AVG(slippage)                              AS slip
                FROM copy_trades WHERE state='settled'

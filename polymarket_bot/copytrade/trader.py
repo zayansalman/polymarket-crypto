@@ -136,6 +136,7 @@ async def consider(
         window_slug=fill.slug,
         title=fill.title,
         outcome=fill.outcome,
+        their_size=fill.size,
         their_price=copy.their_price,
         our_price=copy.our_price,
         size=copy.size,
@@ -149,6 +150,12 @@ async def consider(
     await note("copied" if opened else "duplicate",
                "mirrored at the live ask" if opened else "already recorded",
                our_price=copy.our_price, our_size=copy.size)
+    if opened and copy.size > fill.size * 1.05:
+        # Their clip was under the venue floor, so the mirror is larger than
+        # the bet they made. Per-share edge is unchanged, which is what we are
+        # measuring, but the exposure is not a 1:1 mirror and must say so.
+        log.info("copytrade.upsized", target=label,
+                 theirs=round(fill.size, 2), ours=round(copy.size, 2))
     if opened:
         log.info(
             "copytrade.copied",

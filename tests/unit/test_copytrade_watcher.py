@@ -318,3 +318,18 @@ async def test_a_stale_fill_is_never_considered() -> None:
         _strategies.enabled = original
         _watcher._trader.consider = spy_orig
     assert seen == [], "a fill from 1970 reached the copier"
+
+
+def test_copies_larger_than_the_target_bet_are_flagged() -> None:
+    """Rounding a sub-floor clip up to 5 shares is not a 1:1 mirror.
+
+    Per-share edge is unchanged, which is what the lab measures, but the
+    exposure is larger than the bet the wallet actually made — so the card has
+    to say so rather than let it read as a faithful copy.
+    """
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {"execution": {"n": 10, "filled_decision": 50.0, "filled_real": 50.0,
+                             "unfilled": 0, "lost_to_unfilled": 0.0, "upsized": 4},
+               "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "larger than the target" in html and "4 of 10" in html
