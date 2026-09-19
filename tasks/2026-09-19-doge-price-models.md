@@ -1,6 +1,6 @@
 # DOGE price models on Hugging Face — survey (parked 2026-09-19)
 
-Backlog issue: #257
+Backlog issue: #259
 
 Desk research only. **No code, no data, no backtest, nothing downloaded.** One question was asked:
 what exists on Hugging Face trained on DOGE historical price data. The Hub was searched through the
