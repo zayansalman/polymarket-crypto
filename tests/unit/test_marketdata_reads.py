@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 import httpx
@@ -163,6 +164,86 @@ async def test_the_module_level_helpers_do_nothing_without_a_hub() -> None:
     assert hub_mod.want("btc", "5m", "bot loop") is None
     assert hub_mod.release("bot loop") == 0
     assert await hub_mod.wait_ready("btc", "5m", 0.01) is False
+
+
+# --- the BTC loop's book reads (polymarket_bot/paper.py) ------------------------------
+
+def _clob_rest(calls: list[str], bids: str = "0.70", asks: str = "0.75") -> httpx.AsyncClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params["token_id"])
+        return httpx.Response(200, json={  # CLOB books list levels worst-to-best
+            "bids": [{"price": "0.10", "size": "1"}, {"price": bids, "size": "11"}],
+            "asks": [{"price": "0.90", "size": "2"}, {"price": asks, "size": "22"}],
+        })
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_the_loop_reads_the_hub_and_skips_rest_when_it_serves_the_token() -> None:
+    from polymarket_bot import paper
+
+    clock = {"t": T0}
+    socket = FakeWs()
+    hub = _hub(clock, clob_connect=Connector([socket]))
+    hub_mod.set_current(hub)
+    stop = asyncio.Event()
+    task = asyncio.create_task(_REAL_RUN(hub, stop))
+    calls: list[str] = []
+    try:
+        await until(lambda: socket.sent)
+        socket.incoming.put_nowait(SNAPSHOT)
+        await until(lambda: hub.book_top(UP) is not None)
+        async with _clob_rest(calls) as client:
+            book = await paper._fetch_clob_book(client, UP)
+            clock["t"] = T0 + 5  # the hub's book is now older than the loop allows
+            fallback = await paper._fetch_clob_book(client, UP)
+    finally:
+        hub_mod.set_current(None)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert isinstance(book, paper.BookTop)
+    assert (book.best_bid, book.best_ask) == (0.8, 0.82)  # the streamed book
+    assert (book.bid_size, book.ask_size) == (282.0, 20.0)
+    assert (fallback.best_bid, fallback.best_ask) == (0.70, 0.75)  # the REST read
+    assert calls == [UP]  # only the stale read went to the venue
+    reads = hub.snapshot().reads
+    assert reads.from_stream >= 1 and reads.stale == 1
+
+
+@pytest.mark.asyncio
+async def test_the_loop_reads_rest_without_a_hub_and_for_an_empty_token() -> None:
+    from polymarket_bot import paper
+
+    calls: list[str] = []
+    async with _clob_rest(calls) as client:
+        book = await paper._fetch_clob_book(client, UP)
+        empty = await paper._fetch_clob_book(client, "")
+    assert (book.best_bid, book.best_ask, book.bid_size) == (0.70, 0.75, 11.0)
+    assert empty is paper.EMPTY_BOOK
+    assert calls == [UP]
+
+
+@pytest.mark.asyncio
+async def test_the_loop_wants_its_market_while_it_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import db as _db
+    from polymarket_bot import paper
+
+    monkeypatch.setattr(_db, "DB_PATH", tmp_path / "loop.db")
+    await _db.init_db()
+    paper.set_shared_chainlink_feed(object())  # no WS feed of its own for this run
+    demand: list[tuple] = []
+    monkeypatch.setattr(hub_mod, "want", lambda *a: demand.append(("want", *a)))
+    monkeypatch.setattr(hub_mod, "release", lambda *a: demand.append(("release", *a)))
+    stop = threading.Event()
+    stop.set()  # one pass through the loop's setup and teardown
+    try:
+        await paper.run_paper_loop(stop, mode="paper")
+    finally:
+        paper.set_shared_chainlink_feed(None)
+    assert demand == [("want", "btc", "5m", "bot loop"), ("release", "bot loop")]
 
 
 def test_the_module_level_helpers_use_the_registered_hub() -> None:

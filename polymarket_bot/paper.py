@@ -64,6 +64,7 @@ from polymarket_exec.execution.gate import (
     RiskGate,
     build_gate_from_config,
 )
+from polymarket_exec.marketdata import hub as _marketdata_hub
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
 from polymarket_bot.strategy import (
@@ -447,6 +448,10 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
         await notify("paper_started", "BTC paper bot started")
     log.info("paper_loop.started", mode=mode)
 
+    # Stream this market's books while the loop runs, so _fetch_clob_book reads
+    # them instead of polling the venue. No-op without a dashboard hub.
+    _marketdata_hub.want("btc", "5m", "bot loop")
+
     # Set when the daily loss halt trips (#76): the loop stops the bot and the
     # finally surfaces this as LAST DETAIL instead of the generic stop line.
     stop_detail: str | None = None
@@ -484,7 +489,8 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             if feed_task is not None:
                 feed.stop()
                 feed_task.cancel()
-            return
+            return  # the successor holds the hub demand now: leave it alone
+        _marketdata_hub.release("bot loop")
         if _live_executor is not None:
             # Flatten BEFORE dropping the executor: this thread owns it, so
             # Stop can never paper-close a live position (which would strand
@@ -1032,7 +1038,13 @@ async def _get_window_reference(
 
 
 async def _fetch_clob_book(client: httpx.AsyncClient, token_id: str) -> BookTop:
-    """Top-of-book for one outcome token from the public CLOB /book endpoint.
+    """Top-of-book for one outcome token: the market-data hub, else CLOB /book.
+
+    The hub streams this market's book over the CLOB market channel and serves
+    it in microseconds; a REST read is ~200 ms old before it even lands. It
+    hands back nothing at all rather than a book older than ``BOOK_MAX_STALE_S``
+    or one whose sockets are down, and then this falls back to the REST read
+    below (also when the process runs without a hub at all).
 
     CLOB books list levels worst-to-best, so the best level is the LAST
     element of each array (same convention as the live executor's
@@ -1041,6 +1053,10 @@ async def _fetch_clob_book(client: httpx.AsyncClient, token_id: str) -> BookTop:
     """
     if not token_id:
         return EMPTY_BOOK
+    streamed = _marketdata_hub.book_top(token_id, _marketdata_hub.BOOK_MAX_STALE_S)
+    if streamed is not None:
+        return BookTop(best_bid=streamed.best_bid, best_ask=streamed.best_ask,
+                       bid_size=streamed.bid_size, ask_size=streamed.ask_size)
     try:
         r = await client.get(
             f"{POLYMARKET_CLOB_API}/book", params={"token_id": token_id}

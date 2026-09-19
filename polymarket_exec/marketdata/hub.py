@@ -90,6 +90,9 @@ RESOLVED_MEMORY = 512
 # and takes it again (e.g. every tick) does not open and close sockets each time.
 DEMAND_LINGER_S = 60.0
 READY_POLL_S = 0.02  # how often ``wait_ready`` looks
+# How old a book a decision may use. A REST /book round trip is p50 201 ms on
+# this machine, so anything under a couple of seconds still beats reading it.
+BOOK_MAX_STALE_S = 2.0
 
 Pair = tuple[str, str]  # (asset, timeframe)
 
