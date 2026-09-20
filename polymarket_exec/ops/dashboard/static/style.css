@@ -335,7 +335,7 @@ body {
 .execution-grid .ticket { align-self: start; margin-bottom: 0; }
 .ticket .tk-status { display: inline-flex; align-items: center; gap: 5px; }
 .ticket .tk-dot {
-  width: 5px; height: 5px; border-radius: 50%; background: currentColor;
+  width: 5px; height: 5px; background: currentColor;
   display: inline-block; font-style: normal;
 }
 .tk-status.live { color: var(--pos); }
@@ -354,7 +354,7 @@ body {
   border: 0; border-left: 1px solid var(--border); border-right: 1px solid var(--border);
   background: var(--bg); color: var(--text); -moz-appearance: textfield;
 }
-.tk-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--text); }
+.tk-input:focus { outline: 1px solid var(--text); outline-offset: -1px; }
 .tk-input::-webkit-outer-spin-button, .tk-input::-webkit-inner-spin-button {
   -webkit-appearance: none; margin: 0;
 }
