@@ -29,6 +29,7 @@ import structlog
 import config as _config
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot import strategies as _strategies
+from polymarket_bot.copytrade import backup as _backup
 from polymarket_bot.copytrade import ledger as _ledger
 from polymarket_bot.copytrade import targets as _targets
 from polymarket_bot.copytrade import trader as _trader
@@ -98,6 +99,7 @@ class WatcherState:
     evidence, and this is the number that says so."""
     copies_opened: int = 0
     settled_total: int = 0
+    last_snapshot: float = 0.0
     enabled: bool = False
     connected: bool = False
     last_poll: float = 0.0
@@ -171,6 +173,15 @@ class CopyWatcher:
             await _trader.requote_due(client)
         except Exception:  # noqa: BLE001
             log.exception("copytrade.requote_failed")
+        # Snapshot the record periodically. The live file has been cleared
+        # once already with nothing to restore from.
+        if time.time() - self.state.last_snapshot > 1800:
+            self.state.last_snapshot = time.time()
+            try:
+                await asyncio.to_thread(_backup.write_snapshot)
+            except Exception:  # noqa: BLE001
+                log.exception("copytrade.snapshot_failed")
+
         try:
             await _trader.settle_skips(client)
         except Exception:  # noqa: BLE001
