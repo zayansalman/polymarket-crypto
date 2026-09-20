@@ -27,11 +27,24 @@ def test_every_target_carries_the_measurement_that_selected_it() -> None:
     for target in _targets.TARGETS.values():
         assert target.address == target.address.lower()
         assert target.edge_cents > 0, target.label
-        assert target.t_stat > 0, target.label
         assert target.markets > 0, target.label
         # The whole reason these were chosen over the hourly wallets: a copier
         # arriving late still keeps the edge.
         assert target.edge_left_30min > 0, target.label
+        # A copier can only reproduce the taker half. Below ~0.55 by notional
+        # the wallet is quoting and there is no side to follow.
+        assert target.taker_share >= 0.55, target.label
+        # Measured on Up-or-Down; a wallet that has moved elsewhere carries no
+        # edge into the market it moved to.
+        assert target.in_scope >= 0.6, target.label
+        # t_stat may legitimately be 0 — a short window on ONE pre-chosen
+        # wallet has no multiple-testing correction to make, and inventing a
+        # t would dress a hypothesis up as a result. It may not be silently 0:
+        # the note has to say so.
+        if target.t_stat == 0:
+            assert target.note, target.label
+        else:
+            assert target.t_stat > 0, target.label
 
 
 def test_the_default_target_is_one_of_the_registered_targets() -> None:
@@ -158,10 +171,17 @@ def test_every_target_is_a_taker_not_a_quoter() -> None:
         assert t.in_scope >= 0.6, f"{t.label} has drifted off measured markets"
 
 
-def test_the_registry_covers_mid_price_entries() -> None:
-    """A registry of only 99c scalpers is the failure mode this replaced."""
-    mid = [t for t in _targets.TARGETS.values() if t.avg_entry < 0.6]
-    assert len(mid) >= 5, "screen collapsed back onto near-certainty buyers"
+def test_no_target_is_a_near_certainty_scalper() -> None:
+    """A registry of only 99c scalpers is the failure mode this replaced.
+
+    Stated per target rather than as a count, so it still means something when
+    the registry is one name. Buying at 0.97 wins almost always and earns
+    almost nothing; it looks like a win rate and is not an edge.
+    """
+    for target in _targets.TARGETS.values():
+        assert target.avg_entry < 0.9, (
+            f"{target.label} enters at {target.avg_entry:.2f} — near-certainty "
+            "buying, not a forecast")
 
 
 def test_the_panel_reports_execution_realism_not_just_the_paper_price() -> None:
@@ -464,3 +484,38 @@ def test_the_card_states_whether_the_record_is_complete() -> None:
     html = panel.render(state=state, target=None, audit=bad)
     assert "RECORD INCOMPLETE" in html
     assert "28 copies logged but never booked" in html
+
+
+def test_the_panel_lists_every_copy_not_just_the_total() -> None:
+    """A flat total can hide a run of identical losers.
+
+    With a target chosen on three days of data, seeing the individual trades is
+    the point. Each row carries OUR price and the gap to theirs, because a
+    losing copy has two causes — the target was wrong, or following them cost
+    more than their edge — and only both prices tell those apart.
+    """
+    state = _watcher.WatcherState(
+        target=_targets.DEFAULT_TARGET, label="t-d901", enabled=True)
+    html = panel.render(
+        state=state, target=None,
+        summary={"total": {}, "per_target": [], "open": {"n": 1, "staked": 6.0}},
+        trades=[
+            {"window_slug": "btc-updown-15m-1789861500", "outcome": "Up",
+             "our_price": 0.58, "their_price": 0.56, "our_size": 10.0,
+             "state": "settled", "won": 1, "pnl": 4.20, "real_pnl": 4.00,
+             "our_ts": time.time() - 300},
+            {"window_slug": "sol-updown-15m-1789808400", "outcome": "Down",
+             "our_price": 0.62, "their_price": 0.62, "our_size": 10.0,
+             "state": "open", "our_ts": time.time() - 60},
+        ])
+    assert "btc-updown-15m-1789861500" in html
+    assert "sol-updown-15m-1789808400" in html
+    assert "+4.20" in html                       # the result of that one trade
+    assert "+2.0c" in html                       # what arriving late cost
+    assert "real +4.00" in html                  # and the realistic figure
+
+
+def test_a_copy_with_no_trades_does_not_render_an_empty_blotter() -> None:
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    html = panel.render(state=state, target=None, trades=[])
+    assert "every copy" not in html

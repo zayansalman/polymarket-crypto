@@ -81,7 +81,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1293.
+- **Tests:** 1295.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->
 
@@ -223,6 +223,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `tools/wallet_research/analyze.py` | cli | 0 | Score wallets on the scanned 1h/24h Up-or-Down universe. |
 | `tools/wallet_research/filter_test.py` | cli | 0 | Does the slippage filter have an edge, independent of whose fill it is? |
 | `tools/wallet_research/holdout_test.py` | cli | 0 | Does the taker screen predict, or does it fit noise? |
+| `tools/wallet_research/inspect_wallet.py` | cli | 0 | Look hard at one wallet before copying it. |
 | `tools/wallet_research/maker_band.py` | cli | 0 | Is the maker edge on favourites real, and what shape is it? |
 | `tools/wallet_research/maker_edge.py` | cli | 0 | What did real resting orders actually earn, fee-free? |
 | `tools/wallet_research/maker_holdout.py` | cli | 0 | Does a wallet's maker edge carry into the NEXT month, or is it last month's luck? |
@@ -230,6 +231,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `tools/wallet_research/maker_test.py` | cli | 0 | Could a resting bid have filled, and would it have paid? |
 | `tools/wallet_research/maker_vs_taker.py` | cli | 0 | Measure adverse selection: do MAKER fills realise worse than TAKER fills? |
 | `tools/wallet_research/rank.py` | cli | 0 | Rank wallets by copier edge, not by how much money they made. |
+| `tools/wallet_research/recent_wallets.py` | cli | 0 | Who actually made money on the 15m markets in the last few days. |
 | `tools/wallet_research/scan.py` | cli | 0 | Scan resolved 1h/24h crypto Up-or-Down markets and build per-wallet ledgers. |
 | `tools/wallet_research/strike_scan.py` | cli | 0 | Scan crypto STRIKE markets ("will X be above $Y on <date>"). |
 | `tools/wallet_research/taker_screen.py` | cli | 0 | Find wallets that made money on crypto Up/Down as TAKERS, recently. |

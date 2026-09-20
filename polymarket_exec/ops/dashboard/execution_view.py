@@ -192,9 +192,14 @@ async def execution_view_html() -> str:
         _cskips = await _copy_ledger.skip_scoreboard(int(_time.time()) - 86400)
         _cverdict = await _copy_ledger.target_verdict(int(_time.time()) - 86400)
         _caudit = await _copy_ledger.audit(int(_time.time()) - 86400)
+        # Every copy, one row each. An aggregate can hide a run of identical
+        # losers behind a flat total; with a target chosen on three days of
+        # data that is the specific thing worth being able to see.
+        _ctrades = (await _copy_ledger.open_rows()) + (
+            await _copy_ledger.settled_rows(40))
     except Exception:  # noqa: BLE001 — a missing table must not blank the page
         _csummary, _cdecisions, _creach, _cskips, _cverdict = {}, [], [], [], []
-        _caudit = {}
+        _caudit, _ctrades = {}, []
     copytrade_html = copytrade_panel.render(
         state=_cstate,
         target=_copy_targets.get(_cstate.target) if _cstate else None,
@@ -204,6 +209,7 @@ async def execution_view_html() -> str:
         skips=_cskips,
         verdict=_cverdict,
         audit=_caudit,
+        trades=_ctrades,
     )
     # Maker: read straight from its ledger. A passive strategy's result is its
     # fill rate as much as its P&L, so the unfilled and expired quotes come back

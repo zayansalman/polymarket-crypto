@@ -441,11 +441,75 @@ def _results_html(summary: dict) -> str:
     )
 
 
+MARKET_URL = "https://polymarket.com/event/"
+
+
+def _trade_row(r: dict, now: float) -> str:
+    """One copy, with both prices and what it actually paid.
+
+    Their price and ours sit side by side because a losing copy has two
+    different causes — the target was wrong, or following them cost more than
+    their edge — and only showing both tells those apart.
+    """
+    slug = str(r.get("window_slug") or "")
+    label = escape(slug[:38] or "—")
+    mkt = (f"<a class='copy-link' href='{MARKET_URL}{escape(slug)}' "
+           f"target='_blank' rel='noopener'>{label}</a>") if slug else label
+
+    ours = float(r.get("our_price") or 0.0)
+    theirs = float(r.get("their_price") or 0.0)
+    size = float(r.get("our_size") or r.get("size") or 0.0)
+    slip = 100 * (ours - theirs)
+
+    state = str(r.get("state") or "open")
+    if state == "settled":
+        pnl = float(r.get("pnl") or 0.0)
+        # The realistic price is the one that decides anything; the paper price
+        # is only here to show how far off it was.
+        rpnl = r.get("real_pnl")
+        won = "W" if r.get("won") else "L"
+        cls = "copy-good" if pnl > 0 else "copy-bad"
+        real = ""
+        if rpnl is not None and abs(float(rpnl) - pnl) > 0.005:
+            rcls = "copy-good" if float(rpnl) > 0 else "copy-bad"
+            real = f" <span class='{rcls} copy-muted'>real {float(rpnl):+.2f}</span>"
+        res = (f"<span class='{cls}'><b>{won} {pnl:+.2f}</b></span>{real}")
+    else:
+        res = "<span class='copy-muted'>open</span>"
+
+    return (
+        "<div class='copy-trade'>"
+        f"<span class='copy-t-mkt'>{mkt}</span>"
+        f"<span class='copy-t-side'>{escape(str(r.get('outcome') or ''))}</span>"
+        f"<span class='copy-t-px'>{ours:.2f}</span>"
+        f"<span class='copy-t-sz'>{size:.0f}sh</span>"
+        f"<span class='copy-t-slip' title='their price {theirs:.2f}'>"
+        f"{slip:+.1f}c</span>"
+        f"<span class='copy-t-age'>{_ago(float(r.get('our_ts') or 0), now)}</span>"
+        f"<span class='copy-t-res'>{res}</span>"
+        "</div>"
+    )
+
+
+def _trades_html(trades: list, now: float) -> str:
+    """Every copy, one row each — open ones first, then settled, newest first.
+
+    An aggregate can hide a run of identical losers behind a flat total, which
+    is exactly what a three-day-screened target needs watching for.
+    """
+    if not trades:
+        return ""
+    head = ("<div class='copy-t-h'>every copy &mdash; price shown is OURS, "
+            "the cents column is what arriving late cost</div>")
+    return ("<div class='copy-trades'>" + head
+            + "".join(_trade_row(r, now) for r in trades[:40]) + "</div>")
+
+
 def render(
     *, state, target: Target | None, summary: dict | None = None,
     decisions: list | None = None, reach: list | None = None,
     skips: list | None = None, verdict: list | None = None,
-    audit: dict | None = None,
+    audit: dict | None = None, trades: list | None = None,
     now: float | None = None,
 ) -> str:
     now = time.time() if now is None else now
@@ -509,6 +573,7 @@ def render(
         f"{err}"
         f"{_drift_html(getattr(state, 'drift', {}) or {})}"
         f"{_results_html(summary or {})}"
+        f"{_trades_html(trades or [], now)}"
         f"{_execution_html(summary or {})}"
         f"{_verdict_html(verdict or [])}"
         f"{_skips_html(skips or [])}"

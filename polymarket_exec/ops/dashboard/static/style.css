@@ -508,3 +508,19 @@ body {
   .mk-row { grid-template-columns: 1fr 40px 38px 38px; }
   .mk-band-row { grid-template-columns: 74px 58px 1fr 52px; }
 }
+
+/* Per-copy blotter: one row per trade, because an aggregate can hide a run of
+   identical losers behind a flat total. */
+.copy-trades { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
+.copy-t-h { font-size: 10px; color: var(--muted); text-transform: uppercase; padding: 6px 0 2px; }
+.copy-trade {
+  display: grid; align-items: baseline; gap: 2px 8px; padding: 4px 0;
+  grid-template-columns: 1fr 42px 38px 42px 44px 38px;
+  font-size: 11px; border-top: 1px solid var(--border);
+}
+.copy-trade .copy-t-res { grid-column: 1 / -1; justify-self: start; }
+.copy-t-mkt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-t-px, .copy-t-sz, .copy-t-slip, .copy-t-age {
+  font-variant-numeric: tabular-nums; color: var(--muted);
+}
+.copy-t-slip { cursor: help; }

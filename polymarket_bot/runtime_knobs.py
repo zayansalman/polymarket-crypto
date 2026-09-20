@@ -77,13 +77,15 @@ KNOBS: dict[str, Knob] = {
         "runtime.copy.max_slippage_cents", 3.0, "float",
         "Skip a copy above this slippage", 0.0, 50.0, unit="c", group="Copy trade",
     ),
+    # One registered target, so this is a one-item list. Kept as an enum rather
+    # than free text because a typo'd address polls a wallet with no measured
+    # edge, which is worse than not copying at all.
     "copy_target_wallet": Knob(
-        "runtime.copy.target_wallet", "0xcbd0f3b660c1c0609ac25919ec0cea828f7edec4", "enum",
-        "Copy target wallet", choices=("0x8d773331e432935c7cb6c24ded4c5e1a8f35ee05", "0x7d5c80c3cb81911c9bcce79e99ac116efaf34cfd", "0x14cabd26ade5315e79da8f9efb085ace0028da18", "0x2c175b735a264f2e2c53244c2b098baeefeab888", "0x91078d02b6db710baa37c028519b2d9592b9b6e0", "0x6b1b435a547d245675cbbf268a2b9f4ce8970d3c", "0x7cbc58d87704870d5b99e70c1f06aff462b4839a", "0x3c0077ed91ea7234f0ce245bbdd024630680ba3c", "0xc15fa88815941dcdb88874c8aaac2b3aba3da7d9", "0xf001248378add143949099d8b0be236d10dda1cd", "0xc8116d8347ab423a40818ec2dd44634f170e8b4c", "0x497bfd4a2f0008f9e0e01dcbd3a807f691482fc5", "0xcc8ad3a91ee3b112211f1adca538ac96e8184425", "0x7b729fbeee244fcd12a44875461abbaf5402dfb4", "0x5ecce66373f86b2b44b779c4f3adfa2456e78abd", "0x254521adbc506e70f140cae760caa7b9c4e6e5d7", "0x35e7ed6cf90b5b0c338cf78d6d0dc8977fc0c415", "0x9635985bfdeb2265db9d0e3649a018a87760a71f", "0xe8c2d6dfbeb46e70dd08a849c65b4819f162b5fd", "0xef56de00e2da335b89e3d6407b01a12645eaedda", "0x1c7cf0523d8df1ca95661eb3135da67980828faa", "0x9eebaf2a2960369b05cb24823e65ecf243ba3dd9", "0xc4098739a4aa22e0bc8ca1891d7e9267973cc19a", "0x2f99a13102d68769e2a63f42ea553d5f80ea1074", "0xe208cc02257cbc5570e0ddd0a631afab1d934e40", "0x45a085ec3afd3076af9d6feb8c3cc2a0e4fb4be5", "0xa225f0c98344716610d989f7b30b31fed1a540bf", "0x0aefdd2365c50060a276cbd2832931d32355e9a1", "0x8614d67d229cf2cc982b31726bb8633bbe06bb9d", "0x8d2fdc98548c93211286c2bdf613322bfb3452f6", "0xf6ec4d8af29018a08c67fc105301e65fabbab67a", "0xa1e3067fd065e90d1844cba170290b68d591f6bc", "0xb476d52d74d0ecd55fb80f9bc96e93a267ad6eac", "0x384647a2e8a8b450e247d160fdc6d3fad15ce262", "0x5fc108a8e8621fb10bf508bf4f224f531320f591", "0x6c85ade8aed6b19783a71fa604d29dc4ac1733f4", "0x323356b56298a0bfbc46aca8eee01a436ea95225", "0x01bb1b121212a7165bb5badd76bec92f408733f5", "0x70ba09cac52139a8a00e1d8ea78577ec86c31eca", "0x14db3720c0e27112c2a5aa25ff624dfe2225d8d0"), group="Copy trade",
+        "runtime.copy.target_wallet", "0xd9013df863c1ba932780857b020dfdeacedf8e14",
+        "enum", "Copy target wallet",
+        choices=("0xd9013df863c1ba932780857b020dfdeacedf8e14",),
+        group="Copy trade",
     ),
-    # One poll per target per cycle, so the cycle grows with the registry:
-    # 25 targets is ~10s of calls, and a 30s sleep on top pushed measured
-    # detection lag to 33s. 12s keeps it near 20s without hammering the API.
     "copy_poll_interval_seconds": Knob(
         "runtime.copy.poll_interval_seconds", 12.0, "float",
         "Target poll interval", 5.0, 600.0, unit="s", group="Copy trade",

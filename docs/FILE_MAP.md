@@ -141,6 +141,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `tools/wallet_research/analyze.py` | cli | 0 | Score wallets on the scanned 1h/24h Up-or-Down universe. |
 | `tools/wallet_research/filter_test.py` | cli | 0 | Does the slippage filter have an edge, independent of whose fill it is? |
 | `tools/wallet_research/holdout_test.py` | cli | 0 | Does the taker screen predict, or does it fit noise? |
+| `tools/wallet_research/inspect_wallet.py` | cli | 0 | Look hard at one wallet before copying it. |
 | `tools/wallet_research/maker_band.py` | cli | 0 | Is the maker edge on favourites real, and what shape is it? |
 | `tools/wallet_research/maker_edge.py` | cli | 0 | What did real resting orders actually earn, fee-free? |
 | `tools/wallet_research/maker_holdout.py` | cli | 0 | Does a wallet's maker edge carry into the NEXT month, or is it last month's luck? |
@@ -148,6 +149,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `tools/wallet_research/maker_test.py` | cli | 0 | Could a resting bid have filled, and would it have paid? |
 | `tools/wallet_research/maker_vs_taker.py` | cli | 0 | Measure adverse selection: do MAKER fills realise worse than TAKER fills? |
 | `tools/wallet_research/rank.py` | cli | 0 | Rank wallets by copier edge, not by how much money they made. |
+| `tools/wallet_research/recent_wallets.py` | cli | 0 | Who actually made money on the 15m markets in the last few days. |
 | `tools/wallet_research/scan.py` | cli | 0 | Scan resolved 1h/24h crypto Up-or-Down markets and build per-wallet ledgers. |
 | `tools/wallet_research/strike_scan.py` | cli | 0 | Scan crypto STRIKE markets ("will X be above $Y on <date>"). |
 | `tools/wallet_research/taker_screen.py` | cli | 0 | Find wallets that made money on crypto Up/Down as TAKERS, recently. |
