@@ -213,17 +213,28 @@ async def target_verdict(since: int) -> list[dict]:
                    SUM(taken_pnl)  AS taken_pnl,
                    SUM(scored)     AS scored_n,
                    SUM(all_pnl)    AS all_pnl,
+                   SUM(their_pnl)  AS their_pnl,
+                   SUM(their_cost) AS their_cost,
                    SUM(wins)       AS wins
             FROM (
                 SELECT target_label AS label, 1 AS taken,
                        COALESCE(real_pnl, pnl) AS taken_pnl,
                        1 AS scored, COALESCE(real_pnl, pnl) AS all_pnl,
+                       -- THEIR result on the same fill, at THEIR price. This is
+                       -- the wallet's own edge, which is a different question
+                       -- from what we captured arriving late.
+                       CASE WHEN won=1 THEN their_size - their_size*their_price
+                            ELSE -their_size*their_price END AS their_pnl,
+                       their_size*their_price AS their_cost,
                        won AS wins
                 FROM copy_trades
                 WHERE state='settled' AND settled_at >= ?
                 UNION ALL
                 SELECT target_label AS label, 0 AS taken, 0 AS taken_pnl,
                        1 AS scored, shadow_pnl AS all_pnl,
+                       CASE WHEN shadow_won=1 THEN their_size - their_size*their_price
+                            ELSE -their_size*their_price END AS their_pnl,
+                       their_size*their_price AS their_cost,
                        shadow_won AS wins
                 FROM copy_decisions
                 WHERE settled_at IS NOT NULL AND settled_at >= ?
