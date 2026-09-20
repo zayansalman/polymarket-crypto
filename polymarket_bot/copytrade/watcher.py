@@ -37,6 +37,7 @@ from polymarket_bot.copytrade import trader as _trader
 log = structlog.get_logger(__name__)
 
 STRATEGY = "copy_macro_daily"
+AUTOCOPY_STRATEGY = "copy_autocopy"
 
 # The daily Up-or-Down families these wallets were measured on. A fill outside
 # them is still shown, tagged 'other', rather than silently dropped — a target
@@ -61,6 +62,10 @@ class ObservedFill:
 
     tx: str
     ts: int
+    wallet: str
+    """Which followed wallet made it. The watcher polls several and merges
+    their fills into one list, so without this every per-wallet number on the
+    dashboard is really a number about whichever wallet was polled last."""
     side: str
     outcome: str
     size: float
@@ -101,6 +106,7 @@ class WatcherState:
     settled_total: int = 0
     last_snapshot: float = 0.0
     enabled: bool = False
+    autocopy: bool = False
     connected: bool = False
     last_poll: float = 0.0
     last_error: str = ""
@@ -129,6 +135,22 @@ class WatcherState:
     @property
     def live_fills(self) -> int:
         return sum(1 for f in self.fills if not f.backfill)
+
+    def fills_for(self, wallet: str) -> list[ObservedFill]:
+        """This wallet's fills, newest first."""
+        w = wallet.lower()
+        return [f for f in self.fills if f.wallet.lower() == w]
+
+    def recent_count(self, wallet: str, *, since: float) -> int:
+        """Fills this wallet made at or after ``since`` (epoch seconds)."""
+        return sum(1 for f in self.fills_for(wallet) if f.ts >= since)
+
+    def find_fill(self, tx: str) -> ObservedFill | None:
+        """Look one fill up by transaction hash — what the Copy button posts."""
+        for f in self.fills:
+            if f.tx == tx:
+                return f
+        return None
 
 
 class CopyWatcher:
@@ -163,12 +185,16 @@ class CopyWatcher:
     async def poll_once(self, client: httpx.AsyncClient) -> None:
         """One pass over every watched wallet, then settle anything resolved."""
         self.state.enabled = await _strategies.enabled(STRATEGY)
-        if not self.state.enabled:
-            return
-        addresses = await self._addresses()
-        self.state.watching = addresses
-        for address in addresses:
-            await self._poll_target(client, address)
+        self.state.autocopy = await _strategies.enabled(AUTOCOPY_STRATEGY)
+        # Off stops OBSERVING, never settlement. Returning here used to skip
+        # the settle/requote block below, so switching the watcher off left
+        # every open copy unsettled — the one thing the switch contract in
+        # ``polymarket_bot.strategies`` promises can never happen.
+        if self.state.enabled:
+            addresses = await self._addresses()
+            self.state.watching = addresses
+            for address in addresses:
+                await self._poll_target(client, address)
         try:
             await _trader.requote_due(client)
         except Exception:  # noqa: BLE001
@@ -244,6 +270,7 @@ class CopyWatcher:
                 ObservedFill(
                     tx=tx,
                     ts=int(row.get("timestamp") or 0),
+                    wallet=address,
                     side=str(row.get("side") or ""),
                     outcome=str(row.get("outcome") or ""),
                     size=size,
@@ -280,7 +307,11 @@ class CopyWatcher:
         # Copy anything new and followable. Backfill is history — copying it
         # would book positions in markets that already settled.
         max_age = float(await _knobs.get("copy_max_fill_age_seconds"))
-        if not is_backfill:
+        # Autocopy is a separate switch from watching (#copy-wallets card).
+        # Off, the fills still arrive and still render — each one carries a
+        # Copy button instead, so the operator books the ones they want.
+        autocopy = await _strategies.enabled(AUTOCOPY_STRATEGY)
+        if not is_backfill and autocopy:
             for f in fresh:
                 # Belt and braces against any bookkeeping slip: a fill this old
                 # is unfollowable by definition, so never spend a book lookup

@@ -579,3 +579,94 @@ body {
   font-variant-numeric: tabular-nums; color: var(--muted);
 }
 .copy-t-slip { cursor: help; }
+
+/* COPY TRADE WALLETS card ------------------------------------------------
+   One block per followed wallet: who, what they trade, what they did in the
+   last hour, then their most recent fills with a Copy button on each. */
+.cw-wallet { border-top: 1px solid var(--border-strong); padding-top: 10px; margin-top: 10px; }
+.cw-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cw-name { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+.cw-addr { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+.cw-hour {
+  margin-left: auto; font-family: var(--font-mono); font-size: 9.5px;
+  letter-spacing: .5px; padding: 2px 6px;
+}
+.cw-hour.cw-live { color: var(--pos); background: rgba(43, 212, 125, .1); }
+.cw-hour.cw-idle { color: var(--label); background: var(--bg-alt); }
+.cw-what, .cw-evidence {
+  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+  line-height: 1.5; padding-top: 3px;
+}
+.cw-what b, .cw-evidence b { color: var(--text); }
+.cw-counts {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 10.5px;
+  color: var(--muted); padding: 6px 0 2px;
+}
+.cw-counts b { color: var(--text); }
+.cw-fills { display: flex; flex-direction: column; }
+/* Two rows per fill: the card sits in a half-width column, so one grid row
+   truncates the market title, and which market they are in is the point. */
+.cw-fill {
+  display: grid; align-items: baseline; gap: 2px 8px; padding: 6px 0;
+  grid-template-columns: 52px 74px 1fr auto auto;
+  font-size: 11px; border-top: 1px solid var(--border);
+}
+.cw-when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.cw-sz, .cw-notional { font-variant-numeric: tabular-nums; color: var(--muted); }
+.cw-notional { text-align: right; }
+.cw-title { grid-column: 1 / -1; color: var(--muted); white-space: normal; }
+.cw-state { grid-column: 1 / -1; justify-self: start; font-size: 10px; }
+.cw-state.cw-live { color: var(--warn); }
+.cw-state.cw-good { color: var(--pos); }
+.cw-state.cw-bad { color: var(--neg); }
+.cw-state.cw-unknown { color: var(--label); }
+.cw-copy-btn {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text); background: var(--bg-alt);
+  border: 1px solid var(--border-strong); border-radius: 0;
+  padding: 2px 8px; cursor: pointer;
+}
+.cw-copy-btn:hover { background: var(--border); }
+.cw-copy-btn:disabled { color: var(--label); cursor: default; }
+.cw-copy-none { color: var(--label); }
+@media (max-width: 900px) {
+  .cw-fill { grid-template-columns: 50px 70px 1fr auto; }
+  .cw-notional { grid-column: 1 / -1; text-align: left; }
+}
+
+/* MY STRATEGIES lists EVERY family in the tree, grouped by status, so a dead
+   one is deleted for being visible rather than rotting unseen. Each row shows
+   what it has actually settled — a strategy wired to nothing cannot then be
+   mistaken for one that is working. */
+.strategy-group {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--label);
+  border-bottom: 1px solid var(--border-strong);
+  padding: 10px 0 4px; margin-top: 6px;
+}
+.strategy-group.st-running { color: var(--pos); }
+.strategy-group.st-unwired, .strategy-group.st-operator_gated { color: var(--warn); }
+.strategy-group.st-dead { color: var(--neg); }
+.strategy-path {
+  font-family: var(--font-mono); font-size: 9px; color: var(--label);
+}
+.strategy-record {
+  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+}
+.strategy-record b.pos { color: var(--pos); }
+.strategy-record b.neg { color: var(--neg); }
+.strategy-blocked { color: var(--warn); }
+.strategy-verdict {
+  font-family: var(--font-mono); font-size: 9.5px; line-height: 1.45;
+  color: var(--warn); border-left: 2px solid var(--border-strong);
+  padding-left: 7px; margin-top: 3px;
+}
+/* A family with no switch shows its state instead of a control that would do
+   nothing if clicked. */
+.strategy-status {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .5px;
+  text-transform: uppercase; padding: 2px 6px; flex: none; white-space: nowrap;
+  color: var(--label); background: var(--bg-alt);
+}
+.strategy-status.st-unwired { color: var(--warn); background: rgba(255, 180, 84, .1); }
+.strategy-status.st-dead { color: var(--neg); background: rgba(179, 38, 30, .08); }

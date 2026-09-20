@@ -11,15 +11,15 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `db.py` | WIRED | 18 | SQLite storage for the local Polymarket crypto trading lab. |
 | `logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 15 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
 | `polymarket_bot/chronos_signal.py` | DEAD? | 0 | Layer 3 — Chronos time-series ensemble (stub). |
 | `polymarket_bot/controller.py` | WIRED | 2 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
 | `polymarket_bot/copytrade/__init__.py` | pkg | 4 | Copy-trading: mirror wallets that have a measured, fee-surviving edge. |
 | `polymarket_bot/copytrade/backup.py` | WIRED | 1 | Periodic snapshots of the copy-trade record. |
-| `polymarket_bot/copytrade/ledger.py` | WIRED | 3 | Paper ledger for copy trades: one row per copy, settled on resolution. |
-| `polymarket_bot/copytrade/targets.py` | WIRED | 4 | Wallets worth mirroring, and the measurement that earned them the place. |
-| `polymarket_bot/copytrade/trader.py` | WIRED | 1 | Turn an observed fill into a paper copy, and settle it when the market does. |
+| `polymarket_bot/copytrade/ledger.py` | WIRED | 4 | Paper ledger for copy trades: one row per copy, settled on resolution. |
+| `polymarket_bot/copytrade/targets.py` | WIRED | 5 | Wallets worth mirroring, and the measurement that earned them the place. |
+| `polymarket_bot/copytrade/trader.py` | WIRED | 2 | Turn an observed fill into a paper copy, and settle it when the market does. |
 | `polymarket_bot/copytrade/watcher.py` | WIRED | 2 | Watch a target wallet's fills and show them, before mirroring anything. |
 | `polymarket_bot/daily/__init__.py` | pkg | 1 | Daily (24h-window) altcoin Up/Down shadow strategy (issue #185). |
 | `polymarket_bot/daily/ledger.py` | WIRED | 1 | Persistence for the daily altcoin scanner's paper positions. |
@@ -29,6 +29,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/fees.py` | WIRED | 3 | Canonical Polymarket taker-fee math. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
+| `polymarket_bot/inventory.py` | WIRED | 1 | Every strategy family in this repo, including the ones that do nothing. |
 | `polymarket_bot/maker/__init__.py` | pkg | 3 | (needs docstring) |
 | `polymarket_bot/maker/filler.py` | WIRED | 1 | Decide whether a resting quote would really have filled, and settle it. |
 | `polymarket_bot/maker/ledger.py` | WIRED | 3 | Paper ledger for resting maker quotes. |
@@ -46,7 +47,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/pairarb/types.py` | WIRED | 3 | Shared data contracts for the two-sided pair quoter (#182). |
 | `polymarket_bot/paper.py` | WIRED | 5 | BTC 5-minute trading engine (paper by default, live opt-in). |
 | `polymarket_bot/runtime_knobs.py` | WIRED | 9 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
-| `polymarket_bot/strategies.py` | WIRED | 6 | Operator strategy switches: which strategies may open new positions. |
+| `polymarket_bot/strategies.py` | WIRED | 9 | Operator strategy switches: which strategies may open new positions. |
 | `polymarket_bot/strategy.py` | WIRED | 5 | Shared BTC 5-minute binary strategy math. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/backtest/__init__.py` | pkg | 0 | Backtesting harness and metrics. |
@@ -94,6 +95,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/_wallet.py` | WIRED | 1 | Polymarket wallet size for the EMS ribbon: cash + open positions value. |
 | `polymarket_exec/ops/dashboard/panels/blotter.py` | WIRED | 1 | Trade blotter: open positions on top, last 12 closed below, mode chip per row. |
 | `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
+| `polymarket_exec/ops/dashboard/panels/copy_wallets.py` | WIRED | 1 | COPY TRADE WALLETS card: who we follow, what they trade, what they just did. |
 | `polymarket_exec/ops/dashboard/panels/copytrade.py` | WIRED | 1 | COPY TRADE card: the target wallet's fills, exactly as we saw them. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
@@ -104,7 +106,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |
 | `polymarket_exec/ops/dashboard/panels/ribbon.py` | WIRED | 1 | Top status ribbon: wallet, P&L, open-position (live) P&L, loss-halt control. |
 | `polymarket_exec/ops/dashboard/panels/settings.py` | WIRED | 1 | Settings panel: every dashboard-editable runtime knob (#206). |
-| `polymarket_exec/ops/dashboard/panels/strategies.py` | WIRED | 1 | STRATEGIES card: one row per strategy, each with its own on/off switch. |
+| `polymarket_exec/ops/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `polymarket_exec/ops/dashboard/panels/tca.py` | WIRED | 1 | TCA panel: quoted spread, half-spread, edge capture, Brier calibration. |
 | `polymarket_exec/ops/dashboard/quote_feed.py` | WIRED | 2 | Background quote poller for the dashboard's order-size ticket. |
 | `polymarket_exec/ops/feed_monitor.py` | WIRED | 3 | Always-on feed monitor: keeps the live feeds connected and checks each one. |

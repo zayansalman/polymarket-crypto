@@ -106,10 +106,10 @@ KNOBS: dict[str, Knob] = {
     # that filled between 0.55 and 0.92 returned +2 to +6.6c/share held to
     # resolution, fee-free, while fills under the midpoint lost 5-7c. The band
     # is a knob and not a constant because that result is the thing under test.
-    "maker_enabled": Knob(
-        "runtime.maker.enabled", True, "bool",
-        "Rest passive quotes on favourites", group="Maker",
-    ),
+    # The maker's on/off switch moved to ``polymarket_bot.strategies`` so it
+    # sits with the other strategies and obeys the same "off stops new entries
+    # only" contract. A second switch here would be one more place for the two
+    # to disagree.
     "maker_band_lo": Knob(
         "runtime.maker.band_lo", 0.55, "float",
         "Quote only at or above", 0.05, 0.95, group="Maker",

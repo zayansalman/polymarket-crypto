@@ -21,6 +21,7 @@ import httpx
 import structlog
 
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategies as _strategies
 from polymarket_bot.maker import filler as _filler
 from polymarket_bot.maker import ledger as _ledger
 from polymarket_bot.maker import quoter as _quoter
@@ -47,8 +48,14 @@ DEFAULTS = {
 }
 
 
-async def pass_once(client: httpx.AsyncClient, cfg: dict | None = None) -> dict:
-    """Settle, check fills, then quote. Returns a count of each."""
+async def pass_once(
+    client: httpx.AsyncClient, cfg: dict | None = None, *, quote: bool = True
+) -> dict:
+    """Settle, check fills, then quote. Returns a count of each.
+
+    ``quote=False`` runs the bookkeeping half only: resting quotes are still
+    filled and settled, but no new one is placed.
+    """
     c = {**DEFAULTS, **(cfg or {})}
     now = int(time.time())
 
@@ -67,6 +74,9 @@ async def pass_once(client: httpx.AsyncClient, cfg: dict | None = None) -> dict:
     # same band measured that way loses money.
     already = await _ledger.quoted_markets()
     placed = skipped = 0
+
+    if not quote:
+        return {"quoted": 0, "skipped": 0, "filled": filled, "settled": settled}
 
     for m in markets:
         left = m.end_ts - now
@@ -148,10 +158,15 @@ async def run_forever(stop_event: "object | None" = None) -> None:
             interval = 45.0
             try:
                 interval = float(await _knobs.get("maker_poll_interval_seconds"))
-                if bool(await _knobs.get("maker_enabled")):
-                    stats = await pass_once(client, await config_from_knobs())
-                    if stats["quoted"] or stats["filled"] or stats["settled"]:
-                        log.info("maker.pass", **stats)
+                # Off stops NEW quotes only. Settlement and fill checks run
+                # either way, so flipping the switch can never strand a quote
+                # that is already resting — the contract every switch in
+                # ``polymarket_bot.strategies`` promises.
+                quote = await _strategies.enabled("maker")
+                stats = await pass_once(
+                    client, await config_from_knobs(), quote=quote)
+                if stats["quoted"] or stats["filled"] or stats["settled"]:
+                    log.info("maker.pass", **stats)
             except Exception:  # noqa: BLE001
                 log.exception("maker.tick_failed")
             await asyncio.sleep(interval)

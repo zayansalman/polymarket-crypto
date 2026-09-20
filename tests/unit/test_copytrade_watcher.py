@@ -13,7 +13,8 @@ from polymarket_exec.ops.dashboard.panels import copytrade as panel
 
 def _fill(**kw):
     base = dict(
-        tx="0xabc", ts=1000, side="BUY", outcome="Up", size=100.0, price=0.99,
+        tx="0xabc", ts=1000, wallet=_targets.DEFAULT_TARGET,
+        side="BUY", outcome="Up", size=100.0, price=0.99,
         title="Silver (XAGUSD) Up or Down on September 18?",
         slug="xagusd-up-or-down-on-september-18-2026",
         condition_id="0xdeadbeef", token_id="1234", followed=True,
