@@ -11,7 +11,9 @@ feed was passive. Classifying both and comparing realised outcome against price
 paid gives adverse selection in cents per share, directly comparable to the fee.
 """
 from __future__ import annotations
-import argparse, asyncio, sqlite3, sys
+import argparse
+import asyncio
+import sqlite3
 from pathlib import Path
 import httpx
 
@@ -32,9 +34,11 @@ async def taker_fills(cl, cid):
                     "market": cid, "limit": 500, "offset": off,
                     "takerOnly": "true"}, timeout=40.0)
                 if r.status_code == 429:
-                    await asyncio.sleep(2 + 3 * attempt); continue
+                    await asyncio.sleep(2 + 3 * attempt)
+                    continue
                 r.raise_for_status()
-                page = r.json(); break
+                page = r.json()
+                break
             except Exception:
                 if attempt == 3:
                     return out
@@ -104,8 +108,11 @@ async def main():
         me = 100 * (mk[2] - mk[1]) / mk[0]
         te = 100 * (tk[2] - tk[1]) / tk[0]
         fee = 100 * tk[3] / tk[0]
-        tot["maker"][0] += mk[0]; tot["maker"][1] += mk[2] - mk[1]
-        tot["taker"][0] += tk[0]; tot["taker"][1] += tk[2] - tk[1]; tot["taker"][2] += tk[3]
+        tot["maker"][0] += mk[0]
+        tot["maker"][1] += mk[2] - mk[1]
+        tot["taker"][0] += tk[0]
+        tot["taker"][1] += tk[2] - tk[1]
+        tot["taker"][2] += tk[3]
         print(f"  {b/20:.2f}-{(b+1)/20:.2f}{mk[0]:>12,.0f}{me:>+16.2f}"
               f"{tk[0]:>12,.0f}{te:>+16.2f}{fee:>11.2f}{me - te:>+10.2f}")
     m = 100 * tot["maker"][1] / tot["maker"][0]

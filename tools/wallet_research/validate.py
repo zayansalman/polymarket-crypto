@@ -7,7 +7,13 @@ Three questions the ranking table cannot answer on its own:
   3. How much runway is there between their entry and settlement?
 """
 from __future__ import annotations
-import argparse, json, sqlite3, statistics, sys, time, urllib.parse, urllib.request
+import argparse
+import json
+import sqlite3
+import statistics
+import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 DB = Path(__file__).resolve().parents[2] / "data" / "wallet_research" / "wallets.db"
@@ -36,15 +42,19 @@ def one_market_audit(con, wallet, cid):
         "SELECT side,oidx,size,price,ts FROM trades WHERE cid=? AND wallet=? ORDER BY ts",
         (cid, wallet)).fetchall()
     print(f"\n  audit {slug}  (winner outcome index {winner})")
-    b = [0.0, 0.0]; s = [0.0, 0.0]; cost = proc = 0.0
+    b = [0.0, 0.0]
+    s = [0.0, 0.0]
+    cost = proc = 0.0
     for side, oidx, size, price, ts in rows:
         lead = (end_ts - ts) / 60.0
         print(f"    {side:4} idx{oidx} {size:9.2f} @ {price:.3f}  "
               f"{lead:7.1f} min before close")
         if side == "BUY":
-            b[oidx] += size; cost += size * price
+            b[oidx] += size
+            cost += size * price
         else:
-            s[oidx] += size; proc += size * price
+            s[oidx] += size
+            proc += size * price
     net = [b[i] - s[i] for i in (0, 1)]
     sp = max(0.0, -min(net))
     eff = [net[i] + sp for i in (0, 1)]

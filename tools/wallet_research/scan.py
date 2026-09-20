@@ -4,7 +4,12 @@ Market-side pull: every trade on every market in scope, so each wallet's record
 on those markets is complete rather than a sample. Resumable via SQLite.
 """
 from __future__ import annotations
-import argparse, asyncio, calendar, json, sqlite3, sys, time
+import argparse
+import asyncio
+import calendar
+import json
+import sqlite3
+import time
 from pathlib import Path
 import httpx
 
@@ -66,7 +71,8 @@ async def jget(cl: httpx.AsyncClient, url: str, params: dict, tries: int = 5):
         try:
             r = await cl.get(url, params=params, timeout=40.0)
             if r.status_code == 429:
-                await asyncio.sleep(2 + 3 * a); continue
+                await asyncio.sleep(2 + 3 * a)
+                continue
             r.raise_for_status()
             return r.json()
         except Exception:
@@ -104,7 +110,8 @@ async def phase_markets(cl: httpx.AsyncClient, con: sqlite3.Connection, since_ts
         lo = since_ts
         while lo < now:
             hi = min(lo + 7 * 86400, now)
-            fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+            def fmt(t: int) -> str:
+                return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
             offset = 0
             while True:
                 evs = await jget(cl, f"{GAMMA}/events", {

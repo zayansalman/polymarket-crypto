@@ -12,7 +12,9 @@ Aggregation runs in SQL and streams one wallet at a time, so memory stays flat
 regardless of how many trades are in the db.
 """
 from __future__ import annotations
-import argparse, sqlite3, time
+import argparse
+import sqlite3
+import time
 from pathlib import Path
 
 DB = Path(__file__).resolve().parents[2] / "data" / "wallet_research" / "wallets.db"
@@ -68,9 +70,13 @@ def wallet_rows(con: sqlite3.Connection, family: str | None):
         d = per.setdefault(cid, {"b": [0.0, 0.0], "s": [0.0, 0.0], "cost": 0.0,
                                  "proc": 0.0, "n": 0, "last": 0, "fb": None, "tfee": 0.0})
         i = 1 if oidx else 0
-        d["b"][i] += b; d["s"][i] += s
-        d["cost"] += cost; d["proc"] += proc; d["tfee"] += tfee
-        d["n"] += n; d["last"] = max(d["last"], last_ts)
+        d["b"][i] += b
+        d["s"][i] += s
+        d["cost"] += cost
+        d["proc"] += proc
+        d["tfee"] += tfee
+        d["n"] += n
+        d["last"] = max(d["last"], last_ts)
         if first_buy is not None:
             d["fb"] = first_buy if d["fb"] is None else min(d["fb"], first_buy)
     if cur_w is not None:
@@ -101,7 +107,9 @@ def score(con: sqlite3.Connection, family: str | None):
             if acquired <= 0:
                 continue
             p = d["proc"] - d["cost"] - sp + eff[winner]
-            pnl += p; mkts += 1; wins += 1 if p > 0 else 0
+            pnl += p
+            mkts += 1
+            wins += 1 if p > 0 else 0
             fee += d["tfee"]
             cost += d["cost"] + sp
             bought += acquired
@@ -109,12 +117,15 @@ def score(con: sqlite3.Connection, family: str | None):
             splits += sp
             trades += d["n"]
             last = max(last, d["last"])
-            if fam == "1h": f1h += 1
-            else: f24h += 1
+            if fam == "1h":
+                f1h += 1
+            else:
+                f24h += 1
             age = (NOW - end_ts) / 86400.0
             buckets[0 if age <= 30 else (1 if age <= 60 else 2)] += p
             per_mkt.append(p)
-            entry_num += d["cost"]; entry_den += d["b"][0] + d["b"][1]
+            entry_num += d["cost"]
+            entry_den += d["b"][0] + d["b"][1]
             if d["fb"]:
                 leads.append((end_ts - d["fb"]) / 60.0)
         if mkts < 5 or bought <= 0:
@@ -169,7 +180,8 @@ def main():
     rows.sort(key=lambda r: r[a.sort], reverse=True)
     hdr = (f"{'wallet':44}{'name':18}{'pnl$':>9}{'mkts':>6}{'win%':>6}{'hold%':>7}"
            f"{'net$':>9}{'roi%':>7}{'stake$':>8}{'30d$':>8}{'60d$':>8}{'90d$':>8}{'1h':>5}{'24h':>5}{'entry':>7}{'lead_m':>8}{'lead10':>8}")
-    print(hdr); print("-" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
     for r in rows[:a.top]:
         print(f"{r['wallet']:44}{(r['name'] or '')[:17]:18}{r['pnl']:9.0f}{r['mkts']:6d}"
               f"{r['winrate']*100:6.1f}{r['hold']*100:7.1f}{r['pnl_net']:9.0f}{r['roi']*100:7.1f}"
@@ -180,7 +192,8 @@ def main():
         import csv
         with open(a.csv, "w", newline="") as fh:
             wtr = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-            wtr.writeheader(); wtr.writerows(rows)
+            wtr.writeheader()
+            wtr.writerows(rows)
         print("wrote", a.csv)
 
 main()
