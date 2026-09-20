@@ -338,14 +338,18 @@ def test_copies_larger_than_the_target_bet_are_flagged() -> None:
 def test_results_show_the_realistic_pnl_beside_the_paper_one() -> None:
     """A paper ledger's biggest lie is counting a never-filled order as a win."""
     state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    # 10 settled but only 6 re-priced: the realistic figure must be shown
+    # against the paper figure for those same 6, never against all 10.
     summary = {"total": {"n": 10, "wins": 4, "pnl": -2.82, "real_pnl": -5.10,
-                         "staked": 45.57, "never_filled": 3},
+                         "staked": 45.57, "never_filled": 3,
+                         "real_n": 6, "paper_on_real": -4.90},
                "per_target": [], "open": {"n": 4, "staked": 65.94},
                "execution": {}}
     html = panel.render(state=state, target=None, summary=summary)
-    assert "same trades, realistic fills" in html
+    assert "6 re-priced at landing" in html
+    assert "paper $-4.90" in html   # matched subset, not the -2.82 total
     assert "3 never filled" in html
-    assert "$-5.10" in html and "$-2.82" in html
+    assert "real $-5.10" in html
 
 
 def test_each_target_is_judged_on_its_realistic_pnl() -> None:

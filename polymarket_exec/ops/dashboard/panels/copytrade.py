@@ -336,13 +336,19 @@ def _results_html(summary: dict) -> str:
             f"<span class='{gcls}'>gap {gap:+.1f}pp</span></div>"
         )
     real_row = ""
-    if rp is not None:
+    real_n = total.get("real_n") or 0
+    if rp is not None and real_n:
         rcls = "copy-good" if rp > 0 else "copy-bad"
+        # Compare against the paper figure for the SAME rows, not the paper
+        # total over every settled trade — most of which have no realistic
+        # price yet, so the totals cover different sets.
+        paper_same = total.get("paper_on_real") or 0.0
         real_row = (
             "<div class='copy-result copy-result-total'>"
-            "<span><b>same trades, realistic fills</b></span>"
+            f"<span><b>of those, {real_n} re-priced at landing</b></span>"
+            f"<span>paper ${paper_same:+,.2f}</span>"
             f"<span>{nf} never filled</span>"
-            f"<span class='{rcls}'><b>${rp:+,.2f}</b></span>"
+            f"<span class='{rcls}'><b>real ${rp:+,.2f}</b></span>"
             "</div>"
         )
     return (

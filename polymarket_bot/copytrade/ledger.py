@@ -321,6 +321,14 @@ async def summary() -> dict:
             """SELECT COUNT(*) AS n,
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END) AS wins,
                       SUM(pnl) AS pnl, SUM(real_pnl) AS real_pnl,
+                      -- SUM(real_pnl) skips nulls, so it covers FEWER rows than
+                      -- SUM(pnl). Quoting the two side by side compares
+                      -- different trade sets and invents an optimism gap. These
+                      -- two carry the matched subset.
+                      SUM(CASE WHEN real_pnl IS NOT NULL THEN 1 ELSE 0 END)
+                          AS real_n,
+                      SUM(CASE WHEN real_pnl IS NOT NULL THEN pnl ELSE 0 END)
+                          AS paper_on_real,
                       -- Both sides of the fidelity comparison must cover the
                       -- SAME rows. Totalling their P&L over the subset that has
                       -- it, against ours over every settled row, silently
