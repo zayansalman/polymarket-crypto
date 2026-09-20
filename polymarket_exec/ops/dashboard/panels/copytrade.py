@@ -196,6 +196,43 @@ def _drift_html(drift: dict) -> str:
     )
 
 
+def _verdict_html(rows: list) -> str:
+    """Per target: what we got, against what taking every fill would have got.
+
+    Settled copies accumulate slowly because most fills are declined, but every
+    declined fill is scored, so this answers the faster question — is the WALLET
+    worth following, separately from whether our rules let us take the trade.
+
+    When "all fills" is worse than "taken", the filters are carrying the result
+    and the edge is ours, not the wallet's.
+    """
+    if not rows:
+        return ""
+    out = ""
+    for r in rows[:12]:
+        scored = r.get("scored_n") or 0
+        if scored < 2:
+            continue
+        allp = r.get("all_pnl") or 0.0
+        taken = r.get("taken_pnl") or 0.0
+        taken_n = r.get("taken_n") or 0
+        acls = "copy-good" if allp > 0 else "copy-bad"
+        out += (
+            "<div class='copy-result'>"
+            f"<span>{escape(str(r.get('target_label') or '-'))}</span>"
+            f"<span>{taken_n} taken ${taken:+,.2f}</span>"
+            f"<span>{scored} fills seen</span>"
+            f"<span class='{acls}'>all fills ${allp:+,.2f}</span></div>"
+        )
+    if not out:
+        return ""
+    return (
+        "<div class='copy-results'>"
+        "<div class='copy-results-h'>TARGET VERDICT — what we got vs taking "
+        "every fill they made</div>" + out + "</div>"
+    )
+
+
 def _skips_html(board: list) -> str:
     """Was declining right? Each skip reason, scored on what it refused.
 
@@ -369,7 +406,7 @@ def _results_html(summary: dict) -> str:
 def render(
     *, state, target: Target | None, summary: dict | None = None,
     decisions: list | None = None, reach: list | None = None,
-    skips: list | None = None,
+    skips: list | None = None, verdict: list | None = None,
     now: float | None = None,
 ) -> str:
     now = time.time() if now is None else now
@@ -434,6 +471,7 @@ def render(
         f"{_drift_html(getattr(state, 'drift', {}) or {})}"
         f"{_results_html(summary or {})}"
         f"{_execution_html(summary or {})}"
+        f"{_verdict_html(verdict or [])}"
         f"{_skips_html(skips or [])}"
         f"{_reach_html(reach or [])}"
         f"{_decisions_html(decisions or [])}"

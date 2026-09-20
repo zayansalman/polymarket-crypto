@@ -191,6 +191,52 @@ async def settle_skip(row_id: int, *, won: bool, pnl: float, now: int) -> None:
         await conn.commit()
 
 
+async def target_verdict(since: int) -> list[dict]:
+    """Per target, over EVERY fill we saw — copied or declined.
+
+    Settled copies accumulate slowly because most fills are declined. But every
+    declined fill is scored too, so combining them answers a different and
+    faster question: is the WALLET worth following, independent of whether our
+    own rules let us take the trade?
+
+    Two columns, deliberately not merged:
+      * ``taken_pnl``  — what we actually got, after our filters.
+      * ``all_pnl``    — what every observed fill would have returned, filters
+                         ignored. Higher than taken means our rules are costing
+                         us; lower means they are protecting us.
+    """
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            """
+            SELECT label AS target_label,
+                   SUM(taken)      AS taken_n,
+                   SUM(taken_pnl)  AS taken_pnl,
+                   SUM(scored)     AS scored_n,
+                   SUM(all_pnl)    AS all_pnl,
+                   SUM(wins)       AS wins
+            FROM (
+                SELECT target_label AS label, 1 AS taken,
+                       COALESCE(real_pnl, pnl) AS taken_pnl,
+                       1 AS scored, COALESCE(real_pnl, pnl) AS all_pnl,
+                       won AS wins
+                FROM copy_trades
+                WHERE state='settled' AND settled_at >= ?
+                UNION ALL
+                SELECT target_label AS label, 0 AS taken, 0 AS taken_pnl,
+                       1 AS scored, shadow_pnl AS all_pnl,
+                       shadow_won AS wins
+                FROM copy_decisions
+                WHERE settled_at IS NOT NULL AND settled_at >= ?
+            )
+            GROUP BY label
+            HAVING scored_n >= 2
+            ORDER BY all_pnl DESC
+            """,
+            (since, since),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def skip_scoreboard(since: int) -> list[dict]:
     """Was declining right? Per reason, what the skipped trades would have done."""
     async with _db.connect() as conn:

@@ -438,3 +438,14 @@ def test_our_return_is_shown_against_the_targets_own() -> None:
     assert "+8.0%" in html      # theirs
     assert "ours +2.0%" in html # ours, on realistic fills
     assert "gap -6.0pp" in html
+
+
+def test_the_verdict_separates_the_wallet_from_our_filters() -> None:
+    """If taking every fill loses, the edge is our discipline, not the wallet."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    verdict = [{"target_label": "t-e208", "taken_n": 2, "taken_pnl": 4.50,
+                "scored_n": 8, "all_pnl": -36.10, "wins": 3}]
+    html = panel.render(state=state, target=None, verdict=verdict)
+    assert "TARGET VERDICT" in html
+    assert "2 taken $+4.50" in html
+    assert "all fills $-36.10" in html
