@@ -13,7 +13,6 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 15 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
-| `polymarket_bot/chronos_signal.py` | DEAD? | 0 | Layer 3 — Chronos time-series ensemble (stub). |
 | `polymarket_bot/controller.py` | WIRED | 2 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
 | `polymarket_bot/copytrade/__init__.py` | pkg | 4 | Copy-trading: mirror wallets that have a measured, fee-surviving edge. |
 | `polymarket_bot/copytrade/backup.py` | WIRED | 1 | Periodic snapshots of the copy-trade record. |

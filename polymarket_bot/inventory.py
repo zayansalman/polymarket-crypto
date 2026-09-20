@@ -17,9 +17,13 @@ Statuses, narrowest to widest:
 ``GATED``         has a loop, but only runs while the operator holds Start.
 ``UNWIRED``       code is imported at runtime but cannot reach a market.
 ``DEAD``          nothing imports it outside tests; it cannot run at all.
+                  No family holds this status today — chronos_signal.py and
+                  the shadow roster's table were deleted on 2026-09-21.
 ``RESEARCH``      an offline script or CLI. Never part of the live process.
 
-Every entry was verified against the tree on 2026-09-21. ``tests/unit/
+Every entry was verified against the tree on 2026-09-21, the day
+chronos_signal.py, the shadow roster's table and five dead scratch databases
+were deleted off the back of this list. ``tests/unit/
 test_inventory.py`` re-checks the falsifiable half of that on every run — that
 each path still exists, and that the switch registry and this list agree — so
 a family cannot quietly drop off the card by being deleted or renamed.
@@ -143,8 +147,7 @@ FAMILIES: tuple[Family, ...] = (
             "under 1.00, then simulates fills and settles."
         ),
         status=RESEARCH,
-        record="data/pairarb_shadow.db · 79 windows, 9 execs, last written "
-        "2026-08-29",
+        record="never traded · its shadow DB was deleted 2026-09-21",
         verdict=(
             "7 of its 9 modules are reachable only from CLI scripts. Two are "
             "NOT dead and must survive any delete: mirror.py "
@@ -171,39 +174,6 @@ FAMILIES: tuple[Family, ...] = (
             "delete the directory wholesale."
         ),
     ),
-    # ---- dead ---------------------------------------------------------
-    Family(
-        key="model_shadow_roster",
-        label="Shadow model race roster",
-        path="",  # source removed by deb3c22; only the table survives
-        what=(
-            "Ran five competing pricing models side by side on the same 5m "
-            "window and booked a shadow position for each."
-        ),
-        status=DEAD,
-        record="2 orphan rows in model_shadow_positions from 2026-09-13",
-        verdict=(
-            "Source was removed by deb3c22 — nothing is left in the repo but "
-            "a stale __pycache__ in working checkouts. Nothing writes that "
-            "table any more. Drop model_shadow_positions and it is gone."
-        ),
-    ),
-    Family(
-        key="chronos",
-        label="Chronos time-series ensemble",
-        path="polymarket_bot/chronos_signal.py",
-        what=(
-            "Intended second probability source, to blend with the "
-            "Black-Scholes baseline via a weighted ensemble."
-        ),
-        status=DEAD,
-        record="Never traded",
-        verdict=(
-            "105 lines whose predict() returns None unconditionally, so the "
-            "ensemble is the identity function. No caller outside its own "
-            "test. Safe to delete."
-        ),
-    ),
     # ---- offline only -------------------------------------------------
     Family(
         key="btc5m_backtest",
@@ -226,11 +196,7 @@ FAMILIES: tuple[Family, ...] = (
             "mirrors its fills. One variant sent REAL orders to the CLOB."
         ),
         status=RESEARCH,
-        record=(
-            "4 separate DBs, none written since August: copytrade_min.db "
-            "25,188 fills (13.9 MB), copytrade_doge.db 10,450 (5.9 MB), "
-            "copytrade_rpc.db 178, copytrade_shadow.db 99"
-        ),
+        record="never traded here · its 4 scratch DBs were deleted 2026-09-21",
         verdict=(
             "Superseded by polymarket_bot/copytrade/. One variant can place "
             "real orders from a CLI with no operator switch in front of it."
