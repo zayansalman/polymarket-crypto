@@ -45,14 +45,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from config import (  # type: ignore[import-untyped]
     BOT_MODE,
-    CHAINLINK_STREAM_URL,
-    TRADE_MAX_USD,
-    KILL_SWITCH_PATH,
-    HISTORY_CSV_PATH,
-    DASHBOARD_SERVER_NAME,
     DASHBOARD_SERVER_PORT,
     DATA_DIR,
-    DB_PATH,
 )
 from db import connect, init_db  # type: ignore[import-untyped]
 from polymarket_bot import runtime_knobs as _knobs
@@ -76,14 +70,11 @@ _MODE_BANNER = (
 try:
     from polymarket_bot.controller import (  # type: ignore[import-untyped]
         current_mode,
-        get_status,
         live_consented,
         request_start,
         request_stop,
         set_mode,
     )
-    from polymarket_bot.history import load_btc_history_stats  # type: ignore[import-untyped]
-    from polymarket_bot.paper import load_paper_summary  # type: ignore[import-untyped]
     from polymarket_bot.backtest import format_report  # type: ignore[import-untyped]
     from polymarket_exec.execution.live import (  # type: ignore[import-untyped]
         live_boot_problems,
@@ -257,22 +248,6 @@ except OSError:
 # ---------------------------------------------------------------------------
 
 
-def _money(value: float | None, signed: bool = False) -> str:
-    if value is None:
-        return "n/a"
-    prefix = "+" if signed and value > 0 else ""
-    return f"{prefix}${value:,.2f}"
-
-
-def _pct(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.1%}"
-
-
-def _fmt_cap(cap: float | None) -> str:
-    """Render an optional risk-limit cap: dollar amount when set, 'disabled' when None."""
-    return f"${cap:.2f}" if cap is not None else "disabled"
-
-
 def _fmt_relative(ts: str | None) -> str:
     if not ts:
         return "never"
@@ -288,36 +263,6 @@ def _fmt_relative(ts: str | None) -> str:
     if age < 3600:
         return f"{age // 60}m ago"
     return f"{age // 3600}h ago"
-
-
-def _kpi_card(label: str, value: str, hint: str = "") -> str:
-    return (
-        "<div class='metric'>"
-        f"<div class='label'>{escape(label)}</div>"
-        f"<div class='value'>{escape(value)}</div>"
-        f"<div class='hint'>{escape(hint)}</div>"
-        "</div>"
-    )
-
-
-def _state_badge(state: str, risk_state: str) -> str:
-    state_l = (state or "").lower()
-    risk_l = (risk_state or "").lower()
-    if state_l == "running" and risk_l.startswith("ok"):
-        cls = "ok"
-    elif state_l == "running":
-        cls = "warn"
-    elif "breach" in risk_l or "stale" in risk_l:
-        cls = "stop"
-    else:
-        cls = "warn"
-    return f"<span class='badge {cls}'>{escape(state.upper())}</span>"
-
-
-def _pnl_class(value: float | None) -> str:
-    if value is None or value == 0:
-        return ""
-    return "positive" if value > 0 else "negative"
 
 
 # ---------------------------------------------------------------------------
@@ -358,142 +303,9 @@ async def _load_feed(limit: int = 18) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
-async def _get_status_safe() -> Any:
-    """Get controller status, returning a mock if polymarket_bot is unavailable."""
-    if _BTC_BOT_AVAILABLE:
-        return await get_status()
-    # Mock status for testing / when polymarket_bot is not available
-    class _MockStatus:
-        state = "stopped"
-        mode = BOT_MODE
-        updated_at = None
-        detail = f"BTC 5-minute bot is ready. Mode: {_MODE_BANNER}"
-    return _MockStatus()
-
-
-async def _get_paper_safe() -> Any:
-    """Get paper summary, returning a mock if polymarket_bot is unavailable."""
-    if _BTC_BOT_AVAILABLE:
-        return await load_paper_summary()
-    # Mock paper summary for testing
-    class _MockPaper:
-        risk_state = "IDLE: no ticks yet"
-        open_positions = 0
-        closed_positions = 0
-        total_pnl_usd = 0.0
-        open_exposure_usd = 0.0
-        closed_notional_usd = 0.0
-        win_rate = None
-        avg_pnl_usd = None
-        avg_hold_seconds = None
-        last_signal = "none"
-        last_tick_at = None
-        last_window_slug = None
-        last_spot_price = None
-        last_fair_up_prob = None
-        last_up_price = None
-        last_edge = None
-        last_feed_source = None
-        recent_positions: list[dict[str, Any]] = []
-    return _MockPaper()
-
-
 # ---------------------------------------------------------------------------
 # HTML generators (ported from original dashboard.py)
 # ---------------------------------------------------------------------------
-
-
-def _position_cards(positions: list[dict[str, Any]]) -> str:
-    if not positions:
-        return "<div class='note'>No paper positions yet. Start the bot to let it observe a BTC 5m window.</div>"
-    cards: list[str] = []
-    for pos in positions:
-        pnl = pos.get("realized_pnl_usd")
-        pnl_text = "open" if pnl is None else _money(float(pnl), signed=True)
-        pnl_cls = _pnl_class(float(pnl)) if pnl is not None else ""
-        closed = _fmt_relative(pos.get("closed_at")) if pos.get("closed_at") else "open"
-        cards.append(
-            "<div class='position-card'>"
-            f"<b>{escape(pos['side'])}</b> "
-            f"<span class='mono'>{escape(pos['window_slug'])}</span><br>"
-            f"State: {escape(pos['state'])} | Opened: {_fmt_relative(pos.get('opened_at'))} | Closed: {closed}<br>"
-            f"Entry: {float(pos['entry_price']):.3f} | Exit: {pos.get('exit_price') or 'n/a'} | "
-            f"Notional: {_money(float(pos['notional_usd']))}<br>"
-            f"PnL: <span class='{pnl_cls}'>{pnl_text}</span> | Reason: {escape(str(pos.get('exit_reason') or 'holding'))}"
-            "</div>"
-        )
-    return "<div class='positions'>" + "\n".join(cards) + "</div>"
-
-
-async def _overview_html() -> str:
-    status = await _get_status_safe()
-    paper = await _get_paper_safe()
-    badge = _state_badge(status.state, paper.risk_state)
-    pnl_cls = _pnl_class(paper.total_pnl_usd)
-    return (
-        "<div class='grid'>"
-        f"{_kpi_card('Bot state', status.state.upper(), f'mode: {status.mode}')}"
-        f"{_kpi_card('Risk state', paper.risk_state, _fmt_relative(paper.last_tick_at))}"
-        f"{_kpi_card('Open exposure', _money(paper.open_exposure_usd), f'{paper.open_positions} open position(s)')}"
-        f"{_kpi_card('Closed trades', str(paper.closed_positions), f'win rate {_pct(paper.win_rate)}')}"
-        f"<div class='metric'><div class='label'>Paper PnL</div>"
-        f"<div class='value {pnl_cls}'>{_money(paper.total_pnl_usd, signed=True)}</div>"
-        f"<div class='hint'>closed notional {_money(paper.closed_notional_usd)}</div></div>"
-        f"{_kpi_card('Last signal', paper.last_signal[:90], paper.last_window_slug or 'no market tick yet')}"
-        "</div>"
-        "<div class='panel'>"
-        f"{badge} <span class='mono'>DB {escape(str(DB_PATH))}</span>"
-        f"<p class='status-detail'>{escape(status.detail)}</p>"
-        "</div>"
-    )
-
-
-async def _status_markdown() -> str:
-    status = await _get_status_safe()
-    paper = await _get_paper_safe()
-    return (
-        "<h3>Controller</h3>\n"
-        "<ul>\n"
-        f"<li>State: <strong>{status.state.upper()}</strong></li>\n"
-        f"<li>Mode: <strong>{status.mode}</strong></li>\n"
-        f"<li>Updated: <code>{status.updated_at or 'not yet'}</code></li>\n"
-        f"<li>Risk: <strong>{paper.risk_state}</strong></li>\n"
-        "</ul>\n"
-        f"<p>{escape(status.detail)}</p>\n"
-        + (
-            "<p><em><strong>LIVE — orders are real.</strong> Start places risk-gated "
-            "orders on the Polymarket CLOB. Stop cancels resting orders and "
-            f"flattens the open position. Kill switch: <code>{escape(str(KILL_SWITCH_PATH))}</code>."
-            "</em></p>"
-            if _IS_LIVE
-            else "<p><em>Start runs the paper loop only — no live orders in paper mode. "
-            "Stop prevents new entries immediately and force-closes any open "
-            "simulated position.</em></p>"
-        )
-    )
-
-
-async def _paper_html() -> str:
-    paper = await _get_paper_safe()
-    avg_hold = "n/a" if paper.avg_hold_seconds is None else f"{paper.avg_hold_seconds:.0f}s"
-    last_edge = "n/a" if paper.last_edge is None else f"{paper.last_edge:+.3f}"
-    last_fair = "n/a" if paper.last_fair_up_prob is None else f"{paper.last_fair_up_prob:.1%}"
-    last_up = "n/a" if paper.last_up_price is None else f"{paper.last_up_price:.3f}"
-    min_trade = await _knobs.get("paper_min_trade_usd")
-    max_trade = await _knobs.get("paper_max_trade_usd")
-    return (
-        "<div class='grid'>"
-        f"{_kpi_card('Last tick', _fmt_relative(paper.last_tick_at), paper.last_feed_source or 'no feed yet')}"
-        f"{_kpi_card('Spot', 'n/a' if paper.last_spot_price is None else f'${paper.last_spot_price:,.2f}', paper.last_window_slug or 'no window yet')}"
-        f"{_kpi_card('Fair Up', last_fair, f'market up {last_up}')}"
-        f"{_kpi_card('Edge', last_edge, 'no strategy loaded')}"
-        f"{_kpi_card('Avg PnL', _money(paper.avg_pnl_usd, signed=True), f'avg hold {avg_hold}')}"
-        f"{_kpi_card('Sizing', f'${min_trade:.0f}-${max_trade:.0f}', 'paper clip range')}"
-        "</div>"
-        "<div class='panel'><h3>Recent Paper Positions</h3>"
-        f"{_position_cards(paper.recent_positions)}"
-        "</div>"
-    )
 
 
 # Activity-log colour groups. Anything unlisted renders as "other" (neutral).
@@ -542,98 +354,6 @@ async def _activity_html() -> str:
     return "\n".join(lines)
 
 
-def _history_html() -> str:
-    if _BTC_BOT_AVAILABLE:
-        stats = load_btc_history_stats()
-    else:
-        class _MockStats:
-            found = False
-            path = str(HISTORY_CSV_PATH)
-        stats = _MockStats()
-
-    if not stats.found:
-        return (
-            "<h3>Historical Trade Baseline</h3>\n"
-            f"<p>Optional CSV not found at <code>{HISTORY_CSV_PATH}</code>. The bot still runs; "
-            "the CSV only helps explain why the lab sizes paper trades at $1-$5.</p>"
-        )
-    return (
-        "<h3>Historical Trade Baseline</h3>\n"
-        "<ul>\n"
-        f"<li>Source: <code>{stats.path}</code></li>\n"
-        f"<li>BTC rows: <strong>{stats.btc_rows}</strong> of {stats.total_rows}</li>\n"
-        f"<li>Buys / sells / redeems: <strong>{stats.buys} / {stats.sells} / {stats.redeems}</strong></li>\n"
-        f"<li>Average buy size: <strong>${stats.buy_usdc_avg:.2f}</strong></li>\n"
-        f"<li>Median buy size: <strong>${stats.buy_usdc_median:.2f}</strong></li>\n"
-        f"<li>Share of buys sized $1-$5: <strong>{stats.one_to_five_buy_share:.0%}</strong></li>\n"
-        "</ul>"
-    )
-
-
-def _brief_html() -> str:
-    return (
-        "<h3>System Brief</h3>\n"
-        "<p>This is a local BTC 5-minute binary pricing-model strategy lab. It is useful "
-        "as a personal paper bot and as a compact example of trading-system "
-        "discipline: market discovery, feed labeling, confidence-based sizing, "
-        "one-position risk control, structured event logs, and a dashboard kill "
-        "switch.</p>\n"
-        + (
-            "<p><strong>Mode: LIVE — orders are real.</strong> Start places risk-gated "
-            "limit orders on the Polymarket CLOB (per-trade cap "
-            f"${TRADE_MAX_USD:.2f}, daily loss halt ${_knobs.cached('live_daily_loss_halt_usd'):.2f}, "
-            f"bankroll cap {_fmt_cap(_knobs.cached('live_bankroll_cap_usd') or None)}); Stop cancels and flattens. "
-            f"Kill switch file: <code>{escape(str(KILL_SWITCH_PATH))}</code>.</p>"
-            if _IS_LIVE
-            else "<p>Mode: paper — this mode does not sign or submit live orders. The active "
-            "workflow is simple: <strong>Start</strong> begins simulated BTC 5m trading, and "
-            "<strong>Stop</strong> halts new entries and closes any open simulated position.</p>"
-        )
-    )
-
-
-def _scorecard_html() -> str:
-    return (
-        "<h3>Trading Systems Scorecard</h3>\n"
-        "<ul>\n"
-        "<li>Scope: BTC 5-minute Up/Down markets only.</li>\n"
-        "<li>Operator control: Start, Stop, Refresh, and activity feed.</li>\n"
-        "<li>Risk: one open paper position, bounded $1-$5 sizing, target/stop/time exits.</li>\n"
-        "<li>Feed discipline: public BTC fallback is labeled; Chainlink Streams is the intended reference.</li>\n"
-        "<li>Auditability: ticks, simulated positions, exits, config state, and notifications persist to SQLite.</li>\n"
-        "<li>Failure visibility: market/feed/loop errors surface in logs and dashboard state.</li>\n"
-        "</ul>"
-    )
-
-
-def _settings_html() -> str:
-    return (
-        "<h3>BTC 5m Paper Rules</h3>\n"
-        "<p class='dim'>Every value below is a live, dashboard-editable knob — see the "
-        "SETTINGS card on the BTC 5m tab to change one. This list just reflects the "
-        "current values.</p>\n"
-        "<ul>\n"
-        f"<li>Market scope: BTC Up/Down 5-minute windows only.</li>\n"
-        "<li>Strategy: <strong>none loaded</strong> (v0 archived 2026-09-13).</li>\n"
-        f"<li>Paper sizing: <strong>${_knobs.cached('paper_min_trade_usd'):.0f}-${_knobs.cached('paper_max_trade_usd'):.0f}</strong>.</li>\n"
-        f"<li>Tick cadence: <strong>{_knobs.cached('paper_tick_seconds'):.0f}s</strong>.</li>\n"
-        f"<li>Target / stop return: <strong>{_knobs.cached('paper_target_return'):.0%} / {_knobs.cached('paper_stop_return'):.0%}</strong>.</li>\n"
-        f"<li>Time exit: <strong>{_knobs.cached('paper_time_exit_seconds')}s</strong>.</li>\n"
-        f"<li>Settlement-aware reference target: {CHAINLINK_STREAM_URL}</li>\n"
-        "</ul>\n"
-        + (
-            "<p><strong>Mode: LIVE — orders are real.</strong> Live limits: per-trade cap "
-            f"<strong>${TRADE_MAX_USD:.2f}</strong>, daily loss halt "
-            f"<strong>${_knobs.cached('live_daily_loss_halt_usd'):.2f}</strong>, session bankroll cap "
-            f"<strong>{_fmt_cap(_knobs.cached('live_bankroll_cap_usd') or None)}</strong>, max 1 open position, "
-            f"kill switch <code>{escape(str(KILL_SWITCH_PATH))}</code>.</p>"
-            if _IS_LIVE
-            else "<p>Required local env vars are optional for paper mode except path overrides. "
-            "No private key is used in paper mode.</p>"
-        )
-    )
-
-
 def _backtest_html() -> str:
     report_path = DATA_DIR / "backtests" / "latest.json"
     if not report_path.exists():
@@ -678,18 +398,6 @@ def _backtest_html() -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _get_overview_data() -> dict[str, str]:
-    """Return overview data as a dict with 'html' and 'status' keys."""
-    return {
-        "html": await _overview_html(),
-        "status": await _status_markdown(),
-    }
-
-
-async def _get_paper_data() -> dict[str, str]:
-    return {"html": await _paper_html()}
-
-
 async def _execution_view_safe() -> str:
     """Render the execution view; never let a dashboard error touch the trading loop."""
     try:
@@ -712,16 +420,8 @@ async def _get_activity_data() -> str:
     return await _activity_html()
 
 
-def _get_history_data() -> str:
-    return _history_html()
-
-
 def _get_backtest_data() -> str:
     return _backtest_html()
-
-
-def _get_settings_data() -> str:
-    return _settings_html()
 
 
 # ---------------------------------------------------------------------------
@@ -1032,8 +732,6 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
     return {"status": "error", "detail": f"unknown runtime key {key!r}"}
 
 
-
-
 async def _runtime_state() -> dict[str, str]:
     """Lightweight snapshot of bot state + mode for the topbar buttons."""
     from db import get_config
@@ -1091,12 +789,3 @@ async def api_stream(request: Request) -> StreamingResponse:
 # Launch helper
 # ---------------------------------------------------------------------------
 
-def launch() -> None:
-    """Run the dashboard with uvicorn."""
-    import uvicorn
-    uvicorn.run(
-        "polymarket_exec.ops.dashboard.app:app",
-        host=DASHBOARD_SERVER_NAME,
-        port=DASHBOARD_SERVER_PORT,
-        log_level="info",
-    )
