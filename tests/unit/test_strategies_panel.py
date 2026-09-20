@@ -49,4 +49,5 @@ def test_the_switch_applies_on_click_with_no_apply_button() -> None:
 
 def test_the_header_counts_how_many_are_running() -> None:
     html = panel.render(enabled={**ALL_ON, "daily_altcoin": False})
-    assert "1 of 2 on" in html
+    total = len(_strategies.STRATEGIES)
+    assert f"{total - 1} of {total} on" in html

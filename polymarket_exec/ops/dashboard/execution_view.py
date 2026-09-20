@@ -23,8 +23,10 @@ from polymarket_exec.ops.dashboard.panels import _wallet
 from polymarket_exec.ops.dashboard.panels import (
     blotter,
     controls,
+    copytrade as copytrade_panel,
     daily_altcoin,
     decision_engine,
+    maker as maker_panel,
     feeds,
     market,
     market_selector,
@@ -172,6 +174,61 @@ async def execution_view_html() -> str:
         scan_interval_seconds=await _knobs.get("daily_scan_interval_seconds"),
         trade_usd=await _knobs.get("daily_trade_usd"),
     )
+    # Copy trade: the watcher keeps its snapshot in memory, so this is a read
+    # of live state rather than a DB load.
+    from polymarket_bot.copytrade import targets as _copy_targets
+    from polymarket_bot.copytrade import watcher as _copy_watcher
+
+    _cw = _copy_watcher.current()
+    _cstate = _cw.state if _cw is not None else None
+    from polymarket_bot.copytrade import ledger as _copy_ledger
+
+    import time as _time
+
+    try:
+        _csummary = await _copy_ledger.summary()
+        _cdecisions = await _copy_ledger.decision_counts(int(_time.time()) - 86400)
+        _creach = await _copy_ledger.reachability(int(_time.time()) - 86400)
+        _cskips = await _copy_ledger.skip_scoreboard(int(_time.time()) - 86400)
+        _cverdict = await _copy_ledger.target_verdict(int(_time.time()) - 86400)
+        _caudit = await _copy_ledger.audit(int(_time.time()) - 86400)
+        # Every copy, one row each. An aggregate can hide a run of identical
+        # losers behind a flat total; with a target chosen on three days of
+        # data that is the specific thing worth being able to see.
+        _ctrades = (await _copy_ledger.open_rows()) + (
+            await _copy_ledger.settled_rows(40))
+    except Exception:  # noqa: BLE001 — a missing table must not blank the page
+        _csummary, _cdecisions, _creach, _cskips, _cverdict = {}, [], [], [], []
+        _caudit, _ctrades = {}, []
+    copytrade_html = copytrade_panel.render(
+        state=_cstate,
+        target=_copy_targets.get(_cstate.target) if _cstate else None,
+        summary=_csummary,
+        decisions=_cdecisions,
+        reach=_creach,
+        skips=_cskips,
+        verdict=_cverdict,
+        audit=_caudit,
+        trades=_ctrades,
+    )
+    # Maker: read straight from its ledger. A passive strategy's result is its
+    # fill rate as much as its P&L, so the unfilled and expired quotes come back
+    # with the filled ones rather than being filtered out here.
+    from polymarket_bot.maker import ledger as _maker_ledger
+
+    try:
+        _msummary = await _maker_ledger.summary()
+        _mquotes = await _maker_ledger.recent(25)
+        _mbands = await _maker_ledger.by_band()
+        _mqueue = await _maker_ledger.queue_report()
+        _mdecisions = await _maker_ledger.decision_counts(int(_time.time()) - 86400)
+    except Exception:  # noqa: BLE001 — a missing table must not blank the page
+        _msummary, _mquotes, _mbands, _mqueue, _mdecisions = {}, [], [], {}, []
+    maker_html = maker_panel.render(
+        summary=_msummary, quotes=_mquotes, bands=_mbands,
+        queue=_mqueue, decisions=_mdecisions,
+    )
+
     settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
     settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)
 
@@ -188,6 +245,8 @@ async def execution_view_html() -> str:
         + tca_html
         + blotter_html
         + daily_altcoin_html
+        + copytrade_html
+        + maker_html
         + settings_html
         + "</div></div>"
     )
