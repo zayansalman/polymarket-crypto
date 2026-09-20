@@ -55,7 +55,11 @@ class Family:
     key: str
     label: str
     path: str
-    """Repo-relative module or package. Checked by the inventory test."""
+    """Repo-relative module or package, and checked by the inventory test.
+
+    Empty when the source is already gone and the only thing left is data —
+    a deleted family still belongs on the card while its rows are still in
+    the database, because those rows are the thing left to clean up."""
     what: str
     status: str
     record: str
@@ -171,7 +175,7 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         key="model_shadow_roster",
         label="Shadow model race roster",
-        path="polymarket_bot/shadow/",
+        path="",  # source removed by deb3c22; only the table survives
         what=(
             "Ran five competing pricing models side by side on the same 5m "
             "window and booked a shadow position for each."
@@ -179,9 +183,9 @@ FAMILIES: tuple[Family, ...] = (
         status=DEAD,
         record="2 orphan rows in model_shadow_positions from 2026-09-13",
         verdict=(
-            "Source was deleted; only a stale __pycache__ remains. Nothing "
-            "writes that table any more. Safe to delete the directory and "
-            "drop the table."
+            "Source was removed by deb3c22 — nothing is left in the repo but "
+            "a stale __pycache__ in working checkouts. Nothing writes that "
+            "table any more. Drop model_shadow_positions and it is gone."
         ),
     ),
     Family(

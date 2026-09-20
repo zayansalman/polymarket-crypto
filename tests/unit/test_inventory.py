@@ -17,12 +17,25 @@ from polymarket_bot import strategies as _strategies
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_every_family_still_exists_on_disk() -> None:
+def test_every_claimed_path_still_exists_on_disk() -> None:
     # The whole point of the card is that a dead family is visible. A family
-    # whose path has already been deleted is worse than invisible: it is a
-    # claim about code that is not there.
+    # pointing at a path that is not there is worse than invisible: it is a
+    # claim about code that does not exist.
     for family in _inv.FAMILIES:
+        if not family.path:
+            continue
         assert (ROOT / family.path).exists(), f"{family.key}: {family.path} is gone"
+
+
+def test_a_family_with_no_source_left_is_dead_and_says_what_remains() -> None:
+    # An empty path is allowed only for a family whose source is already gone.
+    # It stays on the card because its leftover rows are the thing to clean up.
+    for family in _inv.FAMILIES:
+        if family.path:
+            continue
+        assert family.status == _inv.DEAD, family.key
+        assert family.record, family.key
+        assert family.verdict, family.key
 
 
 def test_every_switch_names_a_real_strategy() -> None:
@@ -83,8 +96,8 @@ def test_a_dead_family_really_has_no_runtime_importer() -> None:
     # Claiming "dead" is the claim most likely to be wrong and most likely to
     # get something deleted that is load-bearing. Check it rather than trust it.
     for family in _inv.FAMILIES:
-        if family.status != _inv.DEAD:
-            continue
+        if family.status != _inv.DEAD or not family.path:
+            continue  # no source left to import — see the empty-path test
         module = Path(family.path).stem
         found = subprocess.run(
             ["grep", "-rn", "--include=*.py", f"import {module}", "polymarket_bot",
