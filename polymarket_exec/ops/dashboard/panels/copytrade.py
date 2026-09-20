@@ -191,14 +191,21 @@ def _drift_html(drift: dict) -> str:
     """
     if not drift:
         return ""
+    # Only the drifted ones are worth listing. Rendering all forty made the card
+    # tall enough that its height changed on every refresh, which moved the rest
+    # of the page under the reader.
     rows = ""
     off = 0
+    shown = 0
     for addr, (label, followed, total) in sorted(
-        drift.items(), key=lambda kv: -(kv[1][1] / kv[1][2] if kv[1][2] else 0)
+        drift.items(), key=lambda kv: (kv[1][1] / kv[1][2] if kv[1][2] else 0)
     ):
         pct = (100 * followed / total) if total else 0
         if pct < 25:
             off += 1
+        elif shown >= 4:
+            continue
+        shown += 1
         cls = "copy-good" if pct >= 50 else ("copy-warn" if pct >= 25 else "copy-bad")
         rows += (
             "<div class='copy-result'>"
@@ -208,16 +215,22 @@ def _drift_html(drift: dict) -> str:
             f"<span class='{cls}'>{pct:.0f}%</span>"
             "</div>"
         )
+    ok_n = len(drift) - off
     warn = (
         f"<div class='copy-error'>{off} of {len(drift)} targets have left the "
         "markets they were measured on — their screened edge does not apply to "
         "what they are trading now.</div>"
         if off else ""
     )
+    summary = (
+        "<div class='gr-toggle-hint'>"
+        f"{ok_n} of {len(drift)} targets still on their measured markets"
+        "</div>"
+    )
     return (
         "<div class='copy-results'>"
         "<div class='copy-results-h'>TARGET DRIFT</div>"
-        f"{warn}{rows}</div>"
+        f"{warn}{summary}{rows}</div>"
     )
 
 

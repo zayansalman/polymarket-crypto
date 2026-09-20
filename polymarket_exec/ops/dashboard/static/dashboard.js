@@ -217,8 +217,6 @@ function swapKeepingInputs(container, html) {
   container.querySelectorAll('[data-keep-scroll]').forEach(function(el) {
     if (el.scrollTop > 0) scrolls.push({ key: el.dataset.keepScroll, top: el.scrollTop });
   });
-  var pageY = window.scrollY;
-
   container.innerHTML = html;
 
   kept.forEach(function(k) {
@@ -235,7 +233,11 @@ function swapKeepingInputs(container, html) {
     var el = container.querySelector('[data-keep-scroll="' + s.key + '"]');
     if (el) el.scrollTop = s.top;
   });
-  if (window.scrollY !== pageY) window.scrollTo(0, pageY);
+  // No window-level scroll restore here. Panels change height between
+  // refreshes, so forcing the old pixel offset back lands the reader somewhere
+  // different each time — which reads as the page jumping at random. The
+  // browser keeps the scroll position by itself; preventScroll above is what
+  // actually stops the jumping.
   updateTicket();  // a kept share count must be re-priced at the fresh quote
 }
 
