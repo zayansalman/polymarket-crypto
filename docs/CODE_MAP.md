@@ -1,5 +1,12 @@
 # Code Map — where to make what change
 
+> **⚠ Mid-rebuild (`chore/cleanup-dead-code`, started 2026-09-21):** this doc, and the
+> generated tables below, describe the tree as it stood BEFORE the dead-code removal and
+> re-architecture pass. Whole modules named here as WIRED are being deleted; `gen_docs.py`
+> itself has a known bug (skips relative imports) that this pass fixes late, not first —
+> so don't trust the wired/dead calls here until that lands. Treat this file as informative
+> history, not routing, until the rebuild's Stage F regenerates it for real.
+
 > Read this first. This repo is **two coupled code trees**, not one. Most doc confusion
 > comes from treating one as "the codebase" and the other as legacy. Both are LIVE.
 
