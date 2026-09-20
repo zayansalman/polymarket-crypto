@@ -116,10 +116,24 @@ def harvest(con, max_pages: int, since_ts: int) -> int:
     return kept
 
 
-def pull_trades(con, limit_markets: int) -> int:
-    rows = con.execute(
-        "SELECT cid FROM markets WHERE fetched=0 ORDER BY end_ts DESC LIMIT ?",
-        (limit_markets,)).fetchall()
+def pull_trades(con, limit_markets: int, lo: int = 0, hi: int = 0) -> int:
+    """Pull trades, optionally restricted to a date window.
+
+    The CLOB listing runs oldest-first, so an unrestricted "newest N" picks the
+    newest of whatever slice was harvested — which silently produced an 8-day
+    sample masquerading as five months. The window makes the period explicit.
+    """
+    q = "SELECT cid FROM markets WHERE fetched=0"
+    params: list = []
+    if lo:
+        q += " AND end_ts >= ?"
+        params.append(lo)
+    if hi:
+        q += " AND end_ts < ?"
+        params.append(hi)
+    q += " ORDER BY end_ts DESC LIMIT ?"
+    params.append(limit_markets)
+    rows = con.execute(q, params).fetchall()
     done = 0
     for (cid,) in rows:
         out, off = [], 0
@@ -155,6 +169,8 @@ def main():
     ap.add_argument("--days", type=int, default=120)
     ap.add_argument("--markets", type=int, default=1500)
     ap.add_argument("--harvest-only", action="store_true")
+    ap.add_argument("--from-date", default="", help="YYYY-MM-DD window start")
+    ap.add_argument("--to-date", default="", help="YYYY-MM-DD window end")
     a = ap.parse_args()
 
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
@@ -168,8 +184,11 @@ def main():
     print(f"  {kept} added this run, {total} in db")
     if a.harvest_only:
         return
+    def stamp(d):
+        return int(time.mktime(time.strptime(d, "%Y-%m-%d"))) if d else 0
+
     print("pulling trades")
-    pull_trades(con, a.markets)
+    pull_trades(con, a.markets, stamp(a.from_date), stamp(a.to_date))
     n = con.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
     print(f"  {n} trades")
 
