@@ -26,6 +26,7 @@ from polymarket_exec.ops.dashboard.panels import (
     copytrade as copytrade_panel,
     daily_altcoin,
     decision_engine,
+    maker as maker_panel,
     feeds,
     market,
     market_selector,
@@ -204,6 +205,24 @@ async def execution_view_html() -> str:
         verdict=_cverdict,
         audit=_caudit,
     )
+    # Maker: read straight from its ledger. A passive strategy's result is its
+    # fill rate as much as its P&L, so the unfilled and expired quotes come back
+    # with the filled ones rather than being filtered out here.
+    from polymarket_bot.maker import ledger as _maker_ledger
+
+    try:
+        _msummary = await _maker_ledger.summary()
+        _mquotes = await _maker_ledger.recent(25)
+        _mbands = await _maker_ledger.by_band()
+        _mqueue = await _maker_ledger.queue_report()
+        _mdecisions = await _maker_ledger.decision_counts(int(_time.time()) - 86400)
+    except Exception:  # noqa: BLE001 — a missing table must not blank the page
+        _msummary, _mquotes, _mbands, _mqueue, _mdecisions = {}, [], [], {}, []
+    maker_html = maker_panel.render(
+        summary=_msummary, quotes=_mquotes, bands=_mbands,
+        queue=_mqueue, decisions=_mdecisions,
+    )
+
     settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
     settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)
 
@@ -221,6 +240,7 @@ async def execution_view_html() -> str:
         + blotter_html
         + daily_altcoin_html
         + copytrade_html
+        + maker_html
         + settings_html
         + "</div></div>"
     )

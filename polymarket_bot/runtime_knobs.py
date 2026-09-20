@@ -99,6 +99,48 @@ KNOBS: dict[str, Knob] = {
         "runtime.copy.observe_limit", 100, "int",
         "Fills fetched per poll", 10, 500, group="Copy trade",
     ),
+    # --- Maker (polymarket_bot/maker/) ------------------------------------
+    # Measured over 7,000 resolved crypto Up/Down markets: real resting orders
+    # that filled between 0.55 and 0.92 returned +2 to +6.6c/share held to
+    # resolution, fee-free, while fills under the midpoint lost 5-7c. The band
+    # is a knob and not a constant because that result is the thing under test.
+    "maker_enabled": Knob(
+        "runtime.maker.enabled", True, "bool",
+        "Rest passive quotes on favourites", group="Maker",
+    ),
+    "maker_band_lo": Knob(
+        "runtime.maker.band_lo", 0.55, "float",
+        "Quote only at or above", 0.05, 0.95, group="Maker",
+    ),
+    "maker_band_hi": Knob(
+        "runtime.maker.band_hi", 0.92, "float",
+        "Quote only below", 0.10, 1.0, group="Maker",
+    ),
+    "maker_size": Knob(
+        "runtime.maker.size", 25.0, "float",
+        "Shares per quote", 5.0, 1000.0, unit="sh", group="Maker",
+    ),
+    # Improving a tick costs 1c of the measured edge and buys front of queue.
+    # Joining keeps the cent and waits behind everything already resting. Both
+    # are recorded with their queue depth so the ledger can settle the question.
+    "maker_improve_tick": Knob(
+        "runtime.maker.improve_tick", True, "bool",
+        "Improve best bid by one tick", group="Maker",
+    ),
+    "maker_max_spread_cents": Knob(
+        "runtime.maker.max_spread_cents", 6.0, "float",
+        "Skip books wider than", 1.0, 50.0, unit="c", group="Maker",
+    ),
+    # A fill in the last seconds is a coin flip on a stale price, not the edge
+    # that was measured.
+    "maker_min_seconds_left": Knob(
+        "runtime.maker.min_seconds_left", 120, "int",
+        "Do not quote inside", 0, 3600, unit="s", group="Maker",
+    ),
+    "maker_poll_interval_seconds": Knob(
+        "runtime.maker.poll_interval_seconds", 45.0, "float",
+        "Quote/fill poll interval", 10.0, 600.0, unit="s", group="Maker",
+    ),
     # --- Paper strategy (polymarket_bot/paper.py) -------------------------
     "paper_min_trade_usd": Knob(
         "runtime.paper.min_trade_usd", 1.0, "float", "Min trade size",

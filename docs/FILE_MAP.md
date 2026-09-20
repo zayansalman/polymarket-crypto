@@ -6,15 +6,21 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 30 | Configuration for the local Polymarket crypto trading lab. |
+| `config.py` | WIRED | 32 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
-| `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
+| `db.py` | WIRED | 18 | SQLite storage for the local Polymarket crypto trading lab. |
 | `logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 10 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 13 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
 | `polymarket_bot/chronos_signal.py` | DEAD? | 0 | Layer 3 — Chronos time-series ensemble (stub). |
 | `polymarket_bot/controller.py` | WIRED | 2 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
+| `polymarket_bot/copytrade/__init__.py` | pkg | 4 | Copy-trading: mirror wallets that have a measured, fee-surviving edge. |
+| `polymarket_bot/copytrade/backup.py` | WIRED | 1 | Periodic snapshots of the copy-trade record. |
+| `polymarket_bot/copytrade/ledger.py` | WIRED | 3 | Paper ledger for copy trades: one row per copy, settled on resolution. |
+| `polymarket_bot/copytrade/targets.py` | WIRED | 4 | Wallets worth mirroring, and the measurement that earned them the place. |
+| `polymarket_bot/copytrade/trader.py` | WIRED | 1 | Turn an observed fill into a paper copy, and settle it when the market does. |
+| `polymarket_bot/copytrade/watcher.py` | WIRED | 2 | Watch a target wallet's fills and show them, before mirroring anything. |
 | `polymarket_bot/daily/__init__.py` | pkg | 1 | Daily (24h-window) altcoin Up/Down shadow strategy (issue #185). |
 | `polymarket_bot/daily/ledger.py` | WIRED | 1 | Persistence for the daily altcoin scanner's paper positions. |
 | `polymarket_bot/daily/market.py` | WIRED | 1 | Daily Up/Down market discovery and per-asset price/spot resolution. |
@@ -23,19 +29,24 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/fees.py` | WIRED | 3 | Canonical Polymarket taker-fee math. |
 | `polymarket_bot/history.py` | WIRED | 3 | Load the user's exported Polymarket history for BTC sizing context. |
+| `polymarket_bot/maker/__init__.py` | pkg | 3 | (needs docstring) |
+| `polymarket_bot/maker/filler.py` | WIRED | 1 | Decide whether a resting quote would really have filled, and settle it. |
+| `polymarket_bot/maker/ledger.py` | WIRED | 3 | Paper ledger for resting maker quotes. |
+| `polymarket_bot/maker/quoter.py` | WIRED | 1 | Decide what to rest, and where in the queue it lands. |
+| `polymarket_bot/maker/runner.py` | WIRED | 1 | The maker loop: quote the favourite, watch the queue, settle on resolution. |
 | `polymarket_bot/market_selection.py` | WIRED | 4 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 1 | Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182). |
 | `polymarket_bot/pairarb/feed.py` | WIRED | 1 | Fill feed for the copier — one interface, two transports (#182). |
 | `polymarket_bot/pairarb/fills.py` | WIRED | 1 | Back-of-queue maker fill simulation and window settlement (#182). |
 | `polymarket_bot/pairarb/ledger.py` | WIRED | 1 | Persistence for the two-sided pair shadow tester (#182). |
 | `polymarket_bot/pairarb/market_index.py` | WIRED | 2 | Outcome-token -> market metadata resolver for the 5m Up/Down family (#182). |
-| `polymarket_bot/pairarb/mirror.py` | WIRED | 2 | Copy-trade mirror — what following a target wallet would actually cost (#182). |
+| `polymarket_bot/pairarb/mirror.py` | WIRED | 3 | Copy-trade mirror — what following a target wallet would actually cost (#182). |
 | `polymarket_bot/pairarb/onchain.py` | WIRED | 2 | On-chain fill detection via Polygon ``OrderFilled`` logs (#182). |
 | `polymarket_bot/pairarb/quoter.py` | WIRED | 1 | Two-sided quote placement for the 5m Up/Down pair strategy (#182). |
 | `polymarket_bot/pairarb/types.py` | WIRED | 3 | Shared data contracts for the two-sided pair quoter (#182). |
 | `polymarket_bot/paper.py` | WIRED | 5 | BTC 5-minute trading engine (paper by default, live opt-in). |
-| `polymarket_bot/runtime_knobs.py` | WIRED | 6 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
-| `polymarket_bot/strategies.py` | WIRED | 5 | Operator strategy switches: which strategies may open new positions. |
+| `polymarket_bot/runtime_knobs.py` | WIRED | 9 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
+| `polymarket_bot/strategies.py` | WIRED | 6 | Operator strategy switches: which strategies may open new positions. |
 | `polymarket_bot/strategy.py` | WIRED | 5 | Shared BTC 5-minute binary strategy math. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/backtest/__init__.py` | pkg | 0 | Backtesting harness and metrics. |
@@ -83,9 +94,11 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/_wallet.py` | WIRED | 1 | Polymarket wallet size for the EMS ribbon: cash + open positions value. |
 | `polymarket_exec/ops/dashboard/panels/blotter.py` | WIRED | 1 | Trade blotter: open positions on top, last 12 closed below, mode chip per row. |
 | `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
+| `polymarket_exec/ops/dashboard/panels/copytrade.py` | WIRED | 1 | COPY TRADE card: the target wallet's fills, exactly as we saw them. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
 | `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
+| `polymarket_exec/ops/dashboard/panels/maker.py` | WIRED | 1 | MAKER card: every quote we rested, including the ones that never filled. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
 | `polymarket_exec/ops/dashboard/panels/market_selector.py` | WIRED | 1 | Topbar market selector: asset buttons over timeframe buttons. |
 | `polymarket_exec/ops/dashboard/panels/performance.py` | WIRED | 1 | Performance / alpha panel: combined equity curve + LIVE/PAPER mini-cards. |
@@ -125,3 +138,17 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `tools/pairarb_shadow.py` | cli | 0 | Live shadow runner for two-sided maker quoting on 5m Up/Down markets (#182). |
 | `tools/reconcile_live_ledger.py` | cli | 0 | Reconcile the live paper-ledger against the REAL Polymarket account (issue #102). |
 | `tools/venue_recorder.py` | cli | 1 | Venue recorder — the research program's one blocking build item (C17). |
+| `tools/wallet_research/analyze.py` | cli | 0 | Score wallets on the scanned 1h/24h Up-or-Down universe. |
+| `tools/wallet_research/filter_test.py` | cli | 0 | Does the slippage filter have an edge, independent of whose fill it is? |
+| `tools/wallet_research/holdout_test.py` | cli | 0 | Does the taker screen predict, or does it fit noise? |
+| `tools/wallet_research/maker_band.py` | cli | 0 | Is the maker edge on favourites real, and what shape is it? |
+| `tools/wallet_research/maker_edge.py` | cli | 0 | What did real resting orders actually earn, fee-free? |
+| `tools/wallet_research/maker_holdout.py` | cli | 0 | Does a wallet's maker edge carry into the NEXT month, or is it last month's luck? |
+| `tools/wallet_research/maker_label.py` | cli | 0 | Label every stored fill maker or taker, one API call per market. |
+| `tools/wallet_research/maker_test.py` | cli | 0 | Could a resting bid have filled, and would it have paid? |
+| `tools/wallet_research/maker_vs_taker.py` | cli | 0 | Measure adverse selection: do MAKER fills realise worse than TAKER fills? |
+| `tools/wallet_research/rank.py` | cli | 0 | Rank wallets by copier edge, not by how much money they made. |
+| `tools/wallet_research/scan.py` | cli | 0 | Scan resolved 1h/24h crypto Up-or-Down markets and build per-wallet ledgers. |
+| `tools/wallet_research/strike_scan.py` | cli | 0 | Scan crypto STRIKE markets ("will X be above $Y on <date>"). |
+| `tools/wallet_research/taker_screen.py` | cli | 0 | Find wallets that made money on crypto Up/Down as TAKERS, recently. |
+| `tools/wallet_research/validate.py` | cli | 0 | Cross-check a wallet's reconstructed PnL and measure how copyable it is. |

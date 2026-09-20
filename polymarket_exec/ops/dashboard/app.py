@@ -161,6 +161,15 @@ async def _lifespan(app: FastAPI):
     copy_stop_event = asyncio.Event()
     copy_task = asyncio.create_task(_run_copy_watcher(copy_stop_event))
 
+    # Maker (#maker): rests passive bids on the favourite in crypto Up/Down
+    # markets and never crosses. Paper only — it records quotes, the queue each
+    # one joined, and whether flow ever traded through it. Gated by the
+    # `maker_enabled` knob, which it re-reads every pass.
+    from polymarket_bot.maker.runner import run_forever as _run_maker
+
+    maker_stop_event = asyncio.Event()
+    maker_task = asyncio.create_task(_run_maker(maker_stop_event))
+
     # Market-data hub: live Up/Down books and trades (CLOB market WS) and the
     # Chainlink / TWAP / Binance reference prices (RTDS WS) — observation data only.
     from polymarket_exec.marketdata import hub as _marketdata_hub
@@ -188,6 +197,7 @@ async def _lifespan(app: FastAPI):
         (macro_stop_event, macro_task),
         (marketdata_stop_event, marketdata_task),
         (copy_stop_event, copy_task),
+        (maker_stop_event, maker_task),
     ):
         stop_event.set()
         task.cancel()
