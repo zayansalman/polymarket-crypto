@@ -321,9 +321,19 @@ async def summary() -> dict:
             """SELECT COUNT(*) AS n,
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END) AS wins,
                       SUM(pnl) AS pnl, SUM(real_pnl) AS real_pnl,
+                      -- Both sides of the fidelity comparison must cover the
+                      -- SAME rows. Totalling their P&L over the subset that has
+                      -- it, against ours over every settled row, silently
+                      -- compares different trades.
                       SUM(their_pnl) AS their_pnl,
                       SUM(CASE WHEN their_pnl IS NOT NULL THEN their_size*their_price
                                ELSE 0 END) AS their_staked,
+                      COUNT(their_pnl) AS matched_n,
+                      SUM(CASE WHEN their_pnl IS NOT NULL THEN cost_usd ELSE 0 END)
+                          AS matched_staked,
+                      SUM(CASE WHEN their_pnl IS NOT NULL
+                               THEN COALESCE(real_pnl, pnl) ELSE 0 END)
+                          AS matched_pnl,
                       SUM(cost_usd) AS staked, SUM(size) AS shares,
                       SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END) AS never_filled,
                       SUM(real_cost_usd) AS real_staked,
