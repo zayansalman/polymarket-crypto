@@ -87,8 +87,6 @@ try:
     from polymarket_bot.paper import load_paper_summary  # type: ignore[import-untyped]
     from polymarket_bot.backtest import format_report  # type: ignore[import-untyped]
     from polymarket_exec.execution.live import (  # type: ignore[import-untyped]
-        LiveBootRefused,
-        assert_live_boot_allowed,
         live_boot_problems,
     )
 
@@ -396,18 +394,16 @@ async def _paper_html() -> str:
     last_edge = "n/a" if paper.last_edge is None else f"{paper.last_edge:+.3f}"
     last_fair = "n/a" if paper.last_fair_up_prob is None else f"{paper.last_fair_up_prob:.1%}"
     last_up = "n/a" if paper.last_up_price is None else f"{paper.last_up_price:.3f}"
-    entry_edge_min = await _knobs.get("paper_entry_edge_min")
     min_trade = await _knobs.get("paper_min_trade_usd")
     max_trade = await _knobs.get("paper_max_trade_usd")
-    min_confidence = await _knobs.get("paper_min_confidence")
     return (
         "<div class='grid'>"
         f"{_kpi_card('Last tick', _fmt_relative(paper.last_tick_at), paper.last_feed_source or 'no feed yet')}"
         f"{_kpi_card('Spot', 'n/a' if paper.last_spot_price is None else f'${paper.last_spot_price:,.2f}', paper.last_window_slug or 'no window yet')}"
         f"{_kpi_card('Fair Up', last_fair, f'market up {last_up}')}"
-        f"{_kpi_card('Edge', last_edge, f'min edge {entry_edge_min:.3f}')}"
+        f"{_kpi_card('Edge', last_edge, 'no strategy loaded')}"
         f"{_kpi_card('Avg PnL', _money(paper.avg_pnl_usd, signed=True), f'avg hold {avg_hold}')}"
-        f"{_kpi_card('Sizing', f'${min_trade:.0f}-${max_trade:.0f}', f'min confidence {min_confidence:.0%}')}"
+        f"{_kpi_card('Sizing', f'${min_trade:.0f}-${max_trade:.0f}', 'paper clip range')}"
         "</div>"
         "<div class='panel'><h3>Recent Paper Positions</h3>"
         f"{_position_cards(paper.recent_positions)}"
@@ -504,10 +500,9 @@ def _settings_html() -> str:
         "current values.</p>\n"
         "<ul>\n"
         f"<li>Market scope: BTC Up/Down 5-minute windows only.</li>\n"
-        f"<li>Paper sizing: <strong>${_knobs.cached('paper_min_trade_usd'):.0f}-${_knobs.cached('paper_max_trade_usd'):.0f}</strong> by confidence.</li>\n"
+        "<li>Strategy: <strong>none loaded</strong> (v0 archived 2026-09-13).</li>\n"
+        f"<li>Paper sizing: <strong>${_knobs.cached('paper_min_trade_usd'):.0f}-${_knobs.cached('paper_max_trade_usd'):.0f}</strong>.</li>\n"
         f"<li>Tick cadence: <strong>{_knobs.cached('paper_tick_seconds'):.0f}s</strong>.</li>\n"
-        f"<li>Minimum confidence: <strong>{_knobs.cached('paper_min_confidence'):.0%}</strong>.</li>\n"
-        f"<li>Minimum edge: <strong>{_knobs.cached('paper_entry_edge_min'):.3f}</strong>.</li>\n"
         f"<li>Target / stop return: <strong>{_knobs.cached('paper_target_return'):.0%} / {_knobs.cached('paper_stop_return'):.0%}</strong>.</li>\n"
         f"<li>Time exit: <strong>{_knobs.cached('paper_time_exit_seconds')}s</strong>.</li>\n"
         f"<li>Settlement-aware reference target: {CHAINLINK_STREAM_URL}</li>\n"
@@ -852,41 +847,32 @@ async def api_loss_halt_bypass(request: Request) -> dict[str, Any]:
 
 @app.post("/api/loss_halt/reset")
 async def api_loss_halt_reset() -> dict[str, Any]:
-    """Operator "let me trade again": clear the adaptive auto-pause and (when
-    stopped) reset the loss-halt tally + peaks so entries resume (#76, #36).
+    """Operator "let me trade again": when stopped, reset the loss-halt tally +
+    peaks so entries resume (#76).
 
-    Two mechanisms with different ownership:
-      * The adaptive auto-pause is a config flag the running loop re-reads every
-        tick, so clearing it works in BOTH states and resumes entries live.
-      * The loss-halt daily counters are held in memory by the running loop and
-        re-persisted on every close, so they can only be reset when STOPPED — a
-        loss-halt breach auto-stops the bot, so the operator is already stopped
-        when one fires. Bankroll-cap notional is left untouched.
+    The loss-halt daily counters are held in memory by the running loop and
+    re-persisted on every close, so they can only be reset when STOPPED — a
+    loss-halt breach auto-stops the bot, so the operator is already stopped
+    when one fires. Bankroll-cap notional is left untouched.
     Audited to ``notification_feed``.
     """
     from db import get_config, notify  # type: ignore[import-untyped]
     from polymarket_exec.execution.gate import reset_daily_loss_halt
-    from polymarket_bot.adaptive import clear_auto_pause
     state = (await get_config("polymarket_bot.state", "stopped")) or "stopped"
-    await clear_auto_pause()
     halt_reset = state != "running"
     if halt_reset:
         await reset_daily_loss_halt()
     await notify(
         "loss_halt_reset",
-        "Operator cleared the auto-pause"
-        + (
-            "; reset the loss-halt tally + peaks to $0.00 (live + paper)"
-            if halt_reset
-            else " (bot running — loss-halt tally left to the loop)"
-        ),
+        "Operator reset the loss-halt tally + peaks to $0.00 (live + paper)"
+        if halt_reset
+        else "Operator pressed reset while running — loss-halt tally left to the loop",
     )
     log.info("btc.loss_halt_reset", halt_reset=halt_reset, state=state)
     return {
         "status": "ok",
         "reset": True,
         "halt_reset": halt_reset,
-        "auto_pause_cleared": True,
     }
 
 
@@ -960,22 +946,6 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
         )
         log.info("btc.runtime_config_set", key=key, value=value)
         return {"status": "ok", "key": key, "value": value}
-    if key == "active_model":
-        from db import set_config
-        from polymarket_bot.shadow import runner as _shadow_runner
-
-        model = str((body or {}).get("value", ""))
-        if model not in _shadow_runner.SELECTABLE_MODELS:
-            # Hidden controls / unknown ids are not operator-selectable.
-            return {"status": "error", "detail": f"unknown or non-selectable model {model!r}"}
-        await set_config(_shadow_runner.ACTIVE_MODEL_KEY, model)
-        await notify(
-            "runtime_config",
-            f"Operator set active model to {model} (paper+live, runtime — no restart)",
-            {"key": key, "value": model},
-        )
-        log.info("btc.runtime_config_set", key=key, value=model)
-        return {"status": "ok", "key": key, "value": model}
     if key == "market":
         from polymarket_bot import market_selection
 

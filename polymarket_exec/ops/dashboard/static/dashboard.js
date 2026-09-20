@@ -216,7 +216,7 @@ function resetLossHalt() {
     .then(function(data) {
       showToast(data.halt_reset
         ? 'Loss halt reset — today\'s tally and peaks zeroed'
-        : 'Auto-pause cleared — stop the bot to zero the loss-halt tally', 'success');
+        : 'Bot is running — stop it to zero the loss-halt tally', 'success');
       setTimeout(refreshAll, 300);
     })
     .catch(function(err) { showToast('Reset failed: ' + err.message, 'error'); });
@@ -245,27 +245,6 @@ function setTradeShares() {
       setTimeout(refreshAll, 300);
     })
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
-}
-
-function setActiveModel() {
-  var el = document.getElementById('ctl-model');
-  if (!el) return;
-  var v = el.value;
-  fetch('/api/runtime-config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: 'active_model', value: v })
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.status === 'ok') {
-        showToast('Active model → ' + data.value, 'success');
-      } else {
-        showToast('Switch failed: ' + (data.detail || 'unknown error'), 'error');
-      }
-      setTimeout(refreshAll, 300);
-    })
-    .catch(function(err) { showToast('Switch failed: ' + err.message, 'error'); });
 }
 
 function setKnob(name, kind) {

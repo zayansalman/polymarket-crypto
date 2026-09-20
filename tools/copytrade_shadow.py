@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from polymarket_bot.pairarb.mirror import MIN_ORDER_SHARES, CopyFill, price_the_copy
+from polymarket_bot.pairarb.mirror import MIN_ORDER_SHARES, price_the_copy
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
@@ -175,7 +175,6 @@ async def run(
     seen: set[str] = {
         r[0] for r in con.execute("SELECT tx_key FROM copy_fills")
     }
-    token_cache: dict[str, str] = {}
     print(f"copy shadow | target={target} scale={scale} "
           f"size={min_shares}-{max_shares}sh skip_small={skip_small} "
           f"max_their={max_their}")

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Archive the v0 strategy (2026-09-13)
+
+The operator shut down the v0 BTC 5-minute strategy to make room for new ones.
+The loop still runs and journals market data, but no strategy is loaded, so it
+takes no entries in paper or live (`skip: no strategy loaded`). Details and
+restore steps: `docs/archive/v0-strategy.md`; code preserved at tag
+`archive/v0-strategy`.
+
+- Removed from the loop: v0 entry gates, model picker, edge-decay auto-pause,
+  calibration, param tuner (`adaptive.py`, `calibration*.py`, `params*.py`,
+  `tools/clear_auto_pause.py`, `AUTO_PAUSE_*` knobs).
+- Removed from the dashboard: STRATEGY card, decision-engine GATES column,
+  model picker, auto-pause chip, and the SETTINGS card's entry-gate and
+  auto-pause knobs.
+- Kept: live-path safety gates (`RiskGate`), shared pricing math, shadow
+  forward-tester, daily altcoin scanner.
+
 ## v1.0.2 — Rename project to polymarket-crypto (#184) (2026-08-30)
 
 Following the branch close-out in #182 / commit 27f38fd: 5-minute-market work is closed

@@ -47,7 +47,7 @@ SHARES = shadow_runner.SHADOW_SHARES
 
 
 def _params() -> strategy.StrategyParams:
-    """The production strategy params — the same mapping the paper loop uses
+    """The shadow roster's params — the same mapping the paper loop uses
     (polymarket_bot/paper.py::_strategy_params, minus the runtime sizing override)."""
     from polymarket_bot import runtime_knobs as _knobs
 
@@ -55,11 +55,11 @@ def _params() -> strategy.StrategyParams:
         return strategy.StrategyParams(
             min_trade_usd=await _knobs.get("paper_min_trade_usd"),
             max_trade_usd=await _knobs.get("paper_max_trade_usd"),
-            entry_edge_min=await _knobs.get("paper_entry_edge_min"),
-            min_confidence=await _knobs.get("paper_min_confidence"),
-            entry_min_remaining_seconds=await _knobs.get("paper_entry_min_remaining_seconds"),
-            entry_edge_max=await _knobs.get("paper_entry_edge_max"),
-            min_entry_price=await _knobs.get("paper_min_entry_price"),
+            entry_edge_min=_config.PAPER_ENTRY_EDGE_MIN,
+            min_confidence=_config.PAPER_MIN_CONFIDENCE,
+            entry_min_remaining_seconds=_config.PAPER_ENTRY_MIN_REMAINING_SECONDS,
+            entry_edge_max=_config.PAPER_ENTRY_EDGE_MAX,
+            min_entry_price=_config.PAPER_MIN_ENTRY_PRICE,
         )
 
     return asyncio.run(_load())

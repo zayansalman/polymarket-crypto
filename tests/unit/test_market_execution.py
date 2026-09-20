@@ -25,7 +25,6 @@ import polymarket_bot.controller as controller
 import polymarket_bot.paper as paper
 from polymarket_bot import manual_entry
 from polymarket_bot import runtime_knobs as _knobs
-from polymarket_bot.adaptive import rolling_performance
 from polymarket_bot.manual_entry import EntryOutcome, ManualEntryIntent
 from polymarket_exec.execution.gate import EntryRequest, GateConfig, RiskGate
 from polymarket_exec.execution.live import LiveOrderResult
@@ -427,18 +426,6 @@ def test_slippage_message_is_neutral(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_pause_blocks_model_but_not_market(bot_db) -> None:
-    await _db.set_config("polymarket_bot.auto_paused", "1")
-
-    await paper._maybe_open_position(_snapshot("Up"))
-    assert await _rows(bot_db) == []
-
-    outcome = await _consume(_intent("Up"), _snapshot())
-    assert outcome.status == "filled"
-    assert len(await _rows(bot_db)) == 1
-
-
-@pytest.mark.asyncio
 async def test_settle_one_entry_per_window_does_not_block_market(bot_db) -> None:
     await _insert_row(bot_db, state="closed", entry_source="model")
 
@@ -679,23 +666,6 @@ async def test_close_due_positions_selects_entry_source(bot_db, monkeypatch) -> 
 
     rows = await _rows(bot_db)
     assert rows[0]["state"] == "open"  # BAND_REENTRY skipped for the market row
-
-
-# ---------------------------------------------------------------------------
-# Adaptive auto-pause only judges the model
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_rolling_performance_excludes_market_rows(bot_db) -> None:
-    await _insert_row(bot_db, state="closed", entry_source="market", realized_pnl_usd=-2.5)
-    await _insert_row(bot_db, state="closed", entry_source="model", realized_pnl_usd=1.0)
-    await _insert_row(bot_db, state="closed", entry_source=None, realized_pnl_usd=1.0)
-
-    perf = await rolling_performance(20, "settle")
-
-    assert perf["n"] == 2
-    assert perf["pnl"] == pytest.approx(2.0)
 
 
 # ---------------------------------------------------------------------------

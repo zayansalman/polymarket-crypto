@@ -65,30 +65,6 @@ KNOBS: dict[str, Knob] = {
         "runtime.paper.max_trade_usd", 5.0, "float", "Max trade size (paper)",
         0.0, 1000.0, unit="USD", group="Paper strategy",
     ),
-    "paper_entry_edge_min": Knob(
-        "runtime.paper.entry_edge_min", 0.045, "float", "Min entry edge",
-        0.0, 1.0, group="Paper strategy",
-    ),
-    "paper_entry_edge_max": Knob(
-        "runtime.paper.entry_edge_max", 0.07, "float",
-        "Max entry edge (stale-model guard)", 0.0, 1.0, group="Paper strategy",
-    ),
-    "paper_min_confidence": Knob(
-        "runtime.paper.min_confidence", 0.50, "float", "Min confidence",
-        0.0, 1.0, group="Paper strategy",
-    ),
-    "paper_min_entry_price": Knob(
-        "runtime.paper.min_entry_price", 0.50, "float", "Min entry price",
-        0.0, 1.0, group="Paper strategy",
-    ),
-    "paper_max_entry_price": Knob(
-        "runtime.paper.max_entry_price", 0.95, "float", "Max entry price",
-        0.0, 1.0, group="Paper strategy",
-    ),
-    "paper_entry_min_remaining_seconds": Knob(
-        "runtime.paper.entry_min_remaining_seconds", 60, "int",
-        "Min seconds remaining to enter", 0, 300, unit="s", group="Paper strategy",
-    ),
     "paper_target_return": Knob(
         "runtime.paper.target_return", 0.10, "float",
         "Target return (take-profit)", 0.0, 5.0, group="Paper strategy",
@@ -126,23 +102,6 @@ KNOBS: dict[str, Knob] = {
     "live_exit_fill_timeout_seconds": Knob(
         "runtime.live.exit_fill_timeout_seconds", 10.0, "float",
         "Exit fill timeout", 0.0, 300.0, unit="s", group="Live risk limits",
-    ),
-    # --- Auto-pause controller (polymarket_bot/adaptive.py) ----------------
-    "auto_pause_enabled": Knob(
-        "runtime.auto_pause.enabled", True, "bool", "Auto-pause enabled",
-        group="Auto-pause",
-    ),
-    "auto_pause_window": Knob(
-        "runtime.auto_pause.window", 20, "int",
-        "Lookback window (trades)", 1, 500, group="Auto-pause",
-    ),
-    "auto_pause_min_trades": Knob(
-        "runtime.auto_pause.min_trades", 10, "int",
-        "Min trades before evaluating", 1, 500, group="Auto-pause",
-    ),
-    "auto_pause_min_roi": Knob(
-        "runtime.auto_pause.min_roi", -0.15, "float", "Min ROI",
-        -1.0, 1.0, group="Auto-pause",
     ),
     # --- Daily altcoin scanner (polymarket_bot/daily/scanner.py) -----------
     "daily_trade_usd": Knob(

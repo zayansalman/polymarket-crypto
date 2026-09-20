@@ -11,8 +11,8 @@ _FUNDER = "0x" + "c1" * 20
 
 def _ribbon(wallet: dict | None) -> str:
     return ribbon.render(
-        mode="paper", state="stopped", session_start=None, paused=False,
-        pause_reason="", live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
+        mode="paper", state="stopped", session_start=None,
+        live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
         open_pos=[], closed_session=[], tick=None, last_live_at=None,
         wallet=wallet,
     )

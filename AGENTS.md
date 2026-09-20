@@ -29,7 +29,12 @@ paper-trading lab. Two strategies are wired and run simultaneously:
 1. **BTC 5-minute Up/Down** (`polymarket_bot/paper.py:run_paper_loop`) — the
    original line; its active *development* closed 2026-08-29 (#182), but the
    loop itself is still the default paper-trading path, started/stopped by
-   the dashboard's ▶ Start / Stop controls (see below).
+   the dashboard's ▶ Start / Stop controls (see below). **No strategy is
+   loaded:** the v0 strategy (entry gates, auto-pause, param tuner,
+   calibration, model picker) was archived 2026-09-13 —
+   [docs/archive/v0-strategy.md](docs/archive/v0-strategy.md). The loop runs
+   and journals market data but takes no entries until a new strategy is
+   plugged into `paper.py:_build_snapshot`.
 2. **Daily altcoin Up/Down scanner** (`polymarket_bot/daily/scanner.py`,
    issue #185) — scans Polymarket's daily (24h-window) Up/Down family across
    a tracked set of thinner altcoin markets (doge/sol/xrp/bnb/eth by
@@ -46,7 +51,8 @@ The primary active product behavior for the BTC loop specifically is:
 
 1. Operator opens the local dashboard.
 2. Operator presses **▶ Start**.
-3. The bot paper trades BTC 5-minute Up/Down markets (default mode).
+3. The loop runs on BTC 5-minute Up/Down markets (paper by default) and
+   enters only once a strategy is loaded (none is today).
 4. Operator presses **Stop** to halt new entries and close open simulated
    positions.
 
@@ -114,8 +120,9 @@ Out of scope:
 - Do not read, print, log, commit, echo, or expose private keys.
 - The dashboard must stay local by default at `127.0.0.1:7860`.
 - Start means trade (paper unless every live gate is armed); Stop means stop.
-- Current optimized paper profile keeps a 4.5 percentage-point edge floor,
-  uses a 60-second late-entry cutoff, and sizes $1-$5 by confidence.
+- No strategy is loaded in the trading loop (v0 archived 2026-09-13). Whatever
+  strategy is plugged in next, its entries still pass the live-path safety gates
+  (`RiskGate`: loss halt, caps, slippage, kill switch) — those stay hard.
 - No silent failures. Feed, market, state, or execution-loop errors must appear
   in structured logs or dashboard state.
 - Keep modules small and boundaries clear.
@@ -161,6 +168,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 977.
-- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_exec/backtest/conditional.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/ops/controller.py`.
+- **Tests:** 946.
+- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

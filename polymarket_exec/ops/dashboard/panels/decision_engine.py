@@ -1,9 +1,10 @@
-"""Decision engine panel: inputs → computation → gates → final banner + tail.
+"""Decision engine panel: inputs → computation → final banner + tail.
 
 A transparency view of what the bot digests on each tick and why it does
-(or doesn't) trade. Three columns — DIGESTING (inputs), COMPUTING (model
-output), GATES (pass/fail per filter) — plus a decision banner and the
-last N tick decisions so the operator can watch decisions evolve.
+(or doesn't) trade. Two columns — DIGESTING (inputs) and COMPUTING (fair
+value and executable edge, as market observations) — plus a decision banner
+and the last N tick decisions so the operator can watch decisions evolve.
+The v0 GATES column was archived with the v0 strategy (2026-09-13).
 """
 from __future__ import annotations
 
@@ -15,10 +16,7 @@ from . import _shared as s
 
 def render(
     tick: dict[str, Any] | None,
-    params: Any,
     recent: list[dict[str, Any]],
-    paused: bool,
-    pause_reason: str,
     execution_strategy: str = "model",
 ) -> str:
     """``execution_strategy`` "market" means the model never auto-enters: the
@@ -63,22 +61,6 @@ def render(
     fair_up = tick.get("fair_up_prob")
     edge_up = (fair_up - up_ask) if (fair_up is not None and up_ask is not None) else None
     edge_dn = ((1 - fair_up) - down_ask) if (fair_up is not None and down_ask is not None) else None
-    cands: list[tuple[str, float, float]] = []
-    if edge_up is not None and up_ask is not None:
-        cands.append(("Up", edge_up, up_ask))
-    if edge_dn is not None and down_ask is not None:
-        cands.append(("Down", edge_dn, down_ask))
-    cand_side: str | None = None
-    cand_edge: float | None = None
-    cand_price: float | None = None
-    if cands:
-        cand_side, cand_edge, cand_price = max(cands, key=lambda c: c[1])
-    cand_conf = (
-        min(0.99, max(0.0, 0.50 + max(cand_edge, 0.0) * 2.8))
-        if cand_edge is not None
-        else None
-    )
-
     def _edge_html(v: float | None) -> str:
         if v is None:
             return "<b class='mono dim'>—</b>"
@@ -86,80 +68,16 @@ def render(
 
     fair_up_s = f"{fair_up * 100:.1f}%" if fair_up is not None else "—"
     fair_dn_s = f"{(1 - fair_up) * 100:.1f}%" if fair_up is not None else "—"
-    cand_html = (
-        f"{escape(cand_side)} @ {cand_price:.3f}"
-        if cand_side is not None and cand_price is not None
-        else "—"
-    )
-    conf_html = f"{cand_conf * 100:.1f}%" if cand_conf is not None else "—"
 
     compute_html = (
         "<div class='de-col'>"
         "<div class='de-h'>COMPUTING</div>"
         "<div class='de-kv'>"
-        f"<div><span>fair Up (cal.)</span><b class='mono'>{fair_up_s}</b></div>"
+        f"<div><span>fair Up</span><b class='mono'>{fair_up_s}</b></div>"
         f"<div><span>fair Down</span><b class='mono'>{fair_dn_s}</b></div>"
         f"<div><span>edge Up = fair − ask</span>{_edge_html(edge_up)}</div>"
         f"<div><span>edge Down = (1−fair) − ask</span>{_edge_html(edge_dn)}</div>"
-        f"<div><span>Candidate side</span><b class='mono'>{cand_html}</b></div>"
-        f"<div><span>Candidate edge</span>{_edge_html(cand_edge)}</div>"
-        f"<div><span>Confidence (model)</span><b class='mono'>{conf_html}</b></div>"
         "</div></div>"
-    )
-
-    # ── gate checks (re-derived from inputs + active params) ───────────
-    def _gate(label: str, ok: bool | None, detail: str = "") -> str:
-        if ok is None:
-            mark, c = "·", "dim"
-        elif ok:
-            mark, c = "✓", "up"
-        else:
-            mark, c = "✗", "down"
-        d = f" <em class='dim'>{escape(detail)}</em>" if detail else ""
-        return f"<div class='de-gate {c}'><span>{mark}</span>{escape(label)}{d}</div>"
-
-    feed_ok = not bool(tick.get("reason", "").startswith("skip: settlement feed degraded"))
-    book_ok = (up_ask is not None) or (down_ask is not None)
-    time_ok = rem > params.entry_min_remaining_seconds
-    edge_ok = (cand_edge is not None) and (cand_edge >= params.entry_edge_min)
-    conf_ok = (cand_conf is not None) and (cand_conf >= params.min_confidence)
-    cap_ok = (cand_edge is None) or (cand_edge <= params.entry_edge_max)
-    price_ok = (
-        cand_price is None
-        or (params.min_entry_price <= cand_price <= params.max_entry_price)
-    )
-
-    gates_html = (
-        "<div class='de-col'>"
-        "<div class='de-h'>GATES</div>"
-        "<div class='de-gates'>"
-        + _gate("feed not degraded", feed_ok)
-        + _gate("book has executable ask", book_ok)
-        + _gate(
-            f"time remaining > {params.entry_min_remaining_seconds}s",
-            time_ok,
-            f"({rem}s)",
-        )
-        + _gate(
-            f"edge ≥ {params.entry_edge_min:.3f}",
-            edge_ok,
-            (f"({cand_edge:+.3f})" if cand_edge is not None else ""),
-        )
-        + _gate(
-            f"confidence ≥ {params.min_confidence:.2f}",
-            conf_ok,
-            (f"({cand_conf:.2f})" if cand_conf is not None else ""),
-        )
-        + _gate(
-            f"edge ≤ {params.entry_edge_max:.2f} (stale-model)",
-            cap_ok,
-        )
-        + _gate(
-            f"price in [{params.min_entry_price:.2f}, {params.max_entry_price:.2f}]",
-            price_ok,
-            (f"@{cand_price:.3f}" if cand_price is not None else ""),
-        )
-        + "</div></div>"
     )
 
     # ── final decision banner ──────────────────────────────────────────
@@ -172,12 +90,6 @@ def render(
         d_cls, d_lbl = "dim", "MARKET — auto entries off"
         signal = f"model: {side} · {reason}" if side in ("Up", "Down") else reason
         d_body = f"model signal shown for reference · {signal}"
-    elif paused:
-        d_cls, d_lbl, d_body = (
-            "down",
-            "AUTO-PAUSED",
-            pause_reason or "edge-decay guard tripped",
-        )
     elif side in ("Up", "Down"):
         d_cls, d_lbl = "up", f"ENTER {side.upper()}"
         d_body = f"size ${notional:.0f} · {reason}"
@@ -233,12 +145,11 @@ def render(
 
     return (
         "<section class='card wide'><div class='card-h'>DECISION ENGINE"
-        f"<span class='win'>active params · edge≥{params.entry_edge_min:.3f} · conf≥{params.min_confidence:.2f} · rem≥{params.entry_min_remaining_seconds}s</span>"
+        "<span class='win'>no strategy loaded</span>"
         "</div>"
         "<div class='de-grid'>"
         + inputs_html
         + compute_html
-        + gates_html
         + "</div>"
         + decision_banner
         + tail_html

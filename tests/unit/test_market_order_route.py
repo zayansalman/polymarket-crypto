@@ -387,10 +387,10 @@ def _banner(html: str) -> str:
 
 def test_decision_banner_in_market_mode_never_says_enter() -> None:
     tick = {**TICK, "signal_side": "Up", "reason": "enter: edge 0.05", "fair_up_prob": 0.6}
-    model = _banner(decision_engine.render(tick, _Params(), [], False, ""))
+    model = _banner(decision_engine.render(tick, []))
     assert "ENTER UP" in model
     market = _banner(
-        decision_engine.render(tick, _Params(), [], False, "", execution_strategy="market")
+        decision_engine.render(tick, [], execution_strategy="market")
     )
     assert "MARKET — auto entries off" in market
     assert "model signal shown for reference" in market

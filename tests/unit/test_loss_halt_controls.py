@@ -173,26 +173,16 @@ class TestLossHaltEndpoints:
         assert r.json()["bypass_loss_halt"] is False
         assert asyncio.run(get_loss_halt_bypass()) is False
 
-    def test_reset_running_clears_pause_keeps_tally(self, client: TestClient) -> None:
-        # While running, Reset clears the adaptive auto-pause (a live config the
-        # loop honours) but leaves the loss-halt tally to the loop (it owns it
-        # in memory). The operator's one-click "let me trade again".
+    def test_reset_running_keeps_tally(self, client: TestClient) -> None:
+        # While running, Reset leaves the loss-halt tally to the loop (it owns
+        # it in memory).
         asyncio.run(_db.set_config("polymarket_bot.state", "running"))
         asyncio.run(_db.set_config("risk.live_realized_pnl", "-8.0"))
-        asyncio.run(_db.set_config("polymarket_bot.auto_paused", "1"))
         r = client.post("/api/loss_halt/reset")
         body = r.json()
         assert body["status"] == "ok"
         assert body["halt_reset"] is False
         assert asyncio.run(_db.get_config("risk.live_realized_pnl")) == "-8.0"
-        assert asyncio.run(_db.get_config("polymarket_bot.auto_paused")) == "0"
-
-    def test_reset_clears_auto_pause_when_stopped(self, client: TestClient) -> None:
-        asyncio.run(_db.set_config("polymarket_bot.state", "stopped"))
-        asyncio.run(_db.set_config("polymarket_bot.auto_paused", "1"))
-        r = client.post("/api/loss_halt/reset")
-        assert r.json()["status"] == "ok"
-        assert asyncio.run(_db.get_config("polymarket_bot.auto_paused")) == "0"
 
     def test_reset_zeroes_when_stopped(self, client: TestClient) -> None:
         asyncio.run(_db.set_config("polymarket_bot.state", "stopped"))
@@ -269,8 +259,6 @@ def _render(**over) -> str:
         mode="paper",
         state="stopped",
         session_start=None,
-        paused=False,
-        pause_reason="",
         live_pnl=0.0,
         paper_pnl=0.0,
         day_pnl=0.0,

@@ -26,7 +26,6 @@ from polymarket_exec.ops.dashboard.panels import (
     performance,
     ribbon,
     settings as settings_panel,
-    strategy,
     tca,
 )
 
@@ -56,8 +55,6 @@ async def execution_view_html() -> str:
     mode = await get_config("polymarket_bot.requested_mode", _config.BOT_MODE) or "paper"
     state = await get_config("polymarket_bot.state", "stopped") or "stopped"
     session_start = await get_config("polymarket_bot.session_start", None)
-    paused = (await get_config("polymarket_bot.auto_paused", "0")) == "1"
-    pause_reason = await get_config("polymarket_bot.auto_pause_reason", "") or ""
 
     # Split counters (issue #67): show LIVE vs PAPER P&L distinctly so the
     # ribbon and LOSS HALT panel never blend real-money and study results.
@@ -99,7 +96,6 @@ async def execution_view_html() -> str:
     perf_live = data.performance(closed_live)
     perf_paper = data.performance(closed_paper)
     recon = await data.reconciliation()
-    is_live = mode == "live"
 
     daily_open = await data.daily_positions(state="open")
     daily_closed = await data.daily_positions(state="settled")
@@ -108,20 +104,9 @@ async def execution_view_html() -> str:
     # ---- panels ----
     from polymarket_exec.execution.gate import (
         get_loss_halt_bypass,
-        get_runtime_max_trade_usd,
         get_runtime_trade_shares,
     )
     bypass_loss_halt = await get_loss_halt_bypass()
-    # Operator runtime per-trade cap (#50): None when unset → bot uses the env
-    # default. Used by the CONTROLS card and the STRATEGY sizing line so the UI
-    # reflects the value the loop is actually enforcing this tick.
-    max_trade_current = await get_runtime_max_trade_usd()
-    max_trade_env = (
-        _config.TRADE_MAX_USD if is_live else await _knobs.get("paper_max_trade_usd")
-    )
-    max_trade_effective = (
-        max_trade_current if max_trade_current is not None else max_trade_env
-    )
     # Share-denominated trade size (#89) — the operator-facing knob. None → the
     # CONTROLS input defaults to the venue minimum. ``current_price`` is the
     # favoured side's live ask (the side ≥ 0.50) for the $-value estimate.
@@ -133,30 +118,11 @@ async def execution_view_html() -> str:
     ]
     current_price = max(_px) if _px else None
 
-    # Active knobs shape the decision-engine gate eval — same thresholds the
-    # live loop uses (#206), so the gate column never lies.
-    _entry_edge_min = await _knobs.get("paper_entry_edge_min")
-    _entry_edge_max = await _knobs.get("paper_entry_edge_max")
-    _min_confidence = await _knobs.get("paper_min_confidence")
-    _entry_min_remaining_seconds = await _knobs.get("paper_entry_min_remaining_seconds")
-    _min_entry_price = await _knobs.get("paper_min_entry_price")
-    _max_entry_price = await _knobs.get("paper_max_entry_price")
-
-    class _GateParams:
-        entry_edge_min = _entry_edge_min
-        entry_edge_max = _entry_edge_max
-        min_confidence = _min_confidence
-        entry_min_remaining_seconds = _entry_min_remaining_seconds
-        min_entry_price = _min_entry_price
-        max_entry_price = _max_entry_price
-
     loss_halt_current = await _knobs.get("live_daily_loss_halt_usd")
     ribbon_html = ribbon.render(
         mode=mode,
         state=state,
         session_start=session_start,
-        paused=paused,
-        pause_reason=pause_reason,
         live_pnl=live_pnl,
         paper_pnl=paper_pnl,
         day_pnl=day_pnl,
@@ -170,39 +136,9 @@ async def execution_view_html() -> str:
         paper_peak=paper_peak,
         bypass_loss_halt=bypass_loss_halt,
     )
-    from polymarket_bot.shadow import runner as _shadow_runner
-
-    active_model = (
-        await get_config(_shadow_runner.ACTIVE_MODEL_KEY, _shadow_runner.DEFAULT_MODEL)
-        or _shadow_runner.DEFAULT_MODEL
-    )
     controls_html = controls.render(
         trade_shares_current=trade_shares_current,
         current_price=current_price,
-        active_model=active_model,
-    )
-    _paper_knob_names = (
-        "paper_entry_edge_min", "paper_entry_edge_max", "paper_min_confidence",
-        "paper_min_entry_price", "paper_entry_min_remaining_seconds",
-    )
-    is_operator_set = any(
-        [(await _knobs.get_override(n)) is not None for n in _paper_knob_names]
-    )
-    strategy_html = strategy.render(
-        style=style,
-        is_live=is_live,
-        paused=paused,
-        pause_reason=pause_reason,
-        entry_edge_min=_entry_edge_min,
-        entry_edge_max=_entry_edge_max,
-        min_confidence=_min_confidence,
-        min_entry_price=_min_entry_price,
-        entry_min_remaining_seconds=_entry_min_remaining_seconds,
-        is_operator_set=is_operator_set,
-        max_trade=max_trade_effective,
-        trade_shares=trade_shares_current,
-        current_price=current_price,
-        active_model=active_model,
     )
     # Execution strategy (Model | Market Buy Up/Down). Anything but "market"
     # reads as Model, same as the loop. Running comes from the runner thread,
@@ -228,8 +164,7 @@ async def execution_view_html() -> str:
     )
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(
-        tick, _GateParams(), recent_ticks, paused, pause_reason,
-        execution_strategy=execution_strategy,
+        tick, recent_ticks, execution_strategy=execution_strategy
     )
     performance_html = performance.render(
         style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
@@ -251,7 +186,6 @@ async def execution_view_html() -> str:
         + "<div class='execution-grid'>"
         + execution_html
         + controls_html
-        + strategy_html
         + market_html
         + decision_html
         + performance_html

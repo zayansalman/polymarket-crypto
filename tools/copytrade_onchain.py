@@ -35,9 +35,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from polymarket_bot.pairarb.onchain import (
-    EXCHANGES,
-    ORDER_FILLED_TOPIC,
-    address_topic,
     decode_order_filled,
     subscription_params,
 )

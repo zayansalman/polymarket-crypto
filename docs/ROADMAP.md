@@ -44,9 +44,9 @@ systems.
 
    Separate signal research from execution state. A new signal should be
    testable in replay before it is allowed in the live paper loop. The
-   human-gated params propose/apply flow (`polymarket_bot/params_propose.py`,
-   `polymarket_bot/params_apply.py`) is a first step; wiring the full-market harness
-   into that loop is the remaining work.
+   human-gated params propose/apply flow was a first step (archived with the v0
+   strategy on 2026-09-13, `docs/archive/v0-strategy.md`); a new strategy needs
+   its own replay-before-loop path.
 
 ## Later, Explicitly Reviewed
 

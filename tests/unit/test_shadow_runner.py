@@ -179,7 +179,6 @@ def test_model_registry_constants() -> None:
         "cushion_fresh_v7_f45",
     ]
     assert list(runner.MODEL_IDS) == expected
-    assert runner.SELECTABLE_MODELS == expected
     assert set(runner.CANDIDATE_SIGNALS) == {
         "cushion_favorite_v2",
         "cushion_fresh_v7",
