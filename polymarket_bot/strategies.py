@@ -26,12 +26,23 @@ from dataclasses import dataclass
 from db import get_config, set_config  # type: ignore[import-untyped]
 
 
+MINE = "mine"
+"""Strategies this repo runs on its own signals."""
+
+COPY = "copy"
+"""Switches over a followed wallet — rendered on the COPY TRADE WALLETS card."""
+
+
 @dataclass(frozen=True)
 class Strategy:
     name: str
     label: str
     description: str
     default: bool = True
+    group: str = MINE
+    """Which card owns the switch. ``MINE`` is a strategy this repo decides
+    for itself; ``COPY`` is a switch over somebody else's wallet, and those
+    belong next to the wallet rather than in a list they say nothing about."""
 
     @property
     def key(self) -> str:
@@ -43,30 +54,69 @@ STRATEGIES: dict[str, Strategy] = {
         name="btc_updown",
         label="BTC Up/Down loop",
         description=(
-            "Prices the selected Up/Down window against the Chainlink feed and "
-            "takes one confidence-sized entry per window. Start/Stop runs the "
-            "loop; this switch decides whether it may enter."
+            "Would price the selected Up/Down window against the Chainlink "
+            "feed and take one confidence-sized entry per window. NOTHING IS "
+            "WIRED TO IT: market_selection.LOOP_SUPPORTED is empty since the "
+            "5m family was retired, so every selection is unwired and this "
+            "switch gates a loop that cannot enter. Leave it off until a "
+            "market is pointed at the loop."
         ),
-    ),
-    "copy_macro_daily": Strategy(
-        name="copy_macro_daily",
-        label="Copy trade — macro daily",
-        description=(
-            "Mirrors a wallet with a measured edge on the daily gold/silver/oil/"
-            "SPY Up/Down markets. Observation only for now: it shows every fill "
-            "the target makes and what copying it would cost, and places nothing."
-        ),
+        group=MINE,
     ),
     "daily_altcoin": Strategy(
         name="daily_altcoin",
         label="Daily altcoin scanner",
         description=(
             "Scores the 24h Up/Down market for each tracked altcoin every scan "
-            "and opens one flat-size paper position on the strongest signal. "
-            "Paper only — it has no live path."
+            "and opens one flat-size paper position on the strongest signal "
+            "versus a realized-volatility model. Paper only — it has no live "
+            "path."
         ),
+        group=MINE,
+    ),
+    "maker": Strategy(
+        name="maker",
+        label="Maker — rest on the favourite",
+        description=(
+            "Rests ONE passive bid per crypto Up/Down market when the "
+            "favourite sits inside the 0.55-0.92 band, never crosses the "
+            "spread, and holds to resolution. One fixed clip per market, "
+            "never a second bite. Paper only."
+        ),
+        group=MINE,
+    ),
+    "copy_macro_daily": Strategy(
+        name="copy_macro_daily",
+        label="Watch target wallets",
+        description=(
+            "Polls each followed wallet's public activity feed and shows every "
+            "fill it makes. Off means the feed is not polled at all, so "
+            "nothing can be copied either — manually or automatically."
+        ),
+        group=COPY,
+    ),
+    "copy_autocopy": Strategy(
+        name="copy_autocopy",
+        label="Autocopy every new fill",
+        description=(
+            "On: every fresh fill on a followed market is priced against the "
+            "live ask ladder and booked as a paper copy the moment it is seen. "
+            "Off: fills are still shown, and the Copy button on each one books "
+            "it by hand. Paper either way — no real order is ever sent."
+        ),
+        group=COPY,
     ),
 }
+
+"""Registry order is render order. Keys are permanent: the switch is stored at
+``runtime.strategy.<name>.enabled``, so renaming a ``name`` silently resets an
+operator's choice. ``copy_macro_daily`` keeps its historic name for exactly
+that reason, despite no longer being about macro or daily markets."""
+
+
+def in_group(group: str) -> dict[str, Strategy]:
+    """The strategies one card owns, in registry order."""
+    return {n: s for n, s in STRATEGIES.items() if s.group == group}
 
 
 def _strategy(name: str) -> Strategy:

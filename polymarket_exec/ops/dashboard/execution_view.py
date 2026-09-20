@@ -23,6 +23,7 @@ from polymarket_exec.ops.dashboard.panels import _wallet
 from polymarket_exec.ops.dashboard.panels import (
     blotter,
     controls,
+    copy_wallets as copy_wallets_panel,
     copytrade as copytrade_panel,
     daily_altcoin,
     decision_engine,
@@ -157,23 +158,6 @@ async def execution_view_html() -> str:
         macro.snapshot() if macro is not None else None,
         market_data.snapshot() if market_data is not None else None,
     )
-    # Sits directly under FEEDS: what data arrives, then what is done with it.
-    from polymarket_bot import strategies as _strategies
-
-    strategies_html = strategies_panel.render(enabled=await _strategies.enabled_map())
-    market_html = market.render(tick, open_pos)
-    decision_html = decision_engine.render(tick, recent_ticks)
-    performance_html = performance.render(
-        style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
-    )
-    tca_html = tca.render(perf=perf, spread=spread)
-    blotter_html = blotter.render(closed=closed, open_pos=open_pos, tick=tick)
-    daily_altcoin_html = daily_altcoin.render(
-        open_positions=daily_open,
-        perf=daily_perf,
-        scan_interval_seconds=await _knobs.get("daily_scan_interval_seconds"),
-        trade_usd=await _knobs.get("daily_trade_usd"),
-    )
     # Copy trade: the watcher keeps its snapshot in memory, so this is a read
     # of live state rather than a DB load.
     from polymarket_bot.copytrade import targets as _copy_targets
@@ -211,6 +195,7 @@ async def execution_view_html() -> str:
         audit=_caudit,
         trades=_ctrades,
     )
+
     # Maker: read straight from its ledger. A passive strategy's result is its
     # fill rate as much as its P&L, so the unfilled and expired quotes come back
     # with the filled ones rather than being filtered out here.
@@ -224,6 +209,61 @@ async def execution_view_html() -> str:
         _mdecisions = await _maker_ledger.decision_counts(int(_time.time()) - 86400)
     except Exception:  # noqa: BLE001 — a missing table must not blank the page
         _msummary, _mquotes, _mbands, _mqueue, _mdecisions = {}, [], [], {}, []
+
+    # Sits directly under FEEDS: what data arrives, then what is done with it.
+    # The copy switches are loaded here too, but rendered on the wallets card
+    # next to the wallet they act on rather than in this list.
+    from polymarket_bot import strategies as _strategies
+
+    _enabled = await _strategies.enabled_map()
+    # Live records for the families that actually trade. Everything else falls
+    # back to the static number the inventory carries.
+    _mset = int((_msummary or {}).get("settled_n") or 0)
+    _mwins = int((_msummary or {}).get("wins") or 0)
+    strategies_html = strategies_panel.render(
+        enabled=_enabled,
+        records={
+            "daily_altcoin": {
+                "n": daily_perf.get("n"), "pnl": daily_perf.get("pnl"),
+                "win_rate": daily_perf.get("win_rate"),
+            },
+            "maker": {
+                "n": _mset,
+                "pnl": (_msummary or {}).get("pnl"),
+                "win_rate": (_mwins / _mset) if _mset else None,
+            },
+        },
+    )
+    # One row per followed wallet: what it trades, what it did in the last
+    # hour, and a Copy button on each of its most recent fills.
+    _copies_by_tx = {
+        str(r.get("tx")): r for r in (_ctrades or []) if r.get("tx")
+    }
+    _open_by_target: dict[str, int] = {}
+    for r in _ctrades or []:
+        if r.get("state") == "open":
+            addr = str(r.get("target") or "").lower()
+            _open_by_target[addr] = _open_by_target.get(addr, 0) + 1
+    copy_wallets_html = copy_wallets_panel.render(
+        targets=_copy_targets.TARGETS,
+        state=_cstate,
+        enabled=_enabled,
+        copies_by_tx=_copies_by_tx,
+        open_by_target=_open_by_target,
+    )
+    market_html = market.render(tick, open_pos)
+    decision_html = decision_engine.render(tick, recent_ticks)
+    performance_html = performance.render(
+        style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
+    )
+    tca_html = tca.render(perf=perf, spread=spread)
+    blotter_html = blotter.render(closed=closed, open_pos=open_pos, tick=tick)
+    daily_altcoin_html = daily_altcoin.render(
+        open_positions=daily_open,
+        perf=daily_perf,
+        scan_interval_seconds=await _knobs.get("daily_scan_interval_seconds"),
+        trade_usd=await _knobs.get("daily_trade_usd"),
+    )
     maker_html = maker_panel.render(
         summary=_msummary, quotes=_mquotes, bands=_mbands,
         queue=_mqueue, decisions=_mdecisions,
@@ -239,6 +279,7 @@ async def execution_view_html() -> str:
         + feeds_html
         + controls_html
         + strategies_html
+        + copy_wallets_html
         + market_html
         + decision_html
         + performance_html
