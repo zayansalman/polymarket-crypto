@@ -342,8 +342,18 @@ async def settle_due(client: httpx.AsyncClient) -> int:
                 got = r.get("real_size")
                 got = r["size"] if got is None else got
                 real_pnl = (got if won else 0.0) - (r["real_cost_usd"] or 0.0)
+            # Their own result on the same fill, gross of their fee — we
+            # cannot tell per-fill whether they rested or crossed, so this is
+            # their best case. Comparing it to ours separates "we executed
+            # worse" from "they were wrong", which the copy P&L alone cannot.
+            ts_size = r.get("their_size")
+            if ts_size:
+                their_pnl = ((ts_size if won else 0.0)
+                             - ts_size * (r["their_price"] or 0.0))
+            else:
+                their_pnl = None
             await _ledger.settle(r["id"], won=won, pnl=pnl,
-                                 real_pnl=real_pnl, now=now)
+                                 real_pnl=real_pnl, their_pnl=their_pnl, now=now)
             settled += 1
             log.info(
                 "copytrade.settled", target=r["target_label"],

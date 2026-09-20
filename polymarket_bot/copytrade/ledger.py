@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS copy_trades (
   real_size     REAL,
   real_slippage REAL,
   real_pnl      REAL,
+  -- The target's own result on the same fill, GROSS of their fee. We cannot
+  -- know per-fill whether they rested or crossed, so this is their best case.
+  -- It isolates how much of a difference is execution rather than being wrong.
+  their_pnl     REAL,
   requoted_at   INTEGER,
   -- Set when the target exited a market we still hold. From that point our
   -- copy is no longer tracking them, and the result is ours, not theirs.
@@ -95,7 +99,7 @@ async def init() -> None:
         # Columns added after the table first shipped.
         for col, decl in (
             ("their_size", "REAL"), ("real_pnl", "REAL"),
-            ("real_size", "REAL"),
+            ("real_size", "REAL"), ("their_pnl", "REAL"),
             ("target_exited", "INTEGER"),
             ("real_price", "REAL"), ("real_fee", "REAL"),
             ("real_cost_usd", "REAL"), ("real_slippage", "REAL"),
@@ -276,7 +280,7 @@ async def settled_rows(limit: int = 200) -> list[dict]:
 
 
 async def settle(row_id: int, *, won: bool, pnl: float, real_pnl: float | None,
-                 now: int) -> None:
+                 their_pnl: float | None = None, now: int) -> None:
     """Close a copy with BOTH results.
 
     ``pnl`` is the optimistic paper fill. ``real_pnl`` is the same position at
@@ -287,8 +291,8 @@ async def settle(row_id: int, *, won: bool, pnl: float, real_pnl: float | None,
     async with _db.connect() as conn:
         await conn.execute(
             "UPDATE copy_trades SET state='settled', won=?, pnl=?, real_pnl=?, "
-            "settled_at=? WHERE id=? AND state='open'",
-            (1 if won else 0, pnl, real_pnl, now, row_id),
+            "their_pnl=?, settled_at=? WHERE id=? AND state='open'",
+            (1 if won else 0, pnl, real_pnl, their_pnl, now, row_id),
         )
         await conn.commit()
 
@@ -317,6 +321,9 @@ async def summary() -> dict:
             """SELECT COUNT(*) AS n,
                       SUM(CASE WHEN won=1 THEN 1 ELSE 0 END) AS wins,
                       SUM(pnl) AS pnl, SUM(real_pnl) AS real_pnl,
+                      SUM(their_pnl) AS their_pnl,
+                      SUM(CASE WHEN their_pnl IS NOT NULL THEN their_size*their_price
+                               ELSE 0 END) AS their_staked,
                       SUM(cost_usd) AS staked, SUM(size) AS shares,
                       SUM(CASE WHEN real_price IS NULL THEN 1 ELSE 0 END) AS never_filled,
                       SUM(real_cost_usd) AS real_staked,

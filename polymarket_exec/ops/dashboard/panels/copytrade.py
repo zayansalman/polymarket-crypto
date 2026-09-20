@@ -313,6 +313,23 @@ def _results_html(summary: dict) -> str:
     # single biggest way a paper ledger flatters itself.
     rp = total.get("real_pnl")
     nf = total.get("never_filled") or 0
+    # Their own return per dollar vs ours. The copy P&L alone cannot tell a
+    # bad fill from a bad call; this can.
+    their = total.get("their_pnl")
+    their_staked = total.get("their_staked") or 0.0
+    fidelity = ""
+    if their is not None and their_staked > 0 and (total.get("staked") or 0) > 0:
+        theirs_pct = 100 * their / their_staked
+        ours_pct = 100 * (rp if rp is not None else tp) / (total.get("staked") or 1)
+        gap = ours_pct - theirs_pct
+        gcls = "copy-good" if gap >= 0 else "copy-bad"
+        fidelity = (
+            "<div class='copy-result'>"
+            "<span>their return on the same fills (gross of their fee)</span>"
+            f"<span>{theirs_pct:+.1f}%</span>"
+            f"<span>ours {ours_pct:+.1f}%</span>"
+            f"<span class='{gcls}'>gap {gap:+.1f}pp</span></div>"
+        )
     real_row = ""
     if rp is not None:
         rcls = "copy-good" if rp > 0 else "copy-bad"
@@ -334,7 +351,7 @@ def _results_html(summary: dict) -> str:
         f"<span>{openp.get('n') or 0} open</span>"
         f"<span class='{cls}'><b>${tp:+,.2f}</b></span>"
         "</div>"
-        f"{real_row}</div>"
+        f"{real_row}{fidelity}</div>"
     )
 
 

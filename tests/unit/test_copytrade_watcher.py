@@ -416,3 +416,17 @@ def test_partial_fills_are_reported() -> None:
                "total": {}, "per_target": [], "open": {"n": 0, "staked": 0}}
     html = panel.render(state=state, target=None, summary=summary)
     assert "partial fills" in html and "4 of 9" in html
+
+
+def test_our_return_is_shown_against_the_targets_own() -> None:
+    """The copy P&L alone cannot separate a bad fill from a bad call."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    summary = {"total": {"n": 6, "wins": 3, "pnl": 5.0, "real_pnl": 2.0,
+                         "staked": 100.0, "never_filled": 0,
+                         "their_pnl": 8.0, "their_staked": 100.0},
+               "per_target": [], "open": {"n": 0, "staked": 0}, "execution": {}}
+    html = panel.render(state=state, target=None, summary=summary)
+    assert "their return on the same fills" in html
+    assert "+8.0%" in html      # theirs
+    assert "ours +2.0%" in html # ours, on realistic fills
+    assert "gap -6.0pp" in html
