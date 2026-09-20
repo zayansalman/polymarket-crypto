@@ -329,6 +329,61 @@ body {
 .tag.up { background: rgba(43,212,125,.14); color: var(--pos); }
 .tag.down { background: rgba(255,84,112,.14); color: var(--neg); }
 
+/* ── order-size ticket ── */
+/* A few controls, so it hugs its content instead of stretching to the height of
+   whatever tall card shares its grid row. */
+.execution-grid .ticket { align-self: start; margin-bottom: 0; }
+.ticket .tk-status { display: inline-flex; align-items: center; gap: 5px; }
+.ticket .tk-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: currentColor;
+  display: inline-block; font-style: normal;
+}
+.tk-status.live { color: var(--pos); }
+.tk-status.warn { color: var(--warn); }
+.tk-status.dim { color: var(--label); }
+
+.tk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tk-qty { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); height: 24px; }
+.tk-step {
+  width: 22px; height: 100%; border: 0; background: var(--bg-alt);
+  color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 0;
+}
+.tk-step:hover { color: var(--text); background: var(--border); }
+.tk-input {
+  width: 52px; height: 100%; text-align: center; padding: 0 2px; font-size: 12.5px;
+  border: 0; border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+  background: var(--bg); color: var(--text); -moz-appearance: textfield;
+}
+.tk-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--text); }
+.tk-input::-webkit-outer-spin-button, .tk-input::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
+.tk-unit { font-family: var(--font-mono); font-size: 10px; color: var(--label); padding: 0 6px; }
+.tk-lots { display: inline-flex; gap: 3px; }
+.tk-lot {
+  font-family: var(--font-mono); font-size: 10.5px; padding: 0 7px; height: 24px; min-width: 30px;
+  background: var(--bg); border: 1px solid var(--border-strong); color: var(--muted); cursor: pointer;
+}
+.tk-lot:hover { color: var(--text); border-color: var(--text); }
+.tk-apply { margin-left: auto; height: 24px; padding: 0 10px; }
+
+/* Cells wrap as whole cells when the card is narrow, rather than breaking a
+   price across two lines. */
+.tk-cost { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.tk-side {
+  display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 150px;
+  border: 1px solid var(--border); padding: 4px 8px; white-space: nowrap;
+}
+.tk-max { flex: 0 1 auto; }
+.tk-side .tag { flex: none; }
+.tk-side b { margin-left: auto; font-size: 12.5px; }
+.tk-max .tk-l { font-size: 9.5px; letter-spacing: 1px; color: var(--label); }
+.tk-foot { margin-top: 7px; font-family: var(--font-mono); font-size: 9.5px; color: var(--label); }
+
+@media (max-width: 560px) {
+  .tk-apply { margin-left: 0; }
+}
+
 /* ── secondary panels ── */
 .secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .feed-wrap, .backtest-report { font-size: 11.5px; max-height: 320px; overflow: auto; }

@@ -76,11 +76,15 @@ def render(
         for m in _LOT_MULTIPLES
     )
     saved = "saved" if trade_shares_current is not None else "default"
+    # A <details> fold, like the ACTIVITY LOG: the ticket is a few controls, not
+    # a panel worth a screenful. Rendered open; ``rememberFold`` re-applies the
+    # operator's choice after every refresh swaps this HTML out.
     return (
-        "<section class='card ticket'>"
-        "<div class='card-h'>ORDER SIZE"
+        "<details class='card ticket fold' data-fold='ticket' "
+        "ontoggle='rememberFold(this)' open>"
+        "<summary class='card-h'><span class='fold-title'>ORDER SIZE</span>"
         f"<span class='win tk-status {status_cls}' title='{escape(status_tip, quote=True)}'>"
-        f"{escape(market_lbl)} · <i class='tk-dot'></i>{escape(status_txt)}</span></div>"
+        f"{escape(market_lbl)} · <i class='tk-dot'></i>{escape(status_txt)}</span></summary>"
         "<div class='tk-row'>"
         "<div class='tk-qty'>"
         "<button type='button' class='tk-step' onclick='stepShares(-1)' "
@@ -109,5 +113,5 @@ def render(
         "<div class='tk-foot'>"
         f"<span id='ctl-saved'>{saved} {shares:g} sh</span> · min {minsh:g} sh"
         "</div>"
-        "</section>"
+        "</details>"
     )
