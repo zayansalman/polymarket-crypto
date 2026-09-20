@@ -211,14 +211,33 @@ function swapKeepingInputs(container, html) {
       kept.push({ id: el.id, value: el.value, focus: el === active, dirty: el.dataset.dirty });
     }
   });
+  // Panels that scroll internally (e.g. the copy-trade fill list) lose their
+  // position when innerHTML is replaced, which reads as the page jumping.
+  var scrolls = [];
+  container.querySelectorAll('[data-keep-scroll]').forEach(function(el) {
+    if (el.scrollTop > 0) scrolls.push({ key: el.dataset.keepScroll, top: el.scrollTop });
+  });
   container.innerHTML = html;
+
   kept.forEach(function(k) {
     var el = document.getElementById(k.id);
     if (!el) return;
     el.value = k.value;
     if (k.dirty) el.dataset.dirty = k.dirty;
-    if (k.focus) el.focus();
+    // preventScroll matters: a bare focus() scrolls the input into view, so a
+    // refresh every few seconds drags the page back to whatever was focused
+    // however far the operator had scrolled away.
+    if (k.focus) el.focus({ preventScroll: true });
   });
+  scrolls.forEach(function(s) {
+    var el = container.querySelector('[data-keep-scroll="' + s.key + '"]');
+    if (el) el.scrollTop = s.top;
+  });
+  // No window-level scroll restore here. Panels change height between
+  // refreshes, so forcing the old pixel offset back lands the reader somewhere
+  // different each time — which reads as the page jumping at random. The
+  // browser keeps the scroll position by itself; preventScroll above is what
+  // actually stops the jumping.
   updateTicket();  // a kept share count must be re-priced at the fresh quote
 }
 

@@ -417,3 +417,110 @@ body {
 .halt-row .gr-btn { padding: 3px 8px; }
 .halt-status { font-family: var(--font-mono); font-weight: 700; }
 .halt-status.warn { color: var(--warn, #c98a3a); }
+
+/* COPY TRADE card ------------------------------------------------------- */
+.copy-evidence {
+  font-size: 11px; color: var(--muted); line-height: 1.5;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.copy-evidence b { color: var(--fg); }
+.copy-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  font-size: 11px; color: var(--muted); padding: 8px 0;
+}
+.copy-stats b { color: var(--fg); }
+.copy-error { font-size: 11px; color: var(--bad); padding: 4px 0; }
+.copy-fills { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
+/* Two rows per fill: the card sits in a half-width column, so a single-row
+   grid truncates the market title to "Silve..." — and which market a fill is
+   on is the whole point of watching a target that might drift. */
+.copy-fill {
+  display: grid; align-items: baseline; gap: 2px 10px; padding: 6px 0;
+  grid-template-columns: 62px 78px 1fr auto auto;
+  font-size: 11px; border-top: 1px solid var(--border);
+}
+.copy-fill .copy-title { grid-column: 1 / -1; white-space: normal; }
+.copy-fill .copy-other-tag { grid-column: 1 / -1; justify-self: start; }
+/* A fill on a market the target was never measured on still shows, dimmed:
+   a target drifting elsewhere is the failure we most need to see. */
+.copy-fill-other { opacity: 0.55; }
+.copy-when, .copy-lag { color: var(--muted); }
+.copy-buy { color: var(--good); }
+.copy-sell { color: var(--bad); }
+.copy-size, .copy-notional { font-variant-numeric: tabular-nums; }
+.copy-notional { text-align: right; }
+.copy-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-backfill { font-style: italic; opacity: 0.7; }
+.copy-other-tag {
+  font-size: 10px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 0; padding: 0 4px; white-space: nowrap;
+}
+.copy-bad { color: var(--bad); }
+@media (max-width: 900px) {
+  .copy-fill { grid-template-columns: 58px 74px 1fr auto; }
+  .copy-lag { grid-column: 1 / -1; }
+}
+.copy-link { color: inherit; text-decoration: underline dotted; }
+.copy-link:hover { color: var(--fg); text-decoration: underline; }
+.copy-results { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+.copy-results-h { font-size: 10px; letter-spacing: .08em; color: var(--muted); padding-bottom: 4px; }
+.copy-result {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.copy-result > span:last-child { margin-left: auto; }
+.copy-result-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
+.copy-good { color: var(--good); }
+.copy-warn { color: var(--warn, #b8860b); }
+.copy-muted { color: var(--muted); }
+
+/* --- MAKER card ---------------------------------------------------------
+   Unfilled and expired quotes are shown, not filtered: for a passive strategy
+   the fill rate is the result, so a card listing only fills would be a
+   highlight reel. Expired rows are dimmed but legible for the same reason. */
+.mk-summary, .mk-queue {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 0;
+  font-size: 11px; color: var(--muted); border-top: 1px solid var(--border);
+}
+.mk-summary b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.mk-rows { display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; }
+.mk-row {
+  display: grid; align-items: baseline; gap: 2px 10px; padding: 5px 0;
+  grid-template-columns: 1fr 44px 40px 40px 42px;
+  font-size: 11px; border-top: 1px solid var(--border);
+}
+.mk-row .mk-res { grid-column: 1 / -1; justify-self: start; }
+.mk-expired { opacity: 0.6; }
+.mk-px, .mk-q, .mk-age { font-variant-numeric: tabular-nums; color: var(--muted); }
+.mk-mkt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-link { color: inherit; text-decoration: underline dotted; }
+.mk-link:hover { color: var(--fg); text-decoration: underline; }
+.mk-pending, .mk-resting-tag, .mk-expired-tag { color: var(--muted); font-style: italic; }
+.mk-bands, .mk-skips { padding: 4px 0; border-top: 1px solid var(--border); }
+.mk-band-h { font-size: 10px; color: var(--muted); text-transform: uppercase; padding: 4px 0; }
+.mk-band-row, .mk-skip {
+  display: grid; gap: 10px; padding: 3px 0; font-size: 11px;
+  grid-template-columns: 80px 62px 70px 56px 1fr;
+  font-variant-numeric: tabular-nums;
+}
+.mk-skip { grid-template-columns: 38px 62px 1fr; color: var(--muted); }
+@media (max-width: 900px) {
+  .mk-row { grid-template-columns: 1fr 40px 38px 38px; }
+  .mk-band-row { grid-template-columns: 74px 58px 1fr 52px; }
+}
+
+/* Per-copy blotter: one row per trade, because an aggregate can hide a run of
+   identical losers behind a flat total. */
+.copy-trades { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
+.copy-t-h { font-size: 10px; color: var(--muted); text-transform: uppercase; padding: 6px 0 2px; }
+.copy-trade {
+  display: grid; align-items: baseline; gap: 2px 8px; padding: 4px 0;
+  grid-template-columns: 1fr 42px 38px 42px 44px 38px;
+  font-size: 11px; border-top: 1px solid var(--border);
+}
+.copy-trade .copy-t-res { grid-column: 1 / -1; justify-self: start; }
+.copy-t-mkt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-t-px, .copy-t-sz, .copy-t-slip, .copy-t-age {
+  font-variant-numeric: tabular-nums; color: var(--muted);
+}
+.copy-t-slip { cursor: help; }

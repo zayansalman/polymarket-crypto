@@ -63,10 +63,13 @@ async def test_an_unknown_strategy_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_enabled_map_reports_one_entry_per_strategy() -> None:
     await _strategies.set_enabled("daily_altcoin", False)
-    assert await _strategies.enabled_map() == {
-        "btc_updown": True,
-        "daily_altcoin": False,
+    # Built from the registry rather than a fixed dict, so registering a new
+    # strategy does not fail a test that is not about it.
+    expected = {
+        name: (False if name == "daily_altcoin" else strategy.default)
+        for name, strategy in _strategies.STRATEGIES.items()
     }
+    assert await _strategies.enabled_map() == expected
 
 
 def test_the_shadow_forward_tester_is_gone() -> None:

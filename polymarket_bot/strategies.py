@@ -48,6 +48,15 @@ STRATEGIES: dict[str, Strategy] = {
             "loop; this switch decides whether it may enter."
         ),
     ),
+    "copy_macro_daily": Strategy(
+        name="copy_macro_daily",
+        label="Copy trade — macro daily",
+        description=(
+            "Mirrors a wallet with a measured edge on the daily gold/silver/oil/"
+            "SPY Up/Down markets. Observation only for now: it shows every fill "
+            "the target makes and what copying it would cost, and places nothing."
+        ),
+    ),
     "daily_altcoin": Strategy(
         name="daily_altcoin",
         label="Daily altcoin scanner",
