@@ -74,6 +74,10 @@ def window_stats(con, lo: int, hi: int, family: str | None):
     return per
 
 
+def fmt(t: int) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(t))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/wallet_research/wallets.db")
@@ -93,7 +97,6 @@ def main():
     test_lo = test_hi - a.test_days * 86400
     train_hi = test_lo - a.gap_days * 86400
     train_lo = train_hi - a.train_days * 86400
-    fmt = lambda t: time.strftime("%Y-%m-%d", time.gmtime(t))
     print(f"train {fmt(train_lo)} -> {fmt(train_hi)}   "
           f"test {fmt(test_lo)} -> {fmt(test_hi)}   family={a.family}")
 
