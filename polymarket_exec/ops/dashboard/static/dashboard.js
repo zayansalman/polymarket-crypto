@@ -48,6 +48,25 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
+// Panel folds inside the refreshed views (e.g. ORDER SIZE). Their HTML is
+// replaced every few seconds, so open/closed is stored per fold and re-applied
+// after each swap — an inline ontoggle survives innerHTML, a listener does not.
+function rememberFold(el) {
+  if (!el || !el.dataset.fold) return;
+  try { localStorage.setItem('fold:' + el.dataset.fold, el.open ? '1' : '0'); } catch (e) {}
+}
+
+function restoreFolds(root) {
+  (root || document).querySelectorAll('details[data-fold]').forEach(function(el) {
+    try {
+      var v = localStorage.getItem('fold:' + el.dataset.fold);
+      if (v !== null) el.open = v === '1';
+    } catch (e) {}
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function() { restoreFolds(document); });
+
 // ---------------------------------------------------------------------------
 // Toast Notifications
 // ---------------------------------------------------------------------------
@@ -218,6 +237,7 @@ function swapKeepingInputs(container, html) {
     if (el.scrollTop > 0) scrolls.push({ key: el.dataset.keepScroll, top: el.scrollTop });
   });
   container.innerHTML = html;
+  restoreFolds(container);  // a collapsed panel must stay collapsed across refreshes
 
   kept.forEach(function(k) {
     var el = document.getElementById(k.id);
@@ -337,6 +357,34 @@ function setKnob(name, kind) {
       setTimeout(refreshAll, 300);
     })
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
+}
+
+// Copy one observed fill by hand, from the COPY TRADE WALLETS card. Same path
+// autocopy takes — prices against the live ask ladder, charges the taker fee,
+// sends no real order. The click is the intent: no confirm dialog.
+function copyFill(tx) {
+  var btn = document.getElementById('cw-copy-' + tx);
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  fetch('/api/copy-fill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tx: tx })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'ok') {
+        showToast('copied', 'success');
+      } else {
+        // The row re-renders in at most 5s; until then say why it did not book.
+        if (btn) { btn.disabled = false; btn.textContent = 'copy'; }
+        showToast('Not copied: ' + (data.detail || 'unknown error'), 'error');
+      }
+      setTimeout(refreshAll, 300);
+    })
+    .catch(function(err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'copy'; }
+      showToast('Not copied: ' + err.message, 'error');
+    });
 }
 
 function setStrategy(name) {

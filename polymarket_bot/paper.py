@@ -47,6 +47,7 @@ from config import (
     PRINT_GRANULARITY_USD,
 )
 import config as _config
+from polymarket_bot import market_selection
 from polymarket_bot import runtime_knobs as _knobs
 from polymarket_bot import strategies as _strategies
 from db import connect, get_config, journal_live_order, notify, set_config
@@ -419,10 +420,11 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
         await notify("paper_started", "BTC paper bot started")
     log.info("paper_loop.started", mode=mode)
 
-    # Stream this market's books while the loop runs, so _fetch_clob_book reads
-    # them instead of polling the venue. hot=True also races a REST read against
-    # the sockets on this window. No-op without a dashboard hub.
-    _marketdata_hub.want("btc", "5m", "bot loop", hot=True)
+    # Stream the SELECTED market's books while the loop runs, so _fetch_clob_book
+    # reads them instead of polling the venue. hot=True also races a REST read
+    # against the sockets on this window. No-op without a dashboard hub.
+    _selection = await market_selection.get_selection()
+    _marketdata_hub.want(_selection.asset, _selection.timeframe, "bot loop", hot=True)
 
     # Set when the daily loss halt trips (#76): the loop stops the bot and the
     # finally surfaces this as LAST DETAIL instead of the generic stop line.

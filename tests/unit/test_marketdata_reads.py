@@ -322,6 +322,9 @@ async def test_the_loop_wants_its_market_while_it_runs(
 
     monkeypatch.setattr(_db, "DB_PATH", tmp_path / "loop.db")
     await _db.init_db()
+    # The loop streams whatever market the operator selected, not a hardcoded one.
+    from polymarket_bot import market_selection
+    await market_selection.set_selection("eth", "1h")
     paper.set_shared_chainlink_feed(object())  # no WS feed of its own for this run
     demand: list[tuple] = []
     monkeypatch.setattr(hub_mod, "want",
@@ -333,7 +336,7 @@ async def test_the_loop_wants_its_market_while_it_runs(
         await paper.run_paper_loop(stop, mode="paper")
     finally:
         paper.set_shared_chainlink_feed(None)
-    assert demand == [("want", "btc", "5m", "bot loop", True),
+    assert demand == [("want", "eth", "1h", "bot loop", True),
                       ("release", "bot loop")]
 
 
