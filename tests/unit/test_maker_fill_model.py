@@ -170,3 +170,35 @@ class TestLedgerPopulations:
         assert rows == []
         s = await _ledger.summary()
         assert s["expired"] == 1 and s["filled"] == 0
+
+
+@pytest.mark.asyncio
+class TestOneClipPerMarket:
+    """A fixed clip per market is the finding, not a detail.
+
+    The same price band measured at a fixed clip earns +3.8c/share and measured
+    volume-weighted LOSES 0.6c. Quoting a market again because it is busy is how
+    the first quietly becomes the second.
+    """
+
+    async def test_a_market_is_only_ever_quoted_once(self):
+        await _ledger.init()
+        row = dict(quoted_ts=1, condition_id="0xa", token_id="t1",
+                   window_slug="w", title="t", outcome="Up", quote_price=0.60,
+                   quote_size=25.0, best_bid=0.59, best_ask=0.61, mid=0.60,
+                   spread=0.02, depth_ahead=0.0, resolves_at=99)
+        first = await _ledger.place(**row)
+        await _ledger.fill(first, ts=2, size=25.0, crossed=90.0)
+        await _ledger.settle(first, won=True, pnl=10.0, ts=3)
+        # Settled, expired or resting — all of them block a second quote.
+        assert await _ledger.quoted_markets() == {"0xa"}
+
+    async def test_expired_quote_still_blocks_the_market(self):
+        await _ledger.init()
+        row = dict(quoted_ts=1, condition_id="0xb", token_id="t9",
+                   window_slug="w", title="t", outcome="Up", quote_price=0.60,
+                   quote_size=25.0, best_bid=0.59, best_ask=0.61, mid=0.60,
+                   spread=0.02, depth_ahead=900.0, resolves_at=2)
+        q = await _ledger.place(**row)
+        await _ledger.expire(q, ts=5, crossed=100.0)
+        assert "0xb" in await _ledger.quoted_markets()

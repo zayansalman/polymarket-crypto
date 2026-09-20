@@ -279,3 +279,16 @@ async def queue_report() -> dict:
         "filled_avg_crossed": fl.get("crossed") or 0.0,
         "filled_avg_queue": fl.get("queue") or 0.0,
     }
+
+
+async def quoted_markets() -> set[str]:
+    """Every condition_id we have ever quoted, in any state.
+
+    One fixed clip per market, and no second bite after the first fills. The
+    edge measured at a fixed clip per market is +3.8c/share; the same band
+    weighted by how much volume each market drew is NEGATIVE. Re-quoting a busy
+    market is how a fixed clip quietly turns into a volume-weighted one.
+    """
+    async with _db.connect() as conn:
+        cur = await conn.execute("SELECT DISTINCT condition_id FROM maker_quotes")
+        return {r[0] for r in await cur.fetchall()}

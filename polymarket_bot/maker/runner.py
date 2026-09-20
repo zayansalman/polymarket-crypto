@@ -61,8 +61,11 @@ async def pass_once(client: httpx.AsyncClient, cfg: dict | None = None) -> dict:
     settled = await _filler.settle_due(client)
     filled = await _filler.check_fills(client, token_index)
 
-    resting = await _ledger.resting()
-    already = {(r["condition_id"], r["token_id"]) for r in resting}
+    # Any market we have already quoted is done, filled or not: one fixed clip
+    # each. See the ledger note — repeat quotes in the markets that draw the
+    # most flow are a volume-weighted book wearing a fixed-clip costume, and the
+    # same band measured that way loses money.
+    already = await _ledger.quoted_markets()
     placed = skipped = 0
 
     for m in markets:
@@ -74,7 +77,7 @@ async def pass_once(client: httpx.AsyncClient, cfg: dict | None = None) -> dict:
                 reason=f"only {left}s left, under the {c['min_seconds_left']}s floor")
             skipped += 1
             continue
-        if any((m.condition_id, t) in already for t in m.tokens):
+        if m.condition_id in already:
             continue
 
         books = {}
