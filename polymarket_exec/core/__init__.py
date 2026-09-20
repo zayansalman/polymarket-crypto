@@ -1,54 +1,15 @@
-"""Core domain types, interfaces, and exceptions."""
+"""Core domain exceptions.
 
-from .types import (
-    BacktestMetrics,
-    BacktestParams,
-    BtcBotStatus,
-    BtcHistoryStats,
-    BuyOpportunity,
-    ExitReason,
-    MarketWindow,
-    OrderState,
-    PaperOrder,
-    PaperPosition,
-    PaperSnapshot,
-    PaperSummary,
-    Side,
-    Signal,
-    SignalAction,
-    StrategyParams,
-    Tick,
-)
+The typed domain model this package used to re-export (Side, Signal, Tick,
+PaperOrder, PaperPosition, PaperSnapshot, ...) was never used by any live code
+path — it was a parallel, unused vocabulary next to the real one in
+`polymarket_bot`. Removed 2026-09-21; see the cleanup plan for the rebuild
+that replaces it with one domain model the live path actually uses.
+"""
 
-from .exceptions import (
-    BtcBotError,
-    ConfigurationError,
-    FeedError,
-    MarketDiscoveryError,
-    RiskBreach,
-)
+from .exceptions import BtcBotError, FeedError
 
 __all__ = [
-    "BacktestMetrics",
-    "BacktestParams",
-    "BtcBotStatus",
-    "BtcHistoryStats",
-    "BuyOpportunity",
     "BtcBotError",
-    "ConfigurationError",
-    "ExitReason",
     "FeedError",
-    "MarketDiscoveryError",
-    "MarketWindow",
-    "OrderState",
-    "PaperOrder",
-    "PaperPosition",
-    "PaperSnapshot",
-    "PaperSummary",
-    "RiskBreach",
-    "Side",
-    "Signal",
-    "SignalAction",
-    "StrategyParams",
-    "Tick",
 ]

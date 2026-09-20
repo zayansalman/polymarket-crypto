@@ -26,13 +26,14 @@ dependencies = [
 
 [project.optional-dependencies]
 # `polars` + `huggingface-hub` back the offline replay/lead-lag tools and their
-# tests (tests/unit/test_offline_replay.py, test_chainlink_lead_lag.py). `numpy`
-# backs tools/regime_attribution.py + test_regime_attribution.py (#128). They
+# tests (tests/unit/test_offline_replay.py, test_chainlink_lead_lag.py). They
 # live in requirements.txt but were missing here, so CI's `pip install -e .[test]`
 # never installed them and those modules broke pytest COLLECTION — failing the
-# test job AND docs-drift (gen_docs can't import the tool) (#79, #128). Pinned to
+# test job AND docs-drift (gen_docs can't import the tool) (#79). Pinned to
 # match requirements.txt.
-test = ["pytest>=8.0", "pytest-asyncio>=0.24", "polars>=1.17", "huggingface-hub>=0.26", "numpy>=1.26"]
+# (numpy dropped 2026-09-21: it backed tools/regime_attribution.py, #128, which
+# no longer exists in the tree — only stale .pyc files remained.)
+test = ["pytest>=8.0", "pytest-asyncio>=0.24", "polars>=1.17", "huggingface-hub>=0.26"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
 # One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
 # Day-to-day trading uses py-clob-client-v2, a core dependency.
@@ -40,7 +41,9 @@ setup = ["polymarket-client"]
 
 [tool.setuptools]
 packages = ["polymarket_exec", "polymarket_bot"]
-py-modules = ["db", "config", "logging_setup", "main", "dashboard"]
+# "dashboard" dropped 2026-09-21: the top-level Gradio dashboard.py was a dead
+# fallback branch (HAS_NEW_DASHBOARD was always true) and has been removed.
+py-modules = ["db", "config", "logging_setup", "main"]
 
 [tool.ruff]
 line-length = 100
