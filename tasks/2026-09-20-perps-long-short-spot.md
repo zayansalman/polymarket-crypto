@@ -1,6 +1,6 @@
 # Polymarket perps + binary + Kraken spot — venue capture, parked before any strategy work (2026-09-20)
 
-Backlog issue: TBD
+Backlog issue: #263
 
 **Status: parked on purpose.** The account became perp-enabled on 2026-09-20 and the venue was
 checked for API access. Nothing about a strategy has been tested. Everything below is either a
