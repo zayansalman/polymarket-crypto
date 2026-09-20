@@ -39,18 +39,45 @@ equal-weighted across markets:
 
 | maker fill price | c/share | t |
 |---|---|---|
-| 0.25–0.35 | −7.2 | −11.3 |
-| 0.35–0.45 | −6.4 | −10.4 |
-| 0.45–0.55 | −0.8 | −1.6 |
-| 0.55–0.65 | +6.6 | +9.6 |
-| 0.65–0.75 | +6.6 | +9.6 |
-| 0.75–0.85 | +4.4 | +6.9 |
-| 0.85–0.92 | +2.0 | +3.5 |
+| 0.25–0.35 | −7.6 | −20.1 |
+| 0.35–0.45 | −6.9 | −18.5 |
+| 0.45–0.55 | −1.1 | −3.8 |
+| 0.55–0.65 | +6.1 | +14.5 |
+| 0.65–0.75 | +6.3 | +14.8 |
+| 0.75–0.85 | +4.7 | +12.2 |
+| 0.85–0.92 | +2.4 | +7.0 |
+| 0.92–0.97 | +0.9 | +3.2 |
 
 The sign flips at the midpoint. Passive buyers of favourites win; passive
 buyers of underdogs lose. This is the favourite-longshot bias, and
 `maker_band.py` shows it as a calibration curve: realised win rates sit above
 what the fill price implies across the whole favourite range.
+
+## The sizing rule, which is not optional
+
+Volume weighted, the 0.55–0.92 band **loses** 0.61c/share. Equal weighted across
+markets it makes **+3.80c/share** (t=+13.1, 68% of markets positive, median
+market +12.6c). The gap is entirely position size: the worst 1% of markets cost
+$1.27M, a handful of enormous positions on favourites that lost.
+
+| month | volume weighted | fixed clip | t | % markets positive |
+|---|---|---|---|---|
+| 2026-06 | −7.30 | **+1.95** | +2.1 | 65% |
+| 2026-07 | +0.57 | **+4.09** | +8.6 | 68% |
+| 2026-08 | −0.01 | **+3.87** | +7.8 | 67% |
+| 2026-09 | +1.19 | **+4.18** | +6.3 | 70% |
+
+June looked like a regime break and was a sizing artifact. **Quote a fixed clip
+in every market; never scale with market volume or depth** — that is exactly the
+sizing that turns +3.8c into −0.6c.
+
+## What is still unproven
+
+All of the above measures what filled orders earned. It does not measure whether
+*our* order fills. Queue position is the whole unknown, and it cannot be
+recovered from the trade tape. That is what `polymarket_bot/maker/` is for: it
+records the depth resting ahead of each quote and refuses to fill until volume
+has traded through it.
 
 ## Checks these tools apply, and why
 
