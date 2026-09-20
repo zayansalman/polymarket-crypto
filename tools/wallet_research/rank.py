@@ -14,7 +14,12 @@ What changed from analyze.py, and why:
   * Robustness: the edge must survive deleting the wallet's 3 best markets.
 """
 from __future__ import annotations
-import argparse, csv, math, sqlite3, statistics, time
+import argparse
+import csv
+import math
+import sqlite3
+import statistics
+import time
 from pathlib import Path
 
 DB = Path(__file__).resolve().parents[2] / "data" / "wallet_research" / "wallets.db"
@@ -51,8 +56,11 @@ def wallet_stream(con, mk, family):
         d = per.setdefault(cid, {"b": [0.0, 0.0], "s": [0.0, 0.0], "cost": 0.0,
                                  "proc": 0.0, "tfee": 0.0, "last": 0, "fb": None})
         i = 1 if oidx else 0
-        d["b"][i] += b; d["s"][i] += s
-        d["cost"] += cost; d["proc"] += proc; d["tfee"] += tfee
+        d["b"][i] += b
+        d["s"][i] += s
+        d["cost"] += cost
+        d["proc"] += proc
+        d["tfee"] += tfee
         d["last"] = max(d["last"], last_ts)
         if first_buy is not None:
             d["fb"] = first_buy if d["fb"] is None else min(d["fb"], first_buy)
@@ -192,7 +200,9 @@ def main():
     hdr = (f"{'wallet':44}{'name':16}{'edge¢':>7}{'t':>6}{'p':>9}{'exTop3¢':>9}"
            f"{'exT3_t':>7}{'net$':>9}{'mkts':>6}{'fam':>5}{'stake$':>8}"
            f"{'2side%':>7}{'lead10':>7}{'30d$':>8}{'60d$':>8}{'90d$':>8}")
-    print(); print(hdr); print("-" * len(hdr))
+    print()
+    print(hdr)
+    print("-" * len(hdr))
     for r in survivors[:a.top]:
         fam = "24h" if r["f24h"] > r["f1h"] else "1h"
         print(f"{r['wallet']:44}{(r['name'] or '-')[:15]:16}{r['edge_c']:7.2f}{r['t']:6.2f}"
@@ -203,7 +213,8 @@ def main():
         out = DB.parent / a.csv
         with open(out, "w", newline="") as fh:
             wtr = csv.DictWriter(fh, fieldnames=list(survivors[0].keys()))
-            wtr.writeheader(); wtr.writerows(survivors)
+            wtr.writeheader()
+            wtr.writerows(survivors)
         print("\nwrote", out)
 
 main()

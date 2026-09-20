@@ -80,7 +80,6 @@ def main() -> None:
         month = time.strftime("%Y-%m", time.gmtime(ets))
         keys = Counter((t, w, s, p) for t, w, s, p in lab.execute(
             "SELECT txh,wallet,size_r,price_r FROM tk WHERE cid=?", (cid,)))
-        n_taker_records = sum(keys.values())
         m_sh = m_gr = t_sh = t_gr = t_fe = 0.0
 
         for txh, wallet, side, oidx, size, price in src.execute(
@@ -114,8 +113,11 @@ def main() -> None:
                 mm[1] += size * ps
 
         orphan_taker += sum(keys.values())
-        mk_shares += m_sh; mk_gross += m_gr
-        tk_shares += t_sh; tk_gross += t_gr; tk_fees += t_fe
+        mk_shares += m_sh
+        mk_gross += m_gr
+        tk_shares += t_sh
+        tk_gross += t_gr
+        tk_fees += t_fe
         if m_sh > 0:
             per_market_mk.append(m_gr / m_sh)
         if t_sh > 0:
@@ -132,7 +134,7 @@ def main() -> None:
 
     mm, mt = tstat(per_market_mk)
     tm, tt = tstat(per_market_tk)
-    print(f"\nheld to resolution, per share of that side's own volume:")
+    print("\nheld to resolution, per share of that side's own volume:")
     print(f"  MAKER, no fee            {100*mk_gross/mk_shares:+7.3f}c/share"
           f"   per-market mean {100*mm:+7.3f}c  t={mt:+5.2f}  "
           f"({len(per_market_mk)} markets)")
