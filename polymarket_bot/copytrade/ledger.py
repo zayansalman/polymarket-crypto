@@ -191,6 +191,44 @@ async def settle_skip(row_id: int, *, won: bool, pnl: float, now: int) -> None:
         await conn.commit()
 
 
+async def audit(since: int) -> dict:
+    """Is the record actually complete, or only apparently so?
+
+    Three ways the log can lie without looking wrong: a decision with no
+    reason, a copy that was logged but never booked, and a booked position
+    that traces back to nothing. All three are silent, so they are checked
+    rather than assumed.
+    """
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            """SELECT COUNT(*) AS n,
+                      SUM(CASE WHEN reason IS NULL OR reason='' THEN 1 ELSE 0 END)
+                          AS no_reason,
+                      SUM(CASE WHEN decision='copied' THEN 1 ELSE 0 END) AS copied,
+                      SUM(CASE WHEN decision='skipped' THEN 1 ELSE 0 END) AS skipped,
+                      SUM(CASE WHEN decision='skipped' AND settled_at IS NOT NULL
+                               THEN 1 ELSE 0 END) AS skips_scored
+               FROM copy_decisions WHERE ts >= ?""", (since,))
+        row = dict(await cur.fetchone() or {})
+        cur = await conn.execute(
+            """SELECT COUNT(*) FROM copy_decisions d
+               WHERE d.decision='copied' AND d.ts >= ?
+                 AND NOT EXISTS (SELECT 1 FROM copy_trades t
+                                 WHERE t.tx=d.tx AND t.outcome=d.outcome)""",
+            (since,))
+        row["copied_unbooked"] = (await cur.fetchone())[0]
+        cur = await conn.execute(
+            """SELECT COUNT(*) FROM copy_trades t
+               WHERE t.our_ts >= ?
+                 AND NOT EXISTS (SELECT 1 FROM copy_decisions d
+                                 WHERE d.tx=t.tx AND d.outcome=t.outcome)""",
+            (since,))
+        row["untraced_positions"] = (await cur.fetchone())[0]
+        row["clean"] = not (row.get("no_reason") or row["copied_unbooked"]
+                            or row["untraced_positions"])
+        return row
+
+
 async def target_verdict(since: int) -> list[dict]:
     """Per target, over EVERY fill we saw — copied or declined.
 

@@ -449,3 +449,18 @@ def test_the_verdict_separates_the_wallet_from_our_filters() -> None:
     assert "TARGET VERDICT" in html
     assert "2 taken $+4.50" in html
     assert "all fills $-36.10" in html
+
+
+def test_the_card_states_whether_the_record_is_complete() -> None:
+    """A log can be wrong in ways that look right; say which, don't imply."""
+    state = _watcher.WatcherState(target=_targets.DEFAULT_TARGET, label="t")
+    ok = {"n": 138, "no_reason": 0, "copied": 70, "skipped": 68,
+          "skips_scored": 31, "copied_unbooked": 0, "untraced_positions": 0,
+          "clean": True}
+    html = panel.render(state=state, target=None, audit=ok)
+    assert "record complete" in html and "31 refusals scored" in html
+
+    bad = {**ok, "copied_unbooked": 28, "clean": False}
+    html = panel.render(state=state, target=None, audit=bad)
+    assert "RECORD INCOMPLETE" in html
+    assert "28 copies logged but never booked" in html

@@ -57,6 +57,31 @@ def _fill_row(f, now: float) -> str:
     )
 
 
+def _audit_html(a: dict) -> str:
+    """Says whether the record is complete, instead of implying it.
+
+    A log can be wrong in ways that look right: a decision with no reason, a
+    copy logged but never booked, a position tracing back to nothing.
+    """
+    if not a or not a.get("n"):
+        return ""
+    if a.get("clean"):
+        return (
+            "<div class='gr-toggle-hint' style='margin-top:8px'>"
+            f"record complete &middot; {a['n']} decisions in 24h, all with a "
+            f"reason &middot; {a.get('skips_scored') or 0} refusals scored "
+            "&middot; every copy booked and traceable</div>"
+        )
+    bad = []
+    if a.get("no_reason"):
+        bad.append(f"{a['no_reason']} decisions with no reason")
+    if a.get("copied_unbooked"):
+        bad.append(f"{a['copied_unbooked']} copies logged but never booked")
+    if a.get("untraced_positions"):
+        bad.append(f"{a['untraced_positions']} positions tracing to nothing")
+    return f"<div class='copy-error'>RECORD INCOMPLETE — {'; '.join(bad)}</div>"
+
+
 def _decisions_html(counts: list) -> str:
     """Every fill examined in the last day, and what happened to it.
 
@@ -407,6 +432,7 @@ def render(
     *, state, target: Target | None, summary: dict | None = None,
     decisions: list | None = None, reach: list | None = None,
     skips: list | None = None, verdict: list | None = None,
+    audit: dict | None = None,
     now: float | None = None,
 ) -> str:
     now = time.time() if now is None else now
@@ -475,6 +501,7 @@ def render(
         f"{_skips_html(skips or [])}"
         f"{_reach_html(reach or [])}"
         f"{_decisions_html(decisions or [])}"
+        f"{_audit_html(audit or {})}"
         "<div class='gr-toggle-hint' style='margin:8px 0'>"
         "PAPER — copies are priced against the live ask ladder and charged the taker fee, but no real order is ever sent."
         "</div>"
