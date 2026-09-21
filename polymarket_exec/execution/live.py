@@ -61,6 +61,7 @@ from db import (  # type: ignore[import-untyped]
 from logging_setup import get_logger  # type: ignore[import-untyped]
 from polymarket_bot.fees import taker_fee_per_share  # canonical venue fee math
 from polymarket_exec.execution.gate import EntryRequest, GateConfig, RiskGate
+from polymarket_exec.storage.repositories import positions as _positions_repo
 
 log = get_logger("live")
 
@@ -469,28 +470,25 @@ class LiveExecutor:
         )
 
         # 2) Re-adopt any open ledger position so it keeps being managed.
-        async with connect() as db:
-            async with db.execute(
-                "SELECT * FROM paper_positions WHERE state = 'open' ORDER BY opened_at"
-            ) as cur:
-                open_rows = [dict(r) for r in await cur.fetchall()]
-        if not open_rows:
+        open_positions = await _positions_repo.list_open()
+        if not open_positions:
             return
-        if len(open_rows) > 1:
+        if len(open_positions) > 1:
             raise LiveBootRefused(
-                f"Boot reconciliation failed: {len(open_rows)} open ledger positions "
-                "found (max 1 by design). Resolve them manually (flatten on Polymarket, "
-                "then UPDATE paper_positions SET state='closed', exit_reason='MANUAL' "
-                "for each row) before restarting live mode."
+                f"Boot reconciliation failed: {len(open_positions)} open ledger "
+                "positions found (max 1 by design). Resolve them manually (flatten "
+                "on Polymarket, then UPDATE paper_positions SET state='closed', "
+                "exit_reason='MANUAL' for each row) before restarting live mode."
             )
-        row = open_rows[0]
+        row = open_positions[0]
+        assert row.id is not None  # every row list_open() returns came from the DB
         async with connect() as db:
             async with db.execute(
                 "SELECT token_id, clob_order_id, price, size, details_json "
                 "FROM live_orders "
                 "WHERE intent = 'ENTRY' AND status = 'SUBMITTED' AND window_slug = ? "
                 "ORDER BY id DESC LIMIT 1",
-                (row["window_slug"],),
+                (row.market_slug,),
             ) as cur:
                 entry = await cur.fetchone()
 
@@ -498,10 +496,10 @@ class LiveExecutor:
             # No live order was ever submitted for this row — it is a paper
             # artifact (e.g. from a previous paper session). Closing it costs
             # nothing real.
-            await self._close_ledger_row(row, "RECONCILED_NO_LIVE_TRACE")
+            await self._close_ledger_row(row.id, "RECONCILED_NO_LIVE_TRACE")
             log.warning(
                 "live_executor.reconcile_closed_paper_row",
-                position_id=row["position_id"], window_slug=row["window_slug"],
+                position_id=row.id, window_slug=row.market_slug,
             )
             return
 
@@ -534,23 +532,23 @@ class LiveExecutor:
             # time: adopt any match it recorded; refuse only when live risk is
             # genuinely unknowable.
             journal_matched = _journal_filled_shares(entry["details_json"])
-            if _window_resolved(row["window_slug"]):
-                await self._close_ledger_row(row, "RECONCILED_STALE_RESOLVED")
+            if _window_resolved(row.market_slug):
+                await self._close_ledger_row(row.id, "RECONCILED_STALE_RESOLVED")
                 await notify(
                     "live_reconciled",
-                    f"Closed stale live position {row['position_id']} "
-                    f"({row['window_slug']}): its window already resolved and "
+                    f"Closed stale live position {row.id} "
+                    f"({row.market_slug}): its window already resolved and "
                     "the CLOB no longer returns the entry order. Run "
                     "tools/reconcile_live_ledger.py to true-up realized PnL.",
                     {
-                        "position_id": row["position_id"],
+                        "position_id": row.id,
                         "journal_matched": journal_matched,
                     },
                 )
                 log.warning(
                     "live_executor.reconcile_closed_stale_resolved",
-                    position_id=row["position_id"],
-                    window_slug=row["window_slug"],
+                    position_id=row.id,
+                    window_slug=row.market_slug,
                     journal_matched=journal_matched,
                 )
                 return
@@ -560,7 +558,7 @@ class LiveExecutor:
                 raise LiveBootRefused(
                     f"Boot reconciliation failed: the CLOB could not return "
                     f"entry order {entry['clob_order_id']} for open position "
-                    f"{row['position_id']} and window {row['window_slug']} has "
+                    f"{row.id} and window {row.market_slug} has "
                     "not resolved yet — refusing to trade blind on live risk. "
                     "Retry once the CLOB is reachable, or flatten manually on "
                     "Polymarket and close the ledger row."
@@ -569,10 +567,10 @@ class LiveExecutor:
         if matched <= 0:
             # Entry never filled and its remainder was just cancelled by
             # cancel_all — there is nothing real behind this row.
-            await self._close_ledger_row(row, "RECONCILED_UNFILLED")
+            await self._close_ledger_row(row.id, "RECONCILED_UNFILLED")
             log.info(
                 "live_executor.reconcile_closed_unfilled",
-                position_id=row["position_id"], window_slug=row["window_slug"],
+                position_id=row.id, window_slug=row.market_slug,
             )
             return
 
@@ -580,8 +578,8 @@ class LiveExecutor:
         # size so the normal exit path flattens it.
         self._entry_order_id = None
         self._entry_token_id = str(entry["token_id"])
-        self._entry_price = float(entry["price"] or row["entry_price"])
-        self._entry_size = float(entry["size"] or row["shares"])
+        self._entry_price = float(entry["price"] or row.entry_price_usd)
+        self._entry_size = float(entry["size"] or row.size_shares)
         self._entry_matched_size = matched
         self._entry_sold_size = 0.0
         # Bot entries are marketable limits, so assume the adopted fill
@@ -593,27 +591,23 @@ class LiveExecutor:
         await notify(
             "live_reconciled",
             f"Re-adopted open live position from a previous session: "
-            f"{matched:.2f} shares of {row['side']} in {row['window_slug']}. "
+            f"{matched:.2f} shares of {row.side.value} in {row.market_slug}. "
             "It will be flattened by the normal exit path.",
-            {"position_id": row["position_id"]},
+            {"position_id": row.id},
         )
         log.warning(
             "live_executor.reconcile_adopted_position",
-            position_id=row["position_id"], matched=matched,
-            window_slug=row["window_slug"],
+            position_id=row.id, matched=matched,
+            window_slug=row.market_slug,
         )
 
     @staticmethod
-    async def _close_ledger_row(row: dict[str, Any], reason: str) -> None:
-        async with connect() as db:
-            await db.execute(
-                "UPDATE paper_positions SET state = 'closed', closed_at = ?, "
-                "exit_reason = ?, realized_pnl_usd = COALESCE(realized_pnl_usd, 0) "
-                "WHERE position_id = ?",
-                (datetime.now(UTC).isoformat(timespec="seconds"), reason,
-                 row["position_id"]),
-            )
-            await db.commit()
+    async def _close_ledger_row(position_id: int, reason: str) -> None:
+        await _positions_repo.close(
+            position_id,
+            closed_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            exit_reason=reason,
+        )
 
     # ------------------------------------------------------------------
     # Gate proxies — single source of truth is self.gate (issue #64)
