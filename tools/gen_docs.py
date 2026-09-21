@@ -193,7 +193,7 @@ def count_tests(root: Path) -> int:
     except subprocess.TimeoutExpired:
         return 0  # fail soft — a hung collection must not break doc generation
     # Exit code is nonzero whenever ANY module fails to collect (e.g. missing
-    # optional local deps like polars/py_clob_client_v2/h2), even though
+    # optional local deps like py_clob_client_v2/h2), even though
     # --continue-on-collection-errors still collects and reports everything
     # else. Discarding the whole count on that made this silently report 0
     # real tests instead of ~800 — do not gate on returncode here; the
@@ -309,7 +309,7 @@ def render_summary(
     else:
         n = PLACEHOLDER_TEST_COUNT
     lines = [
-        "- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.",
+        "- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.",
         "- **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.",
         f"- **Tests:** {n}.",
         f"- **Built-but-dead (do not edit expecting runtime effect):** {', '.join(f'`{d}`' for d in dead) or 'none'}.",

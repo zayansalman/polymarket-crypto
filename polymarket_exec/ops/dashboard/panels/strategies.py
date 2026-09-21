@@ -13,10 +13,6 @@ A family with a switch gets a checkbox; one that cannot run gets its status
 and its verdict instead, because a checkbox in front of code nothing can reach
 is a lie about what clicking it would do.
 
-Copy-trade switches are NOT here — they act on somebody else's wallet and
-render on COPY TRADE WALLETS, beside the wallet they control. The copy family
-still appears in the list, with a pointer to where its switches live.
-
 The switch applies on click (no Apply button, no confirm dialog — the click
 is the intent) by posting to the same ``/api/runtime-config`` endpoint every
 other runtime control uses.
@@ -32,7 +28,7 @@ from html import escape
 from typing import Any
 
 from polymarket_bot import inventory as _inv
-from polymarket_bot.strategies import MINE, STRATEGIES
+from polymarket_bot.strategies import STRATEGIES
 
 
 def _record_html(family: _inv.Family, live: dict[str, Any] | None) -> str:
@@ -100,13 +96,12 @@ def render(
 ) -> str:
     records = records or {}
     switchable = [
-        f for f in _inv.FAMILIES
-        if f.group == MINE and f.switch is not None and f.switch in STRATEGIES
+        f for f in _inv.FAMILIES if f.switch is not None and f.switch in STRATEGIES
     ]
     on = sum(1 for f in switchable if enabled.get(f.switch or "", False))
 
     sections = ""
-    for status, families in _inv.by_status(MINE):
+    for status, families in _inv.by_status():
         rows = "".join(
             _row_html(f, enabled.get(f.switch or "", False), records.get(f.key))
             for f in families
@@ -121,7 +116,7 @@ def render(
         "<section class='card strategies-card'>"
         f"<div class='card-h'>MY STRATEGIES<span class='win'>{on} of "
         f"{len(switchable)} switchable on &middot; "
-        f"{len([f for f in _inv.FAMILIES if f.group == MINE])} in the tree &middot; "
+        f"{len(_inv.FAMILIES)} in the tree &middot; "
         "<a class='strategy-doc-link' href='/strategy-docs' target='_blank' rel='noopener'>all docs</a>"
         "</span></div>"
         "<div class='gr-toggle-hint' style='margin-bottom:10px'>"

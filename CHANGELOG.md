@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — Remove the strategy group split (2026-09-21)
+
+The group field existed only to move copy-trade switches onto their own card.
+With copy-trade gone every strategy and family sat in the one group, so the
+split did nothing.
+
+- Removed: `strategies.MINE`, `Strategy.group`, `strategies.in_group`,
+  `Family.group`, `inventory.in_group`, and the group argument of
+  `inventory.by_status`.
+- The strategy-doc fingerprint hashes the old constant in place of the field,
+  so no doc needed re-stamping.
+- No behaviour change: MY STRATEGIES, the STRATEGY card and the docs index
+  render byte-for-byte the same.
+
+## Unreleased — Remove copy-trade (2026-09-21)
+
+The operator is cleaning up the app and will pick wallets to follow again,
+from research, later. Until then nothing in the process watches or copies
+anyone else's wallet.
+
+- Removed: `polymarket_bot/copytrade/` (watcher, trader, ledger, targets —
+  the one registered wallet — and the 30-minute backup), the COPY TRADE and
+  COPY TRADE WALLETS dashboard cards with their JS and CSS, `POST
+  /api/copy-fill`, the copy watcher started at dashboard boot, the nine
+  `copy_*` knobs (the SETTINGS card's "Copy trade" group), the
+  `copy_macro_daily` and `copy_autocopy` switches, and both copy entries in
+  the strategy inventory (only the v1 CLI one showed on MY STRATEGIES).
+- Removed with it: `polymarket_bot/pairarb/mirror.py` (copy pricing — its only
+  callers were copy-trade), `tools/copytrade_shadow.py`,
+  `tools/copytrade_dashboard.py`, `config.POLYMARKET_DATA_API` (only the
+  watcher read it), and the dashboard's scroll-keep hook (only the copy fill
+  list used it).
+- Kept: `tools/wallet_research/` — the research used to choose wallets.
+- Layout: MY STRATEGIES now spans both columns, so the removed wallets card
+  leaves no gap beside it.
+- Recorded data left alone: the `copy_trades` and `copy_decisions` tables,
+  `data/copytrade_snapshots/`, and the stored `runtime.copy.*` and
+  `runtime.strategy.copy_*.enabled` settings stay on disk. Nothing reads or
+  writes them any more, and nothing drops them.
+
 ## Unreleased — Remove the shadow forward-tester (2026-09-19)
 
 The shadow forward-tester recorded what candidate parameter sets *would* have

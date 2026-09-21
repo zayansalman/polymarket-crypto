@@ -25,7 +25,7 @@ from datetime import date
 from pathlib import Path
 
 from polymarket_bot import inventory as _inv
-from polymarket_bot.strategies import COPY, STRATEGIES
+from polymarket_bot.strategies import STRATEGIES
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs" / "strategies"
@@ -39,11 +39,25 @@ REQUIRED_SECTIONS: tuple[str, ...] = (
     "Changelog",
 )
 
+GLANCE = "At a glance"
+"""Optional section: the short summary the dashboard's STRATEGY card shows,
+one ``### `` part per entry in ``GLANCE_PARTS``. A doc that has it must have
+every part; a doc without it just stays off the card's dropdown."""
+GLANCE_PARTS: tuple[str, ...] = (
+    "Concept",
+    "Main assumption",
+    "The maths",
+    "How it works",
+    "How it was derived",
+    "References",
+)
+
 _BEGIN = "<!-- BEGIN GENERATED:strategy -->"
 _END = "<!-- END GENERATED:strategy -->"
 _GENERATED_RE = re.compile(re.escape(_BEGIN) + r"\n(.*?)\n" + re.escape(_END), re.S)
 _TITLE_RE = re.compile(r"^# (.+)$", re.M)
 _SECTION_RE = re.compile(r"^## (.+)$", re.M)
+_PART_RE = re.compile(r"^### (.+)$", re.M)
 _ENTRY_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}) · `([0-9a-f]{12})` · (.*)$", re.M)
 
 
@@ -88,12 +102,14 @@ def tracked_files(fam: _inv.Family) -> list[Path]:
 def fingerprint(fam: _inv.Family) -> str:
     """12 hex chars over the family's identity and every tracked file's bytes.
 
-    Identity (name, status, path, switch, group) is in the hash because a
+    Identity (name, status, path, switch) is in the hash because a
     renamed or re-statused strategy is a changed strategy. ``record`` and
     ``verdict`` are not: they are running commentary, not behaviour.
     """
     h = hashlib.sha256()
-    for part in (fam.key, fam.label, fam.status, fam.path, fam.switch or "", fam.group):
+    # "mine" is the value every family held in the removed ``Family.group``.
+    # Hashing it keeps each doc's fingerprint unchanged by that removal.
+    for part in (fam.key, fam.label, fam.status, fam.path, fam.switch or "", "mine"):
         h.update(part.encode() + b"\n")
     for path in tracked_files(fam):
         h.update(path.relative_to(ROOT).as_posix().encode() + b"\n")
@@ -104,8 +120,7 @@ def fingerprint(fam: _inv.Family) -> str:
 def _switch_text(fam: _inv.Family) -> str:
     if fam.switch is None or fam.switch not in STRATEGIES:
         return "none — nothing to turn on"
-    card = "COPY TRADE WALLETS" if fam.group == COPY else "MY STRATEGIES"
-    return f"`{fam.switch}` on the {card} card"
+    return f"`{fam.switch}` on the MY STRATEGIES card"
 
 
 def generated_block(fam: _inv.Family) -> str:
@@ -143,6 +158,24 @@ def parse(text: str) -> Doc:
     return doc
 
 
+def glance_parts(doc: Doc) -> dict[str, str]:
+    """``{part: markdown}`` from a parsed doc's At a glance section, in file order."""
+    body = doc.sections.get(GLANCE, "")
+    heads = list(_PART_RE.finditer(body))
+    return {
+        m.group(1).strip(): body[m.end():(heads[i + 1].start() if i + 1 < len(heads) else len(body))].strip()
+        for i, m in enumerate(heads)
+    }
+
+
+def glance(key: str) -> dict[str, str]:
+    """One family's At a glance parts; empty when its doc has none (or no doc)."""
+    path = doc_path(key)
+    if not path.exists():
+        return {}
+    return glance_parts(parse(path.read_text(encoding="utf-8")))
+
+
 def problems(fam: _inv.Family) -> list[str]:
     """Everything wrong with one family's doc; empty when it is in step."""
     path = doc_path(fam.key)
@@ -174,6 +207,13 @@ def problems(fam: _inv.Family) -> list[str]:
             out.append("changelog is not newest-first")
     if "Sources" in doc.sections and not doc.sections["Sources"]:
         out.append("Sources is empty")
+    if GLANCE in doc.sections:
+        parts = glance_parts(doc)
+        out += [
+            f"{GLANCE} is missing ### {p}" if p not in parts else f"{GLANCE} has an empty ### {p}"
+            for p in GLANCE_PARTS
+            if not parts.get(p)
+        ]
     return out
 
 

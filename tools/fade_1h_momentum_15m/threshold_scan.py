@@ -17,7 +17,6 @@ Binance 1-minute klines are fetched once into ``--spot-cache``.
 from __future__ import annotations
 
 import argparse
-import calendar
 import json
 import math
 import sqlite3

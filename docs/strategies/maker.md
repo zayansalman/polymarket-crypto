@@ -8,8 +8,55 @@
 | Status | running now |
 | Switch | `maker` on the MY STRATEGIES card |
 | Code | `polymarket_bot/maker/` — 5 files |
-| Code fingerprint | `ed4856e27df9` |
+| Code fingerprint | `1b7011906a67` |
 <!-- END GENERATED:strategy -->
+
+## At a glance
+
+### Concept
+
+Rest one passive bid on the favourite of each crypto Up/Down market and hold it to resolution. A resting order pays no fee, and on this venue the fee is what cancels the taker-side edge.
+
+### Main assumption
+
+Resting fills on the favourite between 0.55 and 0.92 earn about +3.8c a share at resolution, and a bid placed now fills the way those measured fills did. The live paper ledger is the first out-of-sample test of both halves.
+
+### The maths
+
+A filled quote at price $p$ for $n$ shares settles with no fee:
+
+$$\text{pnl}=n\,\big(\mathbb{1}[\text{won}]-p\big)$$
+
+It fills only once the taker flow that sold our outcome at or below our bid $b$ has cleared the queue $D$ already resting there. A taker buying the other outcome at $q$ is selling ours at $1-q$:
+
+$$C=\sum_{\substack{\text{taker sells of ours}\\ p_i\le b}} s_i+\sum_{\substack{\text{taker buys of the other}\\ 1-p_i\le b}} s_i$$
+
+$$\text{filled}=\min(Q,\ C-D)\quad\text{when } C>D$$
+
+With about 48c of per-trade spread, seeing a 4c edge at two standard errors takes
+
+$$n\approx\Big(\frac{2\times 48}{4}\Big)^2\approx 580\ \text{settled quotes.}$$
+
+### How it works
+
+Every 45 seconds, on the BTC/ETH/XRP hourly and BTC/ETH/SOL/XRP daily Up/Down markets:
+
+1. **Settle** each filled quote once the CLOB marks its market closed with a winner.
+2. **Check fills** against taker-only trades since the quote went in.
+3. **Quote**, only while the `maker` switch is on. The favourite is the side with the higher mid. Skip it if its spread is over 6c. Bid one tick above the best bid, never at or through the ask, and only if that price is in $[0.55,\,0.92)$. 25 shares, one quote per market, ever.
+
+### How it was derived
+
+- **Taker ruled out, 2026-09-20.** Taker entries across the hourly tape had a real gross edge of +0.21c a share against a 1.13c fee: −0.91c net (`5d69d0c`). That left resting quotes as the one setup not yet tested. Proposed by Claude.
+- **Measured on real resting fills.** Every fill missing from the `takerOnly=true` trade feed was labelled passive (`maker_label.py`). `maker_band.py` then measured what those fills earned, held to resolution, over 7,010 resolved 1h and 24h markets. Every favourite bucket from 0.55 to 0.92 was positive (+3.80c a share, t = +13.1) and every bucket below 0.55 lost. The band edges were read off that table.
+- **One clip per market.** Weighted by volume the same band loses 0.61c a share, so the edge only shows at a fixed size. The loop quotes a fixed clip once per market and never takes a second bite (`19dad91`).
+
+### References
+
+- PR #264 — the band table, the 48c per-trade figure and the ~580-quote estimate
+- `tools/wallet_research/maker_band.py`, `maker_label.py`, `filter_test.py` and `README.md` — deleted in #273, still in git history
+- Commits `1179f11`, `19dad91`, `5d69d0c`
+- Code: `polymarket_bot/maker/quoter.py`, `filler.py`, `runner.py`; the queue rule is pinned by `tests/unit/test_maker_fill_model.py`
 
 ## What it does
 
@@ -115,7 +162,7 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 - **The fill model is conservative in two ways.** It never credits cancellations in the queue ahead of us. It also reads at most 5,500 taker trades, so on a very busy market it misses the oldest flow, which is the flow closest to when the quote was placed.
 - **Scope.** The band was measured on 1h and 24h markets only. When PR #264 was written, only 996 of 11,520 15m markets were labelled. The maker does not quote 15m markets.
 - **Code comments disagree on the sample.** `quoter.py` says 2,600 markets and "+2 to +6.6c/share". `runtime_knobs.py` says 7,000. The README and PR #264 say 7,010, which is the figure used here.
-- **The research can no longer be re-run from local data.** On 2026-09-21, `data/wallet_research/wallets.db` held 392 markets (2026-08-22 to 2026-09-20), not 7,010. See the wallet-research doc.
+- **The research can no longer be re-run from local data.** On 2026-09-21, `data/wallet_research/wallets.db` held 392 markets (2026-08-22 to 2026-09-20), not 7,010. The scripts that measured it were deleted in #273 and are still in git history.
 - **No supervisor.** The loop lives inside the dashboard process, so when that process stops, quoting, fill checks and settlement all stop with it.
 
 ## Sources
@@ -148,4 +195,6 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 
 ## Changelog
 
+- 2026-09-21 · `1b7011906a67` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
+- 2026-09-21 · `1b7011906a67` · Docstring-only change in ledger.py from the copy-trade removal (#272); behaviour unchanged.
 - 2026-09-21 · `ed4856e27df9` · Doc created.

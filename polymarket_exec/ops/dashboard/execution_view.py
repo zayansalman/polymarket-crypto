@@ -23,8 +23,6 @@ from polymarket_exec.ops.dashboard.panels import _wallet
 from polymarket_exec.ops.dashboard.panels import (
     blotter,
     controls,
-    copy_wallets as copy_wallets_panel,
-    copytrade as copytrade_panel,
     daily_altcoin,
     decision_engine,
     maker as maker_panel,
@@ -35,6 +33,7 @@ from polymarket_exec.ops.dashboard.panels import (
     ribbon,
     settings as settings_panel,
     strategies as strategies_panel,
+    strategy_card as strategy_card_panel,
     tca,
 )
 
@@ -158,44 +157,6 @@ async def execution_view_html() -> str:
         macro.snapshot() if macro is not None else None,
         market_data.snapshot() if market_data is not None else None,
     )
-    # Copy trade: the watcher keeps its snapshot in memory, so this is a read
-    # of live state rather than a DB load.
-    from polymarket_bot.copytrade import targets as _copy_targets
-    from polymarket_bot.copytrade import watcher as _copy_watcher
-
-    _cw = _copy_watcher.current()
-    _cstate = _cw.state if _cw is not None else None
-    from polymarket_bot.copytrade import ledger as _copy_ledger
-
-    import time as _time
-
-    try:
-        _csummary = await _copy_ledger.summary()
-        _cdecisions = await _copy_ledger.decision_counts(int(_time.time()) - 86400)
-        _creach = await _copy_ledger.reachability(int(_time.time()) - 86400)
-        _cskips = await _copy_ledger.skip_scoreboard(int(_time.time()) - 86400)
-        _cverdict = await _copy_ledger.target_verdict(int(_time.time()) - 86400)
-        _caudit = await _copy_ledger.audit(int(_time.time()) - 86400)
-        # Every copy, one row each. An aggregate can hide a run of identical
-        # losers behind a flat total; with a target chosen on three days of
-        # data that is the specific thing worth being able to see.
-        _ctrades = (await _copy_ledger.open_rows()) + (
-            await _copy_ledger.settled_rows(40))
-    except Exception:  # noqa: BLE001 — a missing table must not blank the page
-        _csummary, _cdecisions, _creach, _cskips, _cverdict = {}, [], [], [], []
-        _caudit, _ctrades = {}, []
-    copytrade_html = copytrade_panel.render(
-        state=_cstate,
-        target=_copy_targets.get(_cstate.target) if _cstate else None,
-        summary=_csummary,
-        decisions=_cdecisions,
-        reach=_creach,
-        skips=_cskips,
-        verdict=_cverdict,
-        audit=_caudit,
-        trades=_ctrades,
-    )
-
     # Maker: read straight from its ledger. A passive strategy's result is its
     # fill rate as much as its P&L, so the unfilled and expired quotes come back
     # with the filled ones rather than being filtered out here.
@@ -206,13 +167,11 @@ async def execution_view_html() -> str:
         _mquotes = await _maker_ledger.recent(25)
         _mbands = await _maker_ledger.by_band()
         _mqueue = await _maker_ledger.queue_report()
-        _mdecisions = await _maker_ledger.decision_counts(int(_time.time()) - 86400)
+        _mdecisions = await _maker_ledger.decision_counts(int(time.time()) - 86400)
     except Exception:  # noqa: BLE001 — a missing table must not blank the page
         _msummary, _mquotes, _mbands, _mqueue, _mdecisions = {}, [], [], {}, []
 
     # Sits directly under FEEDS: what data arrives, then what is done with it.
-    # The copy switches are loaded here too, but rendered on the wallets card
-    # next to the wallet they act on rather than in this list.
     from polymarket_bot import strategies as _strategies
 
     _enabled = await _strategies.enabled_map()
@@ -234,23 +193,16 @@ async def execution_view_html() -> str:
             },
         },
     )
-    # One row per followed wallet: what it trades, what it did in the last
-    # hour, and a Copy button on each of its most recent fills.
-    _copies_by_tx = {
-        str(r.get("tx")): r for r in (_ctrades or []) if r.get("tx")
-    }
-    _open_by_target: dict[str, int] = {}
-    for r in _ctrades or []:
-        if r.get("state") == "open":
-            addr = str(r.get("target") or "").lower()
-            _open_by_target[addr] = _open_by_target.get(addr, 0) + 1
-    copy_wallets_html = copy_wallets_panel.render(
-        targets=_copy_targets.TARGETS,
-        state=_cstate,
-        enabled=_enabled,
-        copies_by_tx=_copies_by_tx,
-        open_by_target=_open_by_target,
-    )
+    # STRATEGY card, under ORDER SIZE: the At a glance summary from the doc of
+    # each strategy of ours that has one, in MY STRATEGIES order.
+    from polymarket_bot import inventory as _inv
+    from polymarket_bot import strategy_docs as _sd
+
+    strategy_card_html = strategy_card_panel.render(entries=[
+        (f, _sd.glance(f.key))
+        for _, fams in _inv.by_status()
+        for f in fams
+    ])
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
@@ -277,16 +229,16 @@ async def execution_view_html() -> str:
         + ribbon_html
         + "<div class='execution-grid'>"
         + feeds_html
-        + controls_html
+        # ORDER SIZE and STRATEGY share the column beside FEEDS, one under
+        # the other, so the grid keeps its cell count.
+        + "<div class='grid-stack'>" + controls_html + strategy_card_html + "</div>"
         + strategies_html
-        + copy_wallets_html
         + market_html
         + decision_html
         + performance_html
         + tca_html
         + blotter_html
         + daily_altcoin_html
-        + copytrade_html
         + maker_html
         + settings_html
         + "</div></div>"

@@ -29,7 +29,7 @@ def lab(tmp_path, monkeypatch):
     code.write_text("EDGE = 1\n")
     fam = _inv.Family(
         key="toy", label="Toy strategy", path="strat.py",
-        what="Does one thing.", status=_inv.RESEARCH, record="never traded",
+        what="Does one thing.", status=_inv.UNWIRED, record="never traded",
     )
     monkeypatch.setattr(sd, "ROOT", tmp_path)
     monkeypatch.setattr(sd, "DOCS_DIR", tmp_path / "docs")
@@ -87,3 +87,49 @@ def test_missing_sections_are_named(lab) -> None:
     path = sd.doc_path("toy")
     path.write_text(path.read_text().replace("## Sources", "## Links"))
     assert "missing section: ## Sources" in sd.problems(fam)
+
+
+GLANCE = "\n".join(
+    ["## At a glance", ""]
+    + [f"### {p}\n\nSome words on {p.lower()}.\n" for p in sd.GLANCE_PARTS]
+)
+
+
+def _with_glance(text: str, glance: str) -> str:
+    return text.replace("## What it does", glance + "\n## What it does", 1)
+
+
+def test_at_a_glance_parts_are_read_in_order(lab) -> None:
+    fam, _ = lab
+    path = sd.doc_path("toy")
+    path.write_text(_with_glance(path.read_text(), GLANCE))
+    parts = sd.glance("toy")
+    assert list(parts) == list(sd.GLANCE_PARTS)
+    assert parts["The maths"] == "Some words on the maths."
+    assert sd.problems(fam) == []
+
+
+def test_a_doc_without_at_a_glance_has_no_parts_and_no_problem(lab) -> None:
+    fam, _ = lab
+    assert sd.glance("toy") == {}
+    assert sd.problems(fam) == []
+
+
+def test_an_incomplete_at_a_glance_is_named(lab) -> None:
+    fam, _ = lab
+    path = sd.doc_path("toy")
+    partial = GLANCE.replace("### References\n\nSome words on references.\n", "")
+    partial = partial.replace("Some words on concept.", "")
+    path.write_text(_with_glance(path.read_text(), partial))
+    issues = sd.problems(fam)
+    assert "At a glance is missing ### References" in issues
+    assert "At a glance has an empty ### Concept" in issues
+
+
+def test_every_running_strategy_of_ours_has_an_at_a_glance() -> None:
+    # The dashboard's STRATEGY card lists only docs with the section, so a
+    # running strategy without one would be missing from it.
+    running = [f for f in _inv.FAMILIES if f.status == _inv.RUNNING]
+    assert running
+    missing = [f.key for f in running if not sd.glance(f.key)]
+    assert not missing, f"no At a glance section in the docs of: {missing}"

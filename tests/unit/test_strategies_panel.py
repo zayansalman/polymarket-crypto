@@ -1,10 +1,7 @@
-"""MY STRATEGIES card: one row per strategy this repo decides for itself.
+"""MY STRATEGIES card: one row per strategy family in the repo.
 
 Pure ``render(...)`` transform like every other panel — the switch states and
 records are loaded by ``execution_view.py`` and passed in.
-
-The copy-trade switches are deliberately NOT here: they act on somebody else's
-wallet and are rendered on COPY TRADE WALLETS, beside the wallet they control.
 """
 
 from __future__ import annotations
@@ -16,7 +13,7 @@ from polymarket_bot import strategies as _strategies
 from polymarket_exec.ops.dashboard.panels import strategies as panel
 
 ALL_ON = {name: True for name in _strategies.STRATEGIES}
-MINE = _strategies.in_group(_strategies.MINE)
+FAMILIES = sorted(_inv.FAMILIES, key=lambda f: _inv.STATUS_ORDER.index(f.status))
 
 
 def test_card_is_headed_my_strategies() -> None:
@@ -25,31 +22,22 @@ def test_card_is_headed_my_strategies() -> None:
 
 def test_every_strategy_i_run_myself_gets_a_row() -> None:
     html = panel.render(enabled=ALL_ON)
-    for strategy in MINE.values():
+    for strategy in _strategies.STRATEGIES.values():
         assert strategy.label in html
 
 
 def test_each_row_explains_what_the_family_does_and_where_it_lives() -> None:
     html = panel.render(enabled=ALL_ON)
-    for family in _inv.in_group(_strategies.MINE):
+    for family in FAMILIES:
         assert escape(family.what) in html
         assert family.path in html
 
 
 def test_every_row_links_to_its_strategy_doc_and_the_header_to_all_docs() -> None:
     html = panel.render(enabled=ALL_ON)
-    for family in _inv.in_group(_strategies.MINE):
+    for family in FAMILIES:
         assert f"href='/strategy-docs/{family.key}'" in html
     assert "href='/strategy-docs'" in html
-
-
-def test_copy_switches_are_not_in_this_card() -> None:
-    # They belong beside the wallet they act on. A switch listed away from the
-    # thing it controls cannot be judged.
-    html = panel.render(enabled=ALL_ON)
-    for name, strategy in _strategies.in_group(_strategies.COPY).items():
-        assert f"id='strategy-{name}'" not in html
-        assert strategy.label not in html
 
 
 def test_an_enabled_strategy_renders_a_checked_switch() -> None:
@@ -73,10 +61,9 @@ def test_the_switch_applies_on_click_with_no_apply_button() -> None:
 
 def test_the_header_counts_switchable_rows_and_the_whole_tree() -> None:
     html = panel.render(enabled={**ALL_ON, "daily_altcoin": False})
-    mine = _inv.in_group(_strategies.MINE)
-    switchable = [f for f in mine if f.switch]
+    switchable = [f for f in FAMILIES if f.switch]
     assert f"{len(switchable) - 1} of {len(switchable)} switchable on" in html
-    assert f"{len(mine)} in the tree" in html
+    assert f"{len(FAMILIES)} in the tree" in html
 
 
 def test_a_strategy_shows_what_it_has_actually_settled() -> None:
@@ -101,13 +88,13 @@ def test_a_family_that_cannot_trade_says_why_instead_of_showing_a_zero() -> None
 def test_nothing_in_the_tree_is_hidden_from_the_card() -> None:
     # The operator asked to see the bloat so they can say what to delete.
     html = panel.render(enabled=ALL_ON)
-    for family in _inv.in_group(_strategies.MINE):
+    for family in FAMILIES:
         assert family.label in html, family.key
 
 
 def test_a_family_with_no_switch_shows_its_state_not_a_dead_checkbox() -> None:
     html = panel.render(enabled=ALL_ON)
-    for family in _inv.in_group(_strategies.MINE):
+    for family in FAMILIES:
         if family.switch is None:
             assert f"st-{family.status}" in html
             assert f"id='strategy-{family.key}'" not in html
@@ -115,7 +102,7 @@ def test_a_family_with_no_switch_shows_its_state_not_a_dead_checkbox() -> None:
 
 def test_families_are_grouped_by_status() -> None:
     html = panel.render(enabled=ALL_ON)
-    for status, _rows in _inv.by_status(_strategies.MINE):
+    for status, _rows in _inv.by_status():
         assert _inv.STATUS_LABEL[status] in html
 
 

@@ -50,7 +50,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Panel folds inside the refreshed views (e.g. ORDER SIZE). Their HTML is
 // replaced every few seconds, so open/closed is stored per fold and re-applied
-// after each swap — an inline ontoggle survives innerHTML, a listener does not.
+// after each swap. The listener sits on the document, not the fold, so it
+// survives innerHTML swaps. ``toggle`` does not bubble, hence the capture flag.
+// No inline ontoggle: a <details open> fires toggle while the page is still
+// loading, before this script exists, which threw "rememberFold is not
+// defined". Missing that first event is harmless — restoreFolds applies the
+// stored state on DOMContentLoaded.
 function rememberFold(el) {
   if (!el || !el.dataset.fold) return;
   try { localStorage.setItem('fold:' + el.dataset.fold, el.open ? '1' : '0'); } catch (e) {}
@@ -66,6 +71,10 @@ function restoreFolds(root) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { restoreFolds(document); });
+document.addEventListener('toggle', function(e) {
+  var el = e.target;
+  if (el && el.matches && el.matches('details[data-fold]')) rememberFold(el);
+}, true);
 
 // ---------------------------------------------------------------------------
 // Toast Notifications
@@ -230,13 +239,18 @@ function swapKeepingInputs(container, html) {
       kept.push({ id: el.id, value: el.value, focus: el === active, dirty: el.dataset.dirty });
     }
   });
-  // Panels that scroll internally (e.g. the copy-trade fill list) lose their
-  // position when innerHTML is replaced, which reads as the page jumping.
-  var scrolls = [];
-  container.querySelectorAll('[data-keep-scroll]').forEach(function(el) {
-    if (el.scrollTop > 0) scrolls.push({ key: el.dataset.keepScroll, top: el.scrollTop });
+  // Cards marked data-static hold reference text, not live data (the STRATEGY
+  // card). The live node goes back in place of its fresh copy, so the pick and
+  // the rendered maths survive without being redone every refresh.
+  var statics = {};
+  container.querySelectorAll('[data-static]').forEach(function(el) {
+    statics[el.dataset.static] = el;
   });
   container.innerHTML = html;
+  container.querySelectorAll('[data-static]').forEach(function(el) {
+    var live = statics[el.dataset.static];
+    if (live) el.replaceWith(live);
+  });
   restoreFolds(container);  // a collapsed panel must stay collapsed across refreshes
 
   kept.forEach(function(k) {
@@ -249,10 +263,6 @@ function swapKeepingInputs(container, html) {
     // however far the operator had scrolled away.
     if (k.focus) el.focus({ preventScroll: true });
   });
-  scrolls.forEach(function(s) {
-    var el = container.querySelector('[data-keep-scroll="' + s.key + '"]');
-    if (el) el.scrollTop = s.top;
-  });
   // No window-level scroll restore here. Panels change height between
   // refreshes, so forcing the old pixel offset back lands the reader somewhere
   // different each time — which reads as the page jumping at random. The
@@ -260,6 +270,78 @@ function swapKeepingInputs(container, html) {
   // actually stops the jumping.
   updateTicket();  // a kept share count must be re-priced at the fresh quote
 }
+
+// ---------------------------------------------------------------------------
+// STRATEGY card: pick a strategy, read its summary
+// ---------------------------------------------------------------------------
+
+// A native dropdown closes the moment its node leaves the page, and every
+// refresh moves the card. While the picker has focus the newest view is
+// parked and applied once the pick is made — or after HOLD_MAX_MS, so an
+// abandoned dropdown can't freeze the dashboard.
+var HOLD_MAX_MS = 15000;
+var heldExecView = null;
+var heldSince = 0;
+
+function pickerHasFocus() {
+  var a = document.activeElement;
+  return !!(a && a.id === 'strategy-pick');
+}
+
+function applyExecView(html) {
+  var execEl = document.getElementById('execution-content');
+  if (execEl) swapKeepingInputs(execEl, html);
+}
+
+function releaseHeldView() {
+  if (heldExecView === null) return;
+  var html = heldExecView;
+  heldExecView = null;
+  applyExecView(html);
+}
+
+function showStrategy(key) {
+  var card = document.querySelector('.strategy-card');
+  if (!card || !card.querySelector('.sc-body[data-strategy="' + key + '"]')) return;
+  card.querySelectorAll('.sc-body').forEach(function(el) {
+    el.hidden = el.dataset.strategy !== key;
+  });
+  var pick = document.getElementById('strategy-pick');
+  if (pick) pick.value = key;
+  var docs = card.querySelector('.sc-docs');
+  if (docs) docs.href = '/strategy-docs/' + encodeURIComponent(key);
+}
+
+function pickStrategy(el) {
+  showStrategy(el.value);
+  try { localStorage.setItem('strategy-card:pick', el.value); } catch (e) {}
+  el.blur();          // hands the refresh back to the stream...
+  releaseHeldView();  // ...and applies what it held (onblur won't fire in a window without focus)
+}
+
+// Called by KaTeX's auto-render once it loads. Each summary is rendered once:
+// the card node is kept across refreshes, so its maths stays rendered.
+function renderStrategyMath() {
+  if (typeof renderMathInElement !== 'function') return;
+  document.querySelectorAll('.strategy-card .sc-body').forEach(function(el) {
+    if (el.dataset.math === '1') return;
+    renderMathInElement(el, {
+      delimiters: [
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false }
+      ],
+      throwOnError: false
+    });
+    el.dataset.math = '1';
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  try {
+    var saved = localStorage.getItem('strategy-card:pick');
+    if (saved) showStrategy(saved);
+  } catch (e) {}
+});
 
 function setLossHalt() {
   var el = document.getElementById('halt-usd');
@@ -359,34 +441,6 @@ function setKnob(name, kind) {
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
 }
 
-// Copy one observed fill by hand, from the COPY TRADE WALLETS card. Same path
-// autocopy takes — prices against the live ask ladder, charges the taker fee,
-// sends no real order. The click is the intent: no confirm dialog.
-function copyFill(tx) {
-  var btn = document.getElementById('cw-copy-' + tx);
-  if (btn) { btn.disabled = true; btn.textContent = '...'; }
-  fetch('/api/copy-fill', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tx: tx })
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.status === 'ok') {
-        showToast('copied', 'success');
-      } else {
-        // The row re-renders in at most 5s; until then say why it did not book.
-        if (btn) { btn.disabled = false; btn.textContent = 'copy'; }
-        showToast('Not copied: ' + (data.detail || 'unknown error'), 'error');
-      }
-      setTimeout(refreshAll, 300);
-    })
-    .catch(function(err) {
-      if (btn) { btn.disabled = false; btn.textContent = 'copy'; }
-      showToast('Not copied: ' + err.message, 'error');
-    });
-}
-
 function setStrategy(name) {
   var el = document.getElementById('strategy-' + name);
   if (!el) return;
@@ -450,24 +504,6 @@ function handleRefresh() {
     .finally(function() { setButtonsDisabled(false); });
 }
 
-function handleRefreshBacktest() {
-  var btn = document.getElementById('btn-refresh-backtest');
-  if (btn) btn.disabled = true;
-  fetch('/api/data')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var el = document.getElementById('backtest-content');
-      if (el && data.backtest) el.innerHTML = data.backtest;
-      showToast('Backtest report refreshed', 'success');
-    })
-    .catch(function(err) {
-      showToast('Refresh failed: ' + err.message, 'error');
-    })
-    .finally(function() {
-      if (btn) btn.disabled = false;
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Data Refresh — updates DOM from JSON payload
 // ---------------------------------------------------------------------------
@@ -514,26 +550,19 @@ function updateDashboard(data) {
 
   // Execution view (status ribbon + strategy/market/perf/TCA/blotter)
   if (data.execution_view) {
-    var execEl = document.getElementById('execution-content');
-    if (execEl) swapKeepingInputs(execEl, data.execution_view || '');
+    if (pickerHasFocus() && (heldExecView === null || Date.now() - heldSince < HOLD_MAX_MS)) {
+      if (heldExecView === null) heldSince = Date.now();
+      heldExecView = data.execution_view;
+    } else {
+      heldExecView = null;
+      applyExecView(data.execution_view);
+    }
   }
 
   // Activity
   if (data.activity) {
     var act = document.getElementById('activity-content');
     if (act) act.innerHTML = data.activity || '';
-  }
-
-  // History
-  if (data.history) {
-    var hist = document.getElementById('history-content');
-    if (hist) hist.innerHTML = data.history || '';
-  }
-
-  // Backtest
-  if (data.backtest) {
-    var bt = document.getElementById('backtest-content');
-    if (bt) bt.innerHTML = data.backtest || '';
   }
 }
 

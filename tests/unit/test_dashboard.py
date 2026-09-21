@@ -68,10 +68,9 @@ class TestDashboardPage:
         assert "setTradeShares()" in text
         assert "min 5 sh" in text
 
-    def test_has_secondary_panels(self, client: TestClient):
+    def test_has_activity_log(self, client: TestClient):
         text = client.get("/").text
         assert "ACTIVITY LOG" in text
-        assert "BACKTEST" in text
 
 
 class TestStaticFiles:
@@ -109,6 +108,13 @@ class TestStaticFiles:
         assert "setTradeShares" in js
         assert "updateTicket" in js
 
+    def test_js_remembers_folds_from_the_document(self, client: TestClient):
+        # A document-level capture listener, not an inline ontoggle: the inline
+        # one fired before this script loaded and threw on every page load.
+        js = client.get("/static/dashboard.js").text
+        assert "document.addEventListener('toggle'" in js
+        assert "details[data-fold]" in js
+
     def test_css_has_control_input(self, client: TestClient):
         assert ".ctl-input" in client.get("/static/style.css").text
 
@@ -123,7 +129,6 @@ class TestApiData:
         data = client.get("/api/data").json()
         assert "execution_view" in data
         assert "activity" in data
-        assert "backtest" in data
 
     def test_api_data_execution_view_is_rendered_html(self, client: TestClient):
         execution_view = client.get("/api/data").json()["execution_view"]
@@ -344,18 +349,24 @@ class TestRibbonTrailingHalt:
 
     def test_headroom_is_full_at_peak(self) -> None:
         html = self._render(live_pnl=0.0, live_peak=0.0)
-        assert "$10.00" in html  # headroom
+        assert "$10.00</span> left of $10.00" in html
         assert ">OK<" in html
 
     def test_headroom_shrinks_after_drawdown_from_peak(self) -> None:
         # Banked +30, gave back 5 → headroom 5, floor +20, still OK.
         html = self._render(live_pnl=25.0, live_peak=30.0)
-        assert "$5.00" in html
+        assert "$5.00</span> left of $10.00" in html
         assert ">OK<" in html
 
     def test_positive_pnl_can_be_halted_by_trailing_stop(self) -> None:
         html = self._render(live_pnl=18.0, live_peak=30.0)
         assert ">HALTED<" in html
+        # Past the floor the remaining budget reads $0, never a negative amount.
+        assert "$0.00</span> left of $10.00" in html
+        assert "-" not in html.split("halt-status", 1)[1].split("</div>", 1)[0]
+
+    def test_no_separate_headroom_label(self) -> None:
+        assert "headroom" not in self._render(live_pnl=-4.0)
 
     def test_never_profitable_matches_fixed_floor(self) -> None:
         html = self._render(live_pnl=-10.0, live_peak=0.0)
@@ -369,7 +380,7 @@ class TestRibbonTrailingHalt:
         html = self._render(mode="paper", paper_pnl=4.0, paper_peak=12.0,
                             live_pnl=0.0, live_peak=0.0)
         # floor = 12 - 10 = 2; headroom = 4 - 2 = 2.
-        assert "$2.00" in html
+        assert "$2.00</span> left of $10.00" in html
 
 
 class TestRibbonLivePnl:

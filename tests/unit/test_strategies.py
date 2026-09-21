@@ -77,6 +77,15 @@ def test_the_shadow_forward_tester_is_gone() -> None:
     assert "shadow" not in _strategies.STRATEGIES
 
 
+def test_copy_trade_is_gone() -> None:
+    # Removed 2026-09-21; wallets get picked again from research before any
+    # copy code comes back. No switch or knob should outlive the code it drove.
+    from polymarket_bot import runtime_knobs
+
+    assert not [n for n in _strategies.STRATEGIES if n.startswith("copy_")]
+    assert not [n for n in runtime_knobs.KNOBS if n.startswith("copy_")]
+
+
 def test_every_strategy_stores_under_its_own_runtime_key() -> None:
     keys = {s.key for s in _strategies.STRATEGIES.values()}
     assert len(keys) == len(_strategies.STRATEGIES)

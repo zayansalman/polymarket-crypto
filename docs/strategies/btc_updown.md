@@ -11,6 +11,48 @@
 | Code fingerprint | `4e17e45c8430` |
 <!-- END GENERATED:strategy -->
 
+## At a glance
+
+### Concept
+
+The trading loop a strategy plugs into. While the operator holds Start, every 5 seconds it prices the current BTC Up/Down window against Chainlink, the feed the market settles on, and journals the fair value and the edge on each side. No strategy is loaded, so it never enters.
+
+### Main assumption
+
+Over the minutes left in a window, BTC's log price is a random walk with no drift and a volatility taken from recent one-second Chainlink returns. Pricing off Chainlink matches how the market resolves, and an exact tie resolves Up.
+
+### The maths
+
+$$z=\frac{\ln(S/K)}{\sigma\sqrt{\max(T,1)}},\qquad w=\frac{g/K}{\sigma\sqrt{\max(T,1)}}$$
+
+$$p_{\text{up}}=\Phi(z)+\min\big(\varphi(z)\,w,\ 0.45\big),\ \text{clipped to }[0.005,\,0.995]$$
+
+$S$ is the latest Chainlink print, $K$ the window's Chainlink open, $T$ the seconds left and $g=0.01$ dollars the Chainlink print step. So $\varphi(z)\,w$ is the chance the close lands exactly on the open, which counts for Up. The edges against the asks are $e_{\text{up}}=p_{\text{up}}-a_{\text{up}}$ and $e_{\text{down}}=(1-p_{\text{up}})-a_{\text{down}}$.
+
+### How it works
+
+1. Find the window: slug `btc-updown-5m-{t0}`, with $t_0=t-(t\bmod 300)$.
+2. Read both order books (the hub's stream, else CLOB `/book`), the Chainlink spot (WebSocket, or REST if older than 15 s) and the window's open.
+3. Volatility: the stdev of one-second Chainlink log returns once there are 30 of them, else 90 Binance one-second closes, else the floor 0.00002.
+4. Journal the tick to `paper_ticks`. Decision: none, `skip: no strategy loaded`.
+
+It prices the retired 5-minute family whatever the header selector shows. A new strategy plugs into `paper.py:_build_snapshot` and inherits the entry, risk-gate and settlement plumbing.
+
+### How it was derived
+
+- **2026-05-21.** The repo's first commit is this loop, sized $1 to $5 by confidence. Who designed the model is not recorded.
+- **2026-05-24.** A backtest over the operator's own trades set the defaults: the 0.045 edge floor kept, the confidence floor cut to 0.50 (`fb68e44`).
+- **June 2026.** Chainlink replaced Binance for the reference, spot and volatility, and quotes moved to the CLOB book (#21, #22). The tie term comes from Chainlink's 1-cent print step.
+- **2026-07-10.** Stopped after the post-freeze segment lost $0.41 a trade over 37 trades.
+- **2026-09-13, Zayan.** Archived the v0 strategy; the loop kept running with none loaded (PR #226).
+
+### References
+
+- Code: `polymarket_bot/paper.py` (`_build_snapshot`, `_fetch_current_market`, `_sigma_with_fallback`); `polymarket_bot/strategy.py` (`fair_up_probability`)
+- `docs/archive/v0-strategy.md`, `docs/archive/POSTMORTEM_2026-07.md`, `docs/archive/TIMELINE.md`
+- Issues #21, #22, #28, #29, #133; PR #226
+- Commits `eebee55`, `fb68e44`, `e8565b4`, `8ece0bd`
+
 ## What it does
 
 A loop that runs while the operator holds Start. Every 5 seconds it finds the current BTC 5-minute Up/Down market, reads the Chainlink settlement feed and both order books, and journals a log-normal fair value and the executable edge. It never enters: since the v0 strategy was archived on 2026-09-13, every tick sets no side and journals `skip: no strategy loaded`. It prices `btc-updown-5m-*` windows whatever market the header selector shows.
@@ -18,7 +60,7 @@ A loop that runs while the operator holds Start. Every 5 seconds it finds the cu
 ## How it was formed
 
 - **2026-05-21, origin not recorded.** The repo's first commits are this loop (`eebee55`, `f6dd738`): a local BTC 5-minute Polymarket paper-trading demo, sized $1–$5 by confidence (`PRD.md` at `f6dd738`). The log-normal fair value, then on 90 Binance 1-second closes, the 5-second tick and the 0.045 edge floor are all in the first commit. The repo does not record who designed the model.
-- **2026-05-24.** The pricing maths moved to `polymarket_bot/strategy.py`, and a backtest over the operator's own trade history set the loop's defaults: the 0.045 edge floor kept, the confidence floor cut from 0.62 to 0.50, and a 60-second late-entry cutoff (`fb68e44`; see the BTC 5m offline backtest doc).
+- **2026-05-24.** The pricing maths moved to `polymarket_bot/strategy.py`, and a backtest over the operator's own trade history set the loop's defaults: the 0.045 edge floor kept, the confidence floor cut from 0.62 to 0.50, and a 60-second late-entry cutoff (`fb68e44`; that backtest tool was deleted in #273).
 - **2026-06-10 to 06-17.** Live execution behind a boot gate (`80f2b47`). Chainlink became the source for reference, spot and volatility, quotes came from the CLOB book, and paper fills paid the spread (`e8565b4`, #21, #22). Hold-to-resolution became the default after a scalp-style soak lost $7.87 over 135 trades in 70 minutes (`79754e1`, #28). A 0.07 edge cap and a 0.50 entry-price floor followed a 26-hour soak (n=225, −14.4% ROI) in which larger claimed edges lost more (`92019ef`, #29). Paper and live began sharing one risk gate (`a842304`, #64). Orders below the venue's 5-share minimum were raised to it (`b1a38aa`, #87).
 - **2026-07-02.** Fee-true booking (`0abd2fd`, #133). Venue records for the live period 2026-06-15 to 06-24 showed 333 buys, +$6.27 before fees, −$23.51 in taker fees and −$17.24 net (`docs/archive/POSTMORTEM_2026-07.md`).
 - **2026-07-10.** The loop was stopped after the post-freeze segment measured −$0.41 per trade over n=37 at a 48.6% win rate (`docs/archive/TIMELINE.md`). The project reopened on 2026-08-04 (header of the same file).
@@ -110,4 +152,5 @@ Here $g=0.01$ is the Chainlink print step in dollars (`PRINT_GRANULARITY_USD`), 
 
 ## Changelog
 
+- 2026-09-21 · `4e17e45c8430` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `4e17e45c8430` · Doc created.
