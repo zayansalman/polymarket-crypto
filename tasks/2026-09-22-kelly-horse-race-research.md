@@ -35,6 +35,13 @@ That held in **120 of 120** consecutive resolved 15m windows (walked back from 2
 `price_to_beat_chain.py 900 120 15m`). So the 15m market is close vs open on a 60 s smoothed
 Chainlink series, and the close-vs-open maths below applies to it.
 
+A second, direct check the same day: the `priceToBeat` of btc-updown-5m-1790020500 is
+86488.26191164675. That is identical, to every digit, to the `crypto_prices_twap_sixty` print for
+btc/usd at that second on Polymarket's RTDS WebSocket (the raw Chainlink print was 86500.66).
+Under a whole-window average, about 1 window in 6 would break the chain rule above, because the
+correlation between a Brownian path's end point and its window average is 0.866. Seeing 0 in 120
+rules that reading out.
+
 One consequence: the 1h direction is measured on Binance (the 1h market's source), but the
 15m bet settles on Chainlink's 60 s TWAP. A 15m P(Up) has to be built on the Chainlink TWAP series.
 
@@ -105,6 +112,7 @@ plug-in Kelly (1701.02814). A drawdown limit on a single bet gives a scaled-down
 | 80% for the next hour, same drift and vol, for the next 15m | 66.3% |
 | windows before a learner of P=0.55 vs price 0.53 stops losing (2201.03387) | 622 |
 | 15m outcome = next `priceToBeat` >= this `priceToBeat` | 120 / 120 |
+| `priceToBeat` = RTDS 60 s TWAP print at the window start | exact (5m, 1790020500) |
 
 ## Papers (all 51, checked against arXiv)
 
