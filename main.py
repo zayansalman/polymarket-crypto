@@ -7,18 +7,6 @@ from config import DASHBOARD_SERVER_PORT, DB_PATH
 from db import init_db, notify
 from logging_setup import get_logger, setup_logging
 
-# New architecture entrypoint (v0.2+)
-try:
-    from polymarket_exec.ops.dashboard.app import app as dashboard_app
-    HAS_NEW_DASHBOARD = True
-except ImportError:
-    HAS_NEW_DASHBOARD = False
-
-# Legacy entrypoint (v0.1)
-if not HAS_NEW_DASHBOARD:
-    from config import DASHBOARD_SERVER_NAME, DASHBOARD_SERVER_PORT
-    from dashboard import launch
-
 log = get_logger("main")
 
 
@@ -30,7 +18,7 @@ async def startup_tasks() -> None:
         {
             "db_path": str(DB_PATH),
             "version": "0.2.0",
-            "dashboard": "fastapi" if HAS_NEW_DASHBOARD else "gradio",
+            "dashboard": "fastapi",
         },
     )
 
@@ -85,23 +73,14 @@ def main() -> None:
         "app.boot",
         db_path=str(DB_PATH),
         version="0.2.0",
-        has_new_dashboard=HAS_NEW_DASHBOARD,
     )
-    # Deferred from config.py import-time (logging wasn't ready then).
-    import config as _config
-    for note in getattr(_config, "CONFIG_DEPRECATIONS", []):
-        log.warning("config.deprecation", message=note)
     asyncio.run(startup_tasks())
 
-    if HAS_NEW_DASHBOARD:
-        import uvicorn
-        log.info("dashboard.start_fastapi", port=DASHBOARD_SERVER_PORT)
-        uvicorn.run(
-            "polymarket_exec.ops.dashboard.app:app", **dashboard_server_options()
-        )
-    else:
-        log.info("dashboard.start_gradio", server="127.0.0.1", port=DASHBOARD_SERVER_PORT)
-        launch()
+    import uvicorn
+    log.info("dashboard.start_fastapi", port=DASHBOARD_SERVER_PORT)
+    uvicorn.run(
+        "polymarket_exec.ops.dashboard.app:app", **dashboard_server_options()
+    )
 
 
 if __name__ == "__main__":

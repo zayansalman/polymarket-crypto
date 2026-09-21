@@ -23,7 +23,8 @@ Statuses, narrowest to widest:
 
 Every entry was verified against the tree on 2026-09-21, the day
 chronos_signal.py, the shadow roster's table and five dead scratch databases
-were deleted off the back of this list. ``tests/unit/
+were deleted off the back of this list — and the day #267 deleted the v0 stack
+and the pair-arb strategy, which dropped off it the same way. ``tests/unit/
 test_inventory.py`` re-checks the falsifiable half of that on every run — that
 each path still exists, and that the switch registry and this list agree — so
 a family cannot quietly drop off the card by being deleted or renamed.
@@ -137,43 +138,6 @@ FAMILIES: tuple[Family, ...] = (
             "TRADE BLOTTER card is permanently empty because of this."
         ),
     ),
-    # ---- not wired ----------------------------------------------------
-    Family(
-        key="pairarb",
-        label="Pair-arb — two-sided 5m quoting",
-        path="polymarket_bot/pairarb/",
-        what=(
-            "Rests bids on both legs of one 5m window so the pair costs "
-            "under 1.00, then simulates fills and settles."
-        ),
-        status=RESEARCH,
-        record="never traded · its shadow DB was deleted 2026-09-21",
-        verdict=(
-            "7 of its 9 modules are reachable only from CLI scripts. Two are "
-            "NOT dead and must survive any delete: mirror.py "
-            "(price_the_copy, used by copytrade) and market_index.py "
-            "(parse_market, used by the daily scanner)."
-        ),
-    ),
-    Family(
-        key="v0_fair_value",
-        label="v0 BTC 5m fair-value stack",
-        path="polymarket_exec/strategy/",
-        what=(
-            "The archived v0 engine: Gaussian fair-value pricing, "
-            "edge→signal, confidence sizing, its own tick controller, paper "
-            "order state machine, risk service and two backtest engines."
-        ),
-        status=UNWIRED,
-        record="Never traded · its tables were never even created",
-        verdict=(
-            "~1,600 lines nothing reaches: strategy/, ops/controller.py, "
-            "backtest/{harness,conditional}.py, storage/replay.py. Note "
-            "core/types.py, core/interfaces.py, execution/paper.py and "
-            "execution/risk.py ARE loaded by the live process — do not "
-            "delete the directory wholesale."
-        ),
-    ),
     # ---- offline only -------------------------------------------------
     Family(
         key="btc5m_backtest",
@@ -192,14 +156,16 @@ FAMILIES: tuple[Family, ...] = (
         label="Copy trade v1 CLI (shadow / live / on-chain)",
         path="tools/copytrade_shadow.py",
         what=(
-            "The earlier copy-trade line: polls a wallet by RPC or API and "
-            "mirrors its fills. One variant sent REAL orders to the CLOB."
+            "The earlier copy-trade line, cut down to one CLI: polls a "
+            "wallet's public activity and records what copying it would "
+            "have cost. Places no orders."
         ),
         status=RESEARCH,
         record="never traded here · its 4 scratch DBs were deleted 2026-09-21",
         verdict=(
-            "Superseded by polymarket_bot/copytrade/. One variant can place "
-            "real orders from a CLI with no operator switch in front of it."
+            "Superseded by polymarket_bot/copytrade/, which does the same "
+            "job on the dashboard. The live-order and on-chain variants were "
+            "deleted in #267; this is the last piece of that line."
         ),
     ),
     Family(

@@ -192,7 +192,16 @@ def test_collect_env_knobs_canonical_and_sorted(tmp_path):
 
 
 def test_real_tree_wiring_truth():
-    """The load-bearing facts the docs must never get wrong."""
+    """The load-bearing facts the docs must never get wrong.
+
+    (2026-09-21: the "known dead module" example this test used to pin,
+    polymarket_exec/ops/controller.py, was deleted in the dead-code cleanup —
+    it really was dead, per its own docstring and three independent audits.
+    No replacement dead-module example is pinned here; gen_docs.py's DEAD?
+    detection is itself unreliable pending the Stage F fix to its relative-
+    import handling, so asserting a specific DEAD? verdict would just pin
+    today's bug.)
+    """
     mods = gd.collect_modules(gd.REPO)
     gd.annotate_importers(gd.REPO, mods)
     by = {m.path: m for m in mods}
@@ -202,8 +211,6 @@ def test_real_tree_wiring_truth():
     # The live risk gate + executor are WIRED.
     assert by["polymarket_exec/execution/gate.py"].status == "WIRED"
     assert by["polymarket_exec/execution/live.py"].status == "WIRED"
-    # Known dead-in-active-tree module is flagged.
-    assert by["polymarket_exec/ops/controller.py"].status == "DEAD?"
 
 
 def test_test_count_is_positive_int():

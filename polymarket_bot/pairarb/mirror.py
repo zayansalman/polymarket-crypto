@@ -171,37 +171,3 @@ def price_the_copy(
         their_ts=their_ts,
         our_ts=their_ts,
     )
-
-
-def trade_dict_from_fast_fill(
-    price: float,
-    shares: float,
-    tx_hash: str,
-    resolved: tuple[str, str, str],
-    now: int,
-) -> dict[str, Any]:
-    """Adapt a fast-feed fill into the dict shape :func:`price_the_copy` expects.
-
-    The activity-API trade dict and the fast feed (``feed.py``'s ``FeedFill``,
-    from either onchain transport) carry different fields — this is the seam
-    between them so ``price_the_copy`` stays feed-agnostic. ``resolved`` is
-    ``(slug, outcome, condition_id)`` from a
-    :class:`~polymarket_bot.pairarb.market_index.TokenIndex` lookup.
-
-    Neither onchain transport carries a settlement timestamp (see ``feed.py``'s
-    ``observed_lag`` note — block timestamp is not on the log), so ``now`` — the
-    detection time — stands in for it. On this transport the two are seconds
-    apart by construction, unlike the api feed where they can differ by tens of
-    seconds; this is not false precision, it is the honest floor of what the
-    transport can report.
-    """
-    slug, outcome, condition_id = resolved
-    return {
-        "price": price,
-        "size": shares,
-        "timestamp": now,
-        "outcome": outcome,
-        "slug": slug,
-        "conditionId": condition_id,
-        "transactionHash": tx_hash,
-    }
