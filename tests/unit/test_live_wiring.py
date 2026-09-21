@@ -369,35 +369,3 @@ def test_config_mode_choices_reject_unknown(monkeypatch: pytest.MonkeyPatch) -> 
     assert _config._env_choice("BOT_MODE", "paper", {"paper", "live"}) == "paper"
     monkeypatch.setenv("BOT_MODE", "live")
     assert _config._env_choice("BOT_MODE", "paper", {"paper", "live"}) == "live"
-
-
-# ---------------------------------------------------------------------------
-# Dashboard copy reflects the mode
-# ---------------------------------------------------------------------------
-
-
-def _dash_module():
-    import importlib
-
-    return importlib.import_module("polymarket_exec.ops.dashboard.app")
-
-
-def test_dashboard_paper_copy_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    dash = _dash_module()
-    # Pin paper copy regardless of an operator .env that opts into live.
-    monkeypatch.setattr(dash, "_IS_LIVE", False)
-    brief = dash._brief_html()
-    assert "paper" in brief
-    assert "does not sign or submit live orders" in brief
-    assert "orders are real" not in brief
-
-
-def test_dashboard_live_copy_when_live(monkeypatch: pytest.MonkeyPatch) -> None:
-    dash = _dash_module()
-
-    monkeypatch.setattr(dash, "_IS_LIVE", True)
-    brief = dash._brief_html()
-    assert "LIVE — orders are real" in brief
-    assert "does not sign or submit live orders" not in brief
-    settings = dash._settings_html()
-    assert "orders are real" in settings

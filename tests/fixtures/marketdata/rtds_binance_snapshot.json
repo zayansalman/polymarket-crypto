@@ -1,0 +1,34 @@
+{
+ "payload": {
+  "data": [
+   {
+    "timestamp": 1789555564000,
+    "value": 75986
+   },
+   {
+    "timestamp": 1789555565000,
+    "value": 75986.01
+   },
+   {
+    "timestamp": 1789555566000,
+    "value": 75986.01
+   },
+   {
+    "timestamp": 1789555680000,
+    "value": 75964.01
+   },
+   {
+    "timestamp": 1789555681000,
+    "value": 75964
+   },
+   {
+    "timestamp": 1789555682000,
+    "value": 75964
+   }
+  ],
+  "symbol": "btcusdt"
+ },
+ "timestamp": 1789555683066,
+ "topic": "crypto_prices",
+ "type": "subscribe"
+}

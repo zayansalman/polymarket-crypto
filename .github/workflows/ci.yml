@@ -1,10 +1,26 @@
 name: CI
 
+# Re-enabled 2026-09-21: the dead-code-removal / re-architecture pass is done —
+# ruff and docs-drift are both green again on develop.
+#
+# develop is the integration branch every feature branch targets, so it has to
+# be covered: with main/master only, no PR into develop was ever tested and the
+# gates below only ran on the final develop -> main merge.
 on:
+  workflow_dispatch: {}
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
+
+# Adding develop roughly doubles CI volume, so stop paying for runs nobody
+# will read: a new push to the same ref cancels the one it supersedes. This
+# also covers the one case where develop is in both lists at once — while a
+# develop -> main release PR is open, a push to develop would otherwise fire
+# the push run and the PR's synchronize run on identical content.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:

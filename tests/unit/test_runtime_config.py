@@ -102,12 +102,21 @@ class TestRuntimeConfigEndpoint:
 
 
 class TestMarketSelection:
-    def test_default_is_btc_5m(self, client: TestClient) -> None:
+    def test_default_is_btc_15m(self, client: TestClient) -> None:
         from polymarket_bot import market_selection as ms
 
         sel = asyncio.run(ms.get_selection())
-        assert (sel.asset, sel.timeframe) == ("btc", "5m")
-        assert sel.loop_supported
+        assert (sel.asset, sel.timeframe) == ("btc", "15m")
+        # No loop is wired to a market family since 5m was retired.
+        assert not sel.loop_supported
+
+    def test_retired_5m_selection_falls_back_to_default(self, client: TestClient) -> None:
+        from db import set_config
+        from polymarket_bot import market_selection as ms
+
+        asyncio.run(set_config(ms.TIMEFRAME_KEY, "5m"))
+        sel = asyncio.run(ms.get_selection())
+        assert (sel.asset, sel.timeframe) == ("btc", "15m")
 
     def test_set_market_persists(self, client: TestClient) -> None:
         from polymarket_bot import market_selection as ms
@@ -124,7 +133,7 @@ class TestMarketSelection:
         assert (sel.asset, sel.timeframe) == ("eth", "1h")
 
     def test_rejects_unknown_market(self, client: TestClient) -> None:
-        for bad in ({"asset": "ltc", "timeframe": "5m"}, {"asset": "btc", "timeframe": "2m"}, "btc"):
+        for bad in ({"asset": "ltc", "timeframe": "1h"}, {"asset": "btc", "timeframe": "5m"}, "btc"):
             r = client.post("/api/runtime-config", json={"key": "market", "value": bad})
             assert r.json()["status"] == "error"
 
@@ -140,20 +149,68 @@ class TestMarketSelectorGlow:
         from polymarket_bot.market_selection import MarketSelection
         from polymarket_exec.ops.dashboard.panels import market_selector as mks
 
-        slug = "btc-updown-5m-1757750400"
+        slug = "btc-updown-15m-1757750400"
         tick = {"window_slug": slug, "up_best_bid": 0.60, "up_best_ask": 0.62}
         pos = [{"window_slug": slug, "side": "UP", "entry_price": 0.50, "shares": 5}]
         pnl = mks.open_market_pnl(open_pos=pos, daily_open=[{"asset": "doge"}], tick=tick)
-        assert pnl[("btc", "5m")] == pytest.approx(0.55)
+        assert pnl[("btc", "15m")] == pytest.approx(0.55)
         assert pnl[("doge", "1d")] is None
 
-        html = mks.render(selection=MarketSelection("btc", "5m"), open_pnl=pnl)
+        html = mks.render(selection=MarketSelection("btc", "15m"), open_pnl=pnl)
         assert "active glow-pos' data-asset='btc'" in html
-        assert "active glow-pos' data-timeframe='5m'" in html
+        assert "active glow-pos' data-timeframe='15m'" in html
         assert "glow-flat' data-asset='doge'" in html
 
         pos[0]["entry_price"] = 0.70
         pnl = mks.open_market_pnl(open_pos=pos, daily_open=[], tick=tick)
         assert "glow-neg' data-asset='btc'" in mks.render(
-            selection=MarketSelection("btc", "5m"), open_pnl=pnl
+            selection=MarketSelection("btc", "15m"), open_pnl=pnl
         )
+
+
+class TestStrategySwitches:
+    """The STRATEGIES card posts through the same endpoint as every other knob."""
+
+    def test_turning_a_strategy_off_persists(self, client: TestClient) -> None:
+        from polymarket_bot import strategies as st
+
+        r = client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "daily_altcoin", "enabled": False}},
+        )
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["value"] == {"name": "daily_altcoin", "enabled": False}
+        assert asyncio.run(st.enabled("daily_altcoin")) is False
+
+    def test_turning_a_strategy_back_on_persists(self, client: TestClient) -> None:
+        from polymarket_bot import strategies as st
+
+        client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "btc_updown", "enabled": False}},
+        )
+        assert asyncio.run(st.enabled("btc_updown")) is False
+        client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "btc_updown", "enabled": True}},
+        )
+        assert asyncio.run(st.enabled("btc_updown")) is True
+
+    def test_rejects_unknown_strategy(self, client: TestClient) -> None:
+        r = client.post(
+            "/api/runtime-config",
+            json={"key": "strategy", "value": {"name": "nope", "enabled": False}},
+        )
+        assert r.json()["status"] == "error"
+
+    def test_rejects_a_malformed_value(self, client: TestClient) -> None:
+        r = client.post(
+            "/api/runtime-config", json={"key": "strategy", "value": "daily_altcoin"}
+        )
+        assert r.json()["status"] == "error"
+
+    def test_page_renders_the_strategies_card(self, client: TestClient) -> None:
+        html = client.get("/").text
+        assert "STRATEGIES" in html
+        assert "id='strategy-daily_altcoin'" in html

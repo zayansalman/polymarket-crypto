@@ -1,8 +1,7 @@
 """Fair-value scoring for the daily altcoin scanner.
 
 Reuses :func:`polymarket_bot.strategy.signal_from_executable_edges` verbatim
-(already asset/timeframe-agnostic — every 5m shadow model in
-:mod:`polymarket_bot.shadow.signals` reuses it too). Two pieces do NOT carry
+(already asset/timeframe-agnostic). Two pieces do NOT carry
 over from :mod:`polymarket_bot.strategy`, both because this market family's
 own rules differ from the BTC 5m family's:
 
@@ -81,8 +80,7 @@ def score(view: DailyMarketView, params: _strategy.StrategyParams) -> DailySigna
 
     ``fair_up`` must already be set on ``view`` (by the caller, after
     computing sigma from that asset's closes) — this function only turns a
-    fair probability into an executable-edge decision, mirroring the shape
-    of every 5m shadow model in :mod:`polymarket_bot.shadow.signals`.
+    fair probability into an executable-edge decision.
     """
     edge_up = view.fair_up - view.up_ask if view.up_ask is not None else None
     edge_down = (1.0 - view.fair_up) - view.down_ask if view.down_ask is not None else None

@@ -373,6 +373,27 @@ def _stub_market_inputs(monkeypatch: pytest.MonkeyPatch, *, spot: float | None) 
     )
 
 
+def _archived_v0_params():
+    """The archived v0 entry gates, as `config` still records their defaults.
+
+    Lives here rather than in `paper.py` because nothing in the loop reads
+    them any more — this test is the only thing that still asks what the old
+    thresholds WOULD have done.
+    """
+    import config as _config
+    from polymarket_bot.strategy import StrategyParams
+
+    return StrategyParams(
+        min_trade_usd=_config.PAPER_MIN_TRADE_USD,
+        max_trade_usd=_config.PAPER_MAX_TRADE_USD,
+        entry_edge_min=_config.PAPER_ENTRY_EDGE_MIN,
+        min_confidence=_config.PAPER_MIN_CONFIDENCE,
+        entry_min_remaining_seconds=_config.PAPER_ENTRY_MIN_REMAINING_SECONDS,
+        entry_edge_max=_config.PAPER_ENTRY_EDGE_MAX,
+        min_entry_price=_config.PAPER_MIN_ENTRY_PRICE,
+    )
+
+
 @pytest.mark.asyncio
 async def test_no_strategy_loaded_never_signals_an_entry(test_db, monkeypatch):
     from polymarket_bot.strategy import signal_from_executable_edges
@@ -388,7 +409,7 @@ async def test_no_strategy_loaded_never_signals_an_entry(test_db, monkeypatch):
         remaining_seconds=snap.remaining_seconds,
         up_ask=0.55,
         down_ask=0.46,
-        params=paper._strategy_params(),
+        params=_archived_v0_params(),
     )
     assert old_side == "Up" and old_notional > 0
     # The loop, with no strategy loaded, does not.

@@ -1,0 +1,13 @@
+{
+ "connection_id": "test-connection-id",
+ "payload": {
+  "full_accuracy_value": "97265425688153227264",
+  "symbol": "sol/usd",
+  "timestamp": 1789555887000,
+  "value": 97.26542568815323,
+  "window_s": 60
+ },
+ "timestamp": 1789555888062,
+ "topic": "crypto_prices_twap_sixty",
+ "type": "update"
+}

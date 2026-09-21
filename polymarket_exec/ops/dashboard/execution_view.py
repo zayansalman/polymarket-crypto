@@ -15,7 +15,8 @@ import config as _config
 from db import get_config
 from polymarket_bot import runtime_knobs as _knobs
 
-from polymarket_exec.ops import feed_monitor
+from polymarket_exec.marketdata import hub as marketdata_hub
+from polymarket_exec.ops import feed_monitor, flow_recorder, macro_recorder
 from polymarket_exec.ops.dashboard import quote_feed
 from polymarket_exec.ops.dashboard.panels import _data as data
 from polymarket_exec.ops.dashboard.panels import _wallet
@@ -24,12 +25,15 @@ from polymarket_exec.ops.dashboard.panels import (
     controls,
     daily_altcoin,
     decision_engine,
+    maker as maker_panel,
     feeds,
     market,
     market_selector,
     performance,
     ribbon,
     settings as settings_panel,
+    strategies as strategies_panel,
+    strategy_card as strategy_card_panel,
     tca,
 )
 
@@ -144,7 +148,61 @@ async def execution_view_html() -> str:
         now=time.time(),
     )
     monitor = feed_monitor.current()
-    feeds_html = feeds.render(monitor.snapshot() if monitor is not None else None)
+    recorder = flow_recorder.current()
+    macro = macro_recorder.current()
+    market_data = marketdata_hub.current()
+    feeds_html = feeds.render(
+        monitor.snapshot() if monitor is not None else None,
+        recorder.snapshot() if recorder is not None else None,
+        macro.snapshot() if macro is not None else None,
+        market_data.snapshot() if market_data is not None else None,
+    )
+    # Maker: read straight from its ledger. A passive strategy's result is its
+    # fill rate as much as its P&L, so the unfilled and expired quotes come back
+    # with the filled ones rather than being filtered out here.
+    from polymarket_bot.maker import ledger as _maker_ledger
+
+    try:
+        _msummary = await _maker_ledger.summary()
+        _mquotes = await _maker_ledger.recent(25)
+        _mbands = await _maker_ledger.by_band()
+        _mqueue = await _maker_ledger.queue_report()
+        _mdecisions = await _maker_ledger.decision_counts(int(time.time()) - 86400)
+    except Exception:  # noqa: BLE001 — a missing table must not blank the page
+        _msummary, _mquotes, _mbands, _mqueue, _mdecisions = {}, [], [], {}, []
+
+    # Sits directly under FEEDS: what data arrives, then what is done with it.
+    from polymarket_bot import strategies as _strategies
+
+    _enabled = await _strategies.enabled_map()
+    # Live records for the families that actually trade. Everything else falls
+    # back to the static number the inventory carries.
+    _mset = int((_msummary or {}).get("settled_n") or 0)
+    _mwins = int((_msummary or {}).get("wins") or 0)
+    strategies_html = strategies_panel.render(
+        enabled=_enabled,
+        records={
+            "daily_altcoin": {
+                "n": daily_perf.get("n"), "pnl": daily_perf.get("pnl"),
+                "win_rate": daily_perf.get("win_rate"),
+            },
+            "maker": {
+                "n": _mset,
+                "pnl": (_msummary or {}).get("pnl"),
+                "win_rate": (_mwins / _mset) if _mset else None,
+            },
+        },
+    )
+    # STRATEGY card, under ORDER SIZE: the At a glance summary from the doc of
+    # each strategy of ours that has one, in MY STRATEGIES order.
+    from polymarket_bot import inventory as _inv
+    from polymarket_bot import strategy_docs as _sd
+
+    strategy_card_html = strategy_card_panel.render(entries=[
+        (f, _sd.glance(f.key))
+        for _, fams in _inv.by_status()
+        for f in fams
+    ])
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
@@ -158,6 +216,11 @@ async def execution_view_html() -> str:
         scan_interval_seconds=await _knobs.get("daily_scan_interval_seconds"),
         trade_usd=await _knobs.get("daily_trade_usd"),
     )
+    maker_html = maker_panel.render(
+        summary=_msummary, quotes=_mquotes, bands=_mbands,
+        queue=_mqueue, decisions=_mdecisions,
+    )
+
     settings_values = {name: await _knobs.get(name) for name in _knobs.KNOBS}
     settings_html = settings_panel.render(values=settings_values, knobs=_knobs.KNOBS)
 
@@ -166,13 +229,17 @@ async def execution_view_html() -> str:
         + ribbon_html
         + "<div class='execution-grid'>"
         + feeds_html
-        + controls_html
+        # ORDER SIZE and STRATEGY share the column beside FEEDS, one under
+        # the other, so the grid keeps its cell count.
+        + "<div class='grid-stack'>" + controls_html + strategy_card_html + "</div>"
+        + strategies_html
         + market_html
         + decision_html
         + performance_html
         + tca_html
         + blotter_html
         + daily_altcoin_html
+        + maker_html
         + settings_html
         + "</div></div>"
     )

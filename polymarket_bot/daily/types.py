@@ -1,7 +1,6 @@
 """Shared data contracts for the daily altcoin scanner.
 
-Mirrors :mod:`polymarket_bot.shadow.types` (``SnapshotView`` / ``ShadowSignal``)
-but adds an ``asset`` field, since a single scan tick evaluates several
+Carries an ``asset`` field, since a single scan tick evaluates several
 assets at once rather than one fixed market — the daily scanner has to
 compare candidates ACROSS assets, not just decide whether to trade the one
 market it was handed.

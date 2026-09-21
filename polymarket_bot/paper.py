@@ -47,7 +47,9 @@ from config import (
     PRINT_GRANULARITY_USD,
 )
 import config as _config
+from polymarket_bot import market_selection
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import strategies as _strategies
 from db import connect, get_config, journal_live_order, notify, set_config
 from logging_setup import get_logger
 from polymarket_exec.connectors.chainlink_settlement import (
@@ -64,10 +66,8 @@ from polymarket_exec.execution.gate import (
     RiskGate,
     build_gate_from_config,
 )
-from polymarket_bot.shadow import ledger as shadow_ledger
-from polymarket_bot.shadow import runner as shadow_runner
+from polymarket_exec.marketdata import hub as _marketdata_hub
 from polymarket_bot.strategy import (
-    StrategyParams,
     drift_per_second,
     fair_up_probability,
     sigma_per_second,
@@ -142,33 +142,6 @@ _MIN_CHAINLINK_SIGMA_POINTS = 30
 
 BINANCE_API = BINANCE_API_BASE
 FIVE_MINUTES = MARKET_TIMEFRAME_MINUTES * 60
-
-
-def _strategy_params() -> StrategyParams:
-    """StrategyParams for the shadow forward-tester's candidate roster.
-
-    Entry thresholds are the archived v0 defaults from ``config`` — the trading
-    loop itself no longer reads them. Sizing reads the in-memory knob cache
-    (``runtime_knobs.cached``), refreshed once per tick by ``paper_tick_once``,
-    so this stays a plain sync function.
-    """
-    # Operator runtime per-trade cap (#50): when the dashboard control is set,
-    # it governs the sizing ceiling too (unified with the gate's effective cap),
-    # so the clip actually changes without a restart. Unset → knob default, i.e.
-    # fully backward-compatible. The gate refreshed this value earlier this tick.
-    override = _risk_gate.runtime_max_trade_usd if _risk_gate is not None else None
-    max_trade_usd = (
-        override if override is not None else _knobs.cached("paper_max_trade_usd")
-    )
-    return StrategyParams(
-        min_trade_usd=_knobs.cached("paper_min_trade_usd"),
-        max_trade_usd=max_trade_usd,
-        entry_edge_min=_config.PAPER_ENTRY_EDGE_MIN,
-        min_confidence=_config.PAPER_MIN_CONFIDENCE,
-        entry_min_remaining_seconds=_config.PAPER_ENTRY_MIN_REMAINING_SECONDS,
-        entry_edge_max=_config.PAPER_ENTRY_EDGE_MAX,
-        min_entry_price=_config.PAPER_MIN_ENTRY_PRICE,
-    )
 
 
 @dataclass(frozen=True)
@@ -250,67 +223,6 @@ class PaperSnapshot:
         return self.up_best_ask is not None or self.down_best_ask is not None
 
 
-@dataclass
-class ModeStats:
-    """PnL/win-rate aggregates for one execution mode (live or paper)."""
-
-    closed_positions: int = 0
-    total_pnl_usd: float = 0.0
-    closed_notional_usd: float = 0.0
-    win_rate: float | None = None
-    avg_pnl_usd: float | None = None
-    avg_hold_seconds: float | None = None
-    open_positions: int = 0
-    open_exposure_usd: float = 0.0
-
-
-@dataclass
-class ConnectivityStatus:
-    """Per-source liveness summary read from the most recent tick.
-
-    The dashboard renders this verbatim so an operator can prove the bot is
-    talking to Polymarket even when no entries have fired — a gap between
-    real trades is normally the model skipping (risk gate / lopsided book),
-    not a disconnect, and that distinction must be visible.
-    """
-
-    tick_age_seconds: int | None = None
-    tick_stale_after_seconds: int = 0
-    spot_source: str | None = None
-    reference_source: str | None = None
-    vol_source: str | None = None
-    quote_source: str | None = None
-    has_book: bool = False
-    last_skip_reason: str | None = None
-    last_live_order_at: str | None = None
-
-
-@dataclass
-class PaperSummary:
-    running_state: str
-    open_positions: int
-    closed_positions: int
-    total_pnl_usd: float
-    open_exposure_usd: float
-    closed_notional_usd: float
-    win_rate: float | None
-    avg_pnl_usd: float | None
-    avg_hold_seconds: float | None
-    risk_state: str
-    last_signal: str
-    last_tick_at: str | None
-    last_window_slug: str | None
-    last_spot_price: float | None
-    last_fair_up_prob: float | None
-    last_up_price: float | None
-    last_edge: float | None
-    last_feed_source: str | None
-    recent_positions: list[dict[str, Any]]
-    live_stats: ModeStats = None  # type: ignore[assignment]
-    paper_stats: ModeStats = None  # type: ignore[assignment]
-    connectivity: ConnectivityStatus = None  # type: ignore[assignment]
-
-
 def _loss_halt_stop_detail(gate: Any, mode: str) -> str | None:
     """Stop-detail string when the daily loss halt is breached (#76), else None.
 
@@ -321,8 +233,8 @@ def _loss_halt_stop_detail(gate: Any, mode: str) -> str | None:
 
     LIVE mode only (#146): a breached PAPER line never hard-stops the loop —
     its entries are already blocked per tick by the gate's ``block_reason``,
-    and stopping would also kill the shadow-race recorder and settlement on a
-    line that risks zero capital (which silently froze the race on 07-02).
+    and stopping would kill settlement too, on a line that risks zero
+    capital (which silently froze the paper book on 07-02).
     ``_notify_paper_halt_pause`` surfaces the paused state instead.
     """
     if gate is None or not gate.loss_halt_breached():
@@ -359,8 +271,8 @@ async def _notify_paper_halt_pause(gate: Any, mode: str) -> None:
         "paper_halt_pause",
         f"Paper loss halt hit (realized {gate.halt_pnl:+.2f} at/below trailing "
         f"floor {gate.loss_halt_floor:+.2f}): paper entries paused until the "
-        "daily window rolls or the halt is reset — the loop keeps running and "
-        "shadow logging continues (#146).",
+        "daily window rolls or the halt is reset — the loop keeps running "
+        "and open positions still settle (#146).",
         {"halt_pnl": gate.halt_pnl, "floor": gate.loss_halt_floor},
     )
     log.warning(
@@ -447,6 +359,12 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
         await notify("paper_started", "BTC paper bot started")
     log.info("paper_loop.started", mode=mode)
 
+    # Stream the SELECTED market's books while the loop runs, so _fetch_clob_book
+    # reads them instead of polling the venue. hot=True also races a REST read
+    # against the sockets on this window. No-op without a dashboard hub.
+    _selection = await market_selection.get_selection()
+    _marketdata_hub.want(_selection.asset, _selection.timeframe, "bot loop", hot=True)
+
     # Set when the daily loss halt trips (#76): the loop stops the bot and the
     # finally surfaces this as LAST DETAIL instead of the generic stop line.
     stop_detail: str | None = None
@@ -467,8 +385,8 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
                 log.warning("paper_loop.loss_halt_stop", detail=stop_detail)
                 await notify("loss_halt_stop", stop_detail)
                 break
-            # Paper breach (#146): entries pause, the loop and the shadow
-            # race keep running — notify once per episode.
+            # Paper breach (#146): entries pause, the loop keeps running —
+            # notify once per episode.
             await _notify_paper_halt_pause(_risk_gate, mode)
             _beat()  # #147: iteration completed (even a failed tick beats)
             await _sleep_interruptible(stop_event, float(_knobs.cached('paper_tick_seconds')))
@@ -484,7 +402,8 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             if feed_task is not None:
                 feed.stop()
                 feed_task.cancel()
-            return
+            return  # the successor holds the hub demand now: leave it alone
+        _marketdata_hub.release("bot loop")
         if _live_executor is not None:
             # Flatten BEFORE dropping the executor: this thread owns it, so
             # Stop can never paper-close a live position (which would strand
@@ -552,7 +471,6 @@ async def paper_tick_once() -> PaperSnapshot:
         await _close_due_positions(snapshot, client)
         if not kill_active:
             await _maybe_open_position(snapshot)
-        await _record_and_settle_shadow(snapshot, client)
     return snapshot
 
 
@@ -608,173 +526,6 @@ async def count_open_positions(mode: str | None = None) -> int:
             return int((await cur.fetchone())["n"])
 
 
-async def load_paper_summary() -> PaperSummary:
-    """Dashboard summary from the SQLite paper ledger."""
-    async with connect() as db:
-        async with db.execute(
-            "SELECT * FROM paper_ticks ORDER BY created_at DESC LIMIT 1"
-        ) as cur:
-            tick = await cur.fetchone()
-        async with db.execute(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS exposure "
-            "FROM paper_positions WHERE state = 'open'"
-        ) as cur:
-            open_row = await cur.fetchone()
-        async with db.execute(
-            # Re-baseline (issues #22/#28): KPIs aggregate only honest-quote
-            # rows of the ACTIVE trade shape; other rows stay as audit trail.
-            "SELECT COUNT(*) AS n, COALESCE(SUM(realized_pnl_usd), 0) AS pnl, "
-            "COALESCE(SUM(notional_usd), 0) AS notional, "
-            "SUM(CASE WHEN realized_pnl_usd > 0 THEN 1 ELSE 0 END) AS wins, "
-            "AVG(realized_pnl_usd) AS avg_pnl, "
-            "AVG(strftime('%s', closed_at) - strftime('%s', opened_at)) AS avg_hold "
-            "FROM paper_positions WHERE state = 'closed' "
-            "AND quote_source = 'clob' AND strategy_style = ?",
-            (_knobs.cached('exit_style'),),
-        ) as cur:
-            closed = await cur.fetchone()
-        async with db.execute(
-            "SELECT * FROM paper_positions ORDER BY opened_at DESC LIMIT 10"
-        ) as cur:
-            recent = [dict(r) for r in await cur.fetchall()]
-        # Per-mode aggregates: same KPI rules as the combined view (honest
-        # CLOB quotes + active strategy style), partitioned by mode so live
-        # alpha is never blended with paper-only fills (issues #22/#28).
-        live_stats = await _mode_stats(db, "live")
-        paper_stats = await _mode_stats(db, "paper")
-        # Last live order touch: surfaced separately because a stale live
-        # journal is the operator's clearest signal that the bot stopped
-        # actually placing orders, even when ticks keep flowing.
-        async with db.execute(
-            "SELECT MAX(created_at) AS last_at FROM live_orders"
-        ) as cur:
-            last_live_row = await cur.fetchone()
-        last_live_order_at = last_live_row["last_at"] if last_live_row else None
-
-    last_signal = "none"
-    if tick is not None:
-        side = tick["signal_side"] or "SKIP"
-        conf = tick["confidence"] if tick["confidence"] is not None else 0.0
-        notional = tick["notional_usd"] if tick["notional_usd"] is not None else 0.0
-        last_signal = f"{side} conf {conf:.2f} ${notional:.0f}: {tick['reason']}"
-
-    open_count = int(open_row["n"] if open_row else 0)
-    closed_count = int(closed["n"] if closed else 0)
-    wins = int(closed["wins"] or 0) if closed else 0
-    win_rate = (wins / closed_count) if closed_count else None
-    avg_pnl = float(closed["avg_pnl"]) if closed and closed["avg_pnl"] is not None else None
-    avg_hold = float(closed["avg_hold"]) if closed and closed["avg_hold"] is not None else None
-    risk_state = _risk_state(open_count, tick["created_at"] if tick else None)
-    connectivity = _connectivity_from_tick(tick, last_live_order_at)
-
-    return PaperSummary(
-        running_state="paper",
-        open_positions=open_count,
-        closed_positions=closed_count,
-        total_pnl_usd=float(closed["pnl"] if closed else 0.0),
-        open_exposure_usd=float(open_row["exposure"] if open_row else 0.0),
-        closed_notional_usd=float(closed["notional"] if closed else 0.0),
-        win_rate=win_rate,
-        avg_pnl_usd=avg_pnl,
-        avg_hold_seconds=avg_hold,
-        risk_state=risk_state,
-        last_signal=last_signal,
-        last_tick_at=tick["created_at"] if tick else None,
-        last_window_slug=tick["window_slug"] if tick else None,
-        last_spot_price=_f(tick, "spot_price"),
-        last_fair_up_prob=_f(tick, "fair_up_prob"),
-        last_up_price=_f(tick, "market_up_price"),
-        last_edge=_f(tick, "edge"),
-        last_feed_source=tick["feed_source"] if tick else None,
-        recent_positions=recent,
-        live_stats=live_stats,
-        paper_stats=paper_stats,
-        connectivity=connectivity,
-    )
-
-
-async def _mode_stats(db: Any, mode: str) -> ModeStats:
-    """KPI aggregate for one execution mode — same exclusions as the combined view."""
-    async with db.execute(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS exposure "
-        "FROM paper_positions WHERE state = 'open' AND mode = ?",
-        (mode,),
-    ) as cur:
-        open_row = await cur.fetchone()
-    async with db.execute(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(realized_pnl_usd), 0) AS pnl, "
-        "COALESCE(SUM(notional_usd), 0) AS notional, "
-        "SUM(CASE WHEN realized_pnl_usd > 0 THEN 1 ELSE 0 END) AS wins, "
-        "AVG(realized_pnl_usd) AS avg_pnl, "
-        "AVG(strftime('%s', closed_at) - strftime('%s', opened_at)) AS avg_hold "
-        "FROM paper_positions WHERE state = 'closed' "
-        "AND quote_source = 'clob' AND strategy_style = ? AND mode = ?",
-        (_knobs.cached('exit_style'), mode),
-    ) as cur:
-        closed = await cur.fetchone()
-    closed_count = int(closed["n"] if closed else 0)
-    wins = int(closed["wins"] or 0) if closed else 0
-    win_rate = (wins / closed_count) if closed_count else None
-    avg_pnl = float(closed["avg_pnl"]) if closed and closed["avg_pnl"] is not None else None
-    avg_hold = float(closed["avg_hold"]) if closed and closed["avg_hold"] is not None else None
-    return ModeStats(
-        closed_positions=closed_count,
-        total_pnl_usd=float(closed["pnl"] if closed else 0.0),
-        closed_notional_usd=float(closed["notional"] if closed else 0.0),
-        win_rate=win_rate,
-        avg_pnl_usd=avg_pnl,
-        avg_hold_seconds=avg_hold,
-        open_positions=int(open_row["n"] if open_row else 0),
-        open_exposure_usd=float(open_row["exposure"] if open_row else 0.0),
-    )
-
-
-def _connectivity_from_tick(
-    tick: Any, last_live_order_at: str | None
-) -> ConnectivityStatus:
-    """Decompose the last tick's feed_source / book presence into per-source liveness.
-
-    The tick itself proves the loop is alive AND that market discovery + book
-    fetch + spot read succeeded. The feed_source string carries one label per
-    source so a degraded sub-feed shows up here even when the loop keeps
-    journaling ticks.
-    """
-    stale_after = int(max(_knobs.cached('paper_tick_seconds') * 3, 20))
-    if tick is None:
-        return ConnectivityStatus(
-            tick_age_seconds=None,
-            tick_stale_after_seconds=stale_after,
-            last_live_order_at=last_live_order_at,
-        )
-    try:
-        parsed = datetime.fromisoformat(str(tick["created_at"]).replace("Z", "+00:00"))
-    except ValueError:
-        parsed = None
-    age = (
-        max(0, int((datetime.now(UTC) - parsed).total_seconds()))
-        if parsed is not None
-        else None
-    )
-    parts = _parse_feed_source(tick["feed_source"])
-    has_book = (
-        tick["up_best_ask"] is not None
-        or tick["down_best_ask"] is not None
-        or tick["up_best_bid"] is not None
-        or tick["down_best_bid"] is not None
-    )
-    return ConnectivityStatus(
-        tick_age_seconds=age,
-        tick_stale_after_seconds=stale_after,
-        spot_source=parts.get("spot"),
-        reference_source=parts.get("ref"),
-        vol_source=parts.get("vol"),
-        quote_source=parts.get("quotes") or (tick["quote_source"] if "quote_source" in tick.keys() else None),
-        has_book=has_book,
-        last_skip_reason=tick["reason"],
-        last_live_order_at=last_live_order_at,
-    )
-
-
 def _parse_feed_source(raw: Any) -> dict[str, str]:
     """Parse 'spot=...;ref=...;vol=...;quotes=...' into a dict; lenient on shape."""
     if not isinstance(raw, str):
@@ -786,29 +537,6 @@ def _parse_feed_source(raw: Any) -> dict[str, str]:
         k, v = chunk.split("=", 1)
         out[k.strip()] = v.strip()
     return out
-
-
-def _f(row: Any, key: str) -> float | None:
-    """Safe float for a nullable journal column (market prices can be None)."""
-    if row is None:
-        return None
-    val = row[key]
-    return float(val) if val is not None else None
-
-
-def _risk_state(open_positions: int, last_tick_at: str | None) -> str:
-    if open_positions > 1:
-        return "BREACH: more than one open BTC paper position"
-    if last_tick_at is None:
-        return "IDLE: no ticks yet"
-    try:
-        ts = datetime.fromisoformat(last_tick_at.replace("Z", "+00:00"))
-    except ValueError:
-        return "UNKNOWN: bad tick timestamp"
-    age = (datetime.now(UTC) - ts).total_seconds()
-    if age > max(_knobs.cached('paper_tick_seconds') * 3, 20):
-        return f"STALE: last tick {int(age)}s ago"
-    return "OK"
 
 
 def _now() -> int:
@@ -891,8 +619,8 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
     # Edge against the EXECUTABLE price: a BUY of side X pays X's best ask.
     # A degraded feed pins fair_up at 0.5, so any "edge" against a lopsided
     # book would be an artifact — journal no edge at all in that state.
-    # Journaled as market observations for the dashboard and the shadow
-    # roster; nothing on the trading path acts on them.
+    # Journaled as market observations for the dashboard; nothing on the
+    # trading path acts on them.
     if degraded_reason is None:
         edge_up = fair_up - up_book.best_ask if up_book.buyable else None
         edge_down = (1.0 - fair_up) - down_book.best_ask if down_book.buyable else None
@@ -1032,7 +760,13 @@ async def _get_window_reference(
 
 
 async def _fetch_clob_book(client: httpx.AsyncClient, token_id: str) -> BookTop:
-    """Top-of-book for one outcome token from the public CLOB /book endpoint.
+    """Top-of-book for one outcome token: the market-data hub, else CLOB /book.
+
+    The hub streams this market's book over the CLOB market channel and serves
+    it in microseconds; a REST read is ~200 ms old before it even lands. It
+    hands back nothing at all rather than a book older than ``BOOK_MAX_STALE_S``
+    or one whose sockets are down, and then this falls back to the REST read
+    below (also when the process runs without a hub at all).
 
     CLOB books list levels worst-to-best, so the best level is the LAST
     element of each array (same convention as the live executor's
@@ -1041,6 +775,10 @@ async def _fetch_clob_book(client: httpx.AsyncClient, token_id: str) -> BookTop:
     """
     if not token_id:
         return EMPTY_BOOK
+    streamed = _marketdata_hub.book_top(token_id, _marketdata_hub.BOOK_MAX_STALE_S)
+    if streamed is not None:
+        return BookTop(best_bid=streamed.best_bid, best_ask=streamed.best_ask,
+                       bid_size=streamed.bid_size, ask_size=streamed.ask_size)
     try:
         r = await client.get(
             f"{POLYMARKET_CLOB_API}/book", params={"token_id": token_id}
@@ -1215,6 +953,11 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
 
 
 async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
+    # Operator switch (STRATEGIES card): off gates ENTRIES only. Start/Stop
+    # still owns the loop itself, and every exit/settlement path below runs
+    # regardless, so switching off never strands an open position.
+    if not await _strategies.enabled("btc_updown"):
+        return
     if not snapshot.signal_side or snapshot.notional_usd <= 0:
         return
     async with connect() as db:
@@ -1529,60 +1272,6 @@ def _window_start_from_slug(slug: str) -> int | None:
         return int(str(slug).rsplit("-", 1)[-1])
     except (TypeError, ValueError):
         return None
-
-
-async def _settle_due_shadows(
-    client: httpx.AsyncClient, current_slug: str | None
-) -> None:
-    """Settle every resolvable OPEN shadow window via the Chainlink connector.
-
-    Resolves the ABSOLUTE window winner (Up/Down) — reusing the same settlement
-    read as live positions — so candidates that opened on windows the live bot
-    never traded are still settled. The in-progress window is skipped; the
-    connector returns ``None`` for windows not yet settleable, which we skip.
-    """
-    async with connect() as db:
-        async with db.execute(
-            "SELECT DISTINCT window_slug FROM model_shadow_positions "
-            "WHERE state = 'open'"
-        ) as cur:
-            slugs = [str(row["window_slug"]) for row in await cur.fetchall()]
-    for slug in slugs:
-        if slug == current_slug:
-            continue
-        start_ts = _window_start_from_slug(slug)
-        if start_ts is None:
-            continue
-        connector = _make_settlement_connector(client, slug)
-        try:
-            up_won = await connector.settle_window(start_ts)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("shadow.settle_read_failed", window_slug=slug, error=str(exc))
-            continue
-        if up_won is None:
-            continue
-        await shadow_ledger.settle_open_shadow(
-            window_slug=slug,
-            outcome_side="Up" if up_won else "Down",
-            settlement_price=1.0,
-            resolved_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        )
-
-
-async def _record_and_settle_shadow(
-    snapshot: PaperSnapshot, client: httpx.AsyncClient
-) -> None:
-    """Run the shadow forward-tester, fully isolated so it can never break the
-    live trading loop. Records each candidate's would-be trade for this window
-    and settles any now-resolvable shadow windows."""
-    if _config.SHADOW_ENABLED != "on":
-        return
-    try:
-        params = _strategy_params()
-        await shadow_runner.record_shadow(snapshot, params)
-        await _settle_due_shadows(client, snapshot.window_slug)
-    except Exception as exc:  # noqa: BLE001 — never let the harness break the loop
-        log.warning("shadow.harness_error", error=str(exc))
 
 
 async def _close_position(

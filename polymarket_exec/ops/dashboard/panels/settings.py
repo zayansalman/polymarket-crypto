@@ -8,7 +8,7 @@ needed to surface it here; no per-knob markup to hand-write. Pure
 
 Every control posts to the same generic endpoint
 (``POST /api/runtime-config {key, value}``) via the same generic JS helper
-(``setKnob``, ``static/dashboard.js``) — one code path for all ~23 knobs
+(``setKnob``, ``static/dashboard.js``) — one code path for all ~22 knobs
 instead of one bespoke function per knob.
 """
 from __future__ import annotations

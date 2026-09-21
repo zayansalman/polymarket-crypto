@@ -1,8 +1,8 @@
 # Polymarket Crypto — a binary-markets trading lab
 
 A local research and execution stack for Polymarket crypto binary markets: a pricing
-model, a paper/live execution stack, a shadow forward-tester for candidate strategies,
-and a validated tick-replay backtester. Originally built around BTC 5-minute Up/Down
+model and a paper/live execution stack. Every strategy it runs is visible in the
+dashboard. Originally built around BTC 5-minute Up/Down
 markets; that line closed 2026-08-29 (#182) after a shadow copy-trade/maker-quoting
 research phase came back net negative. Next chapter (daily/hourly/longer-horizon
 markets) is not yet chosen or built — see Status below.
@@ -22,10 +22,11 @@ phases ran on it:
   memo, postmortem).
 - A shadow-only copy-trade / maker-quoting line (#182, reopened 2026-08-04) tested
   whether a top Polymarket account's two-sided quoting strategy was reproducible
-  natively (`polymarket_bot/pairarb/`) or copy-tradeable
-  (`polymarket_bot/pairarb/mirror.py` + `tools/copytrade_*.py`). A second independent
-  read confirmed net-negative results (doge -$307.68/n=1980, min -$174.47/n=1756) and
-  zero accumulated fills on the pairarb side — closed 2026-08-29, never armed for live.
+  natively or copy-tradeable. A second independent read confirmed net-negative results
+  (doge -$307.68/n=1980, min -$174.47/n=1756) and zero accumulated fills on the pairarb
+  side — closed 2026-08-29, never armed for live. That code has since been deleted.
+
+Copy-trade was removed from the app on 2026-09-21: no wallets are followed.
 
 Next chapter: daily/hourly/longer-horizon crypto markets. Category not yet chosen,
 nothing built for it yet — see `tasks/todo.md` for current status and open items.
@@ -40,12 +41,13 @@ polymarket_bot/           # the live loop + signal math
 ├── controller.py         #   start/stop, watchdog, silent-stop detector
 ├── strategy.py           #   pricing-model math + executable-edge signal (pure)
 ├── params.py             #   operator-tunable runtime params
-├── shadow/                #   the closed BTC-only model race (see docs/archive/ for its verdict)
-└── pairarb/               #   two-sided maker quoting + copy-trade research, shadow only, closed (#182)
+├── fees.py               #   canonical Polymarket taker-fee math (live + paper)
+├── daily/                #   daily altcoin Up/Down scanner (paper only)
+└── pairarb/              #   market_index.py only (used by daily/); the rest of #182 is deleted
 
 polymarket_exec/          # execution / connectors / ops
 ├── core/                 #   domain types, interfaces, exceptions
-├── strategy/  connectors/  storage/  backtest/
+├── strategy/  connectors/  storage/
 ├── execution/            #   paper lifecycle + LIVE executor (multi-gated) + RiskGate
 └── ops/dashboard/         #   FastAPI operator dashboard (SSE), panels, runtime controls
 

@@ -7,20 +7,20 @@ httpx[http2]==0.27.2
 aiosqlite==0.20.0
 python-dotenv==1.0.1
 structlog==24.4.0
-gradio==5.49.1
+# fastapi/uvicorn/jinja2 are the real dashboard's stack. Previously these arrived
+# only as gradio's transitive deps — gradio itself was never imported by the live
+# app (dashboard.py, its sole importer, was a dead fallback branch that never ran;
+# removed 2026-09-21). Declared explicitly now that gradio is gone.
+fastapi==0.116.1
+uvicorn==0.35.0
+jinja2==3.1.6
 py-clob-client-v2==1.0.1
 websockets==16.0
-
-# Offline replay harness (tools/offline_replay.py, issue #56).
-# Parquet via huggingface-hub direct download (no `datasets` runtime needed);
-# polars for the joins because the underlying Polymarket dataset is tagged
-# polars and it's materially lighter than pandas for the orderbook scale.
-huggingface-hub==0.26.2
-polars==1.17.1
-# numpy backs the regime-attribution instrument (tools/regime_attribution.py, #128)
-# — FDR + permutation stats. Declared here + in the pyproject [test] extra so CI
-# can import it (gen_docs + test collection), matching polars/hf-hub above.
-numpy>=1.26
+# zoneinfo's IANA database: python:3.11-slim ships no system tzdata, and the macro
+# calendar parsers convert naive US Eastern release times (DST-aware).
+tzdata==2025.3
+# Renders docs/strategies/*.md at /docs in the dashboard.
+markdown-it-py==4.0.0
 
 pytest==8.3.3
 pytest-asyncio==0.24.0

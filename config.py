@@ -80,7 +80,7 @@ MARKET_TIMEFRAME_MINUTES = 5
 # Polymarket resolves BTC 5m markets on its Chainlink BTC/USD stream, NOT on
 # Binance (measured basis: Chainlink ~ $50.7 BELOW Binance, std $3.8). The
 # reference open, live spot, and sigma all come from these two endpoints;
-# Binance remains only as a volatility-shape fallback and for backtest tooling.
+# Binance remains only as a volatility-shape fallback.
 POLYMARKET_CRYPTO_PRICE_API = os.getenv(
     "POLYMARKET_CRYPTO_PRICE_API", "https://polymarket.com/api/crypto/crypto-price"
 )
@@ -104,10 +104,6 @@ BOT_MODE = _env_choice("BOT_MODE", "paper", {"paper", "live"})
 # soaked -$7.87 in 70 minutes under honest fills (median hold 8s, paying the
 # spread every round trip); kept only for experiments.
 EXIT_STYLE = _env_choice("EXIT_STYLE", "settle", {"settle", "scalp"})
-# Shadow forward-tester: log candidate strategies' would-be trades in parallel
-# with the live strategy (no real orders placed). "off" disables it entirely.
-SHADOW_ENABLED = _env_choice("SHADOW_ENABLED", "on", {"on", "off"})
-
 # --- Live trading (Polymarket CLOB) ---------------------------------------
 POLYMARKET_CLOB_API = os.getenv("POLYMARKET_CLOB_API", "https://clob.polymarket.com")
 POLYMARKET_CHAIN_ID = _env_int("POLYMARKET_CHAIN_ID", 137)  # Polygon mainnet
@@ -151,16 +147,9 @@ PAPER_TARGET_RETURN = _env_float("PAPER_TARGET_RETURN", 0.10)
 PAPER_STOP_RETURN = _env_float("PAPER_STOP_RETURN", -0.08)
 PAPER_TIME_EXIT_SECONDS = int(os.getenv("PAPER_TIME_EXIT_SECONDS", "45"))
 
-HISTORY_CSV_PATH = Path(
-    os.getenv(
-        "HISTORY_CSV_PATH",
-        str(DATA_DIR / "polymarket_history.csv"),
-    )
-).expanduser()
-
-# --- Daily altcoin Up/Down shadow strategy (issue #185) ---------------------
+# --- Daily altcoin Up/Down scanner (issue #185) -----------------------------
 # Paper-only, no live gate. Scans the daily (24h-window) Up/Down family across
-# several thinner altcoin markets and shadow-trades a fixed-size position on
+# several thinner altcoin markets and paper-trades a fixed-size position on
 # whichever asset currently shows the strongest signal.
 DAILY_ASSETS = [
     a.strip().lower()

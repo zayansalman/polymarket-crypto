@@ -7,6 +7,6 @@ preserving the exact same visual design.
 
 from __future__ import annotations
 
-from polymarket_exec.ops.dashboard.app import app, launch
+from polymarket_exec.ops.dashboard.app import app
 
-__all__ = ["app", "launch"]
+__all__ = ["app"]

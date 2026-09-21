@@ -1,0 +1,47 @@
+# Files kept out of the Docker build context.
+#
+# The Dockerfile does `COPY . .`, so anything not excluded here ends up in the
+# image. Settings reach the container at run time instead:
+#   docker run --env-file .env ...
+#
+# Docker matches patterns from the context root: ".env" alone would only catch
+# ./.env, so anything that can appear at any depth needs a "**/" prefix.
+# Comments must start at the beginning of a line; a trailing "# ..." would
+# become part of the pattern.
+
+# Secrets: .env and every copy or variant of it (.env.bak, backups under data/).
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+# The template holds no secrets and is tracked in git.
+!.env.example
+
+# Local data: SQLite ledgers, recordings, env backups. The image uses /data.
+data/
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+local_private/
+archive/
+
+# Agent and tool state (.claude/worktrees holds full copies of the repo).
+.claude/
+.superpowers/
+
+# Version control, virtualenvs, caches, build output, editor and OS files.
+.git/
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.idea/
+.vscode/
+**/.DS_Store
+**/*.log
