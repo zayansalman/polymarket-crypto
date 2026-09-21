@@ -1,15 +1,14 @@
-"""Two-sided maker quoting on 5-minute Up/Down markets — shadow only (#182).
+"""Leftovers of the two-sided 5m maker-quoting shadow line (#182, closed 2026-08-29).
 
-Reproduces the strategy run by the venue's most profitable 5m account
-(``0xf8af03f1e68ee7162db8983f0d6dd0dc869854c6``): rest bids on **both** legs of
-the same window so a completed pair costs less than the 1.00 it redeems for.
+That line's own modules (fills, quoter, types, ledger) and the two-sided
+copy-trade research tooling built alongside it (feed, onchain, and the RPC
+fast-feed path in tools/copytrade_shadow.py) are gone — deleted 2026-09-21
+once the operator confirmed polymarket_bot/copytrade's live watcher had
+replaced them. Two modules from that era are still live and stay here:
 
-This is market making, not arbitrage. Measured on the live venue 2026-08-14 the
-best-*ask* sum is 1.0100 — crossing both legs costs 1.0449 after fees for a 1.00
-payout, so no taker opportunity exists. The best-*bid* sum is 0.990, and maker
-fills are fee-free. The edge is entirely in being the resting order.
+* ``mirror.py`` — ``price_the_copy``, used by the live copytrade trader.
+* ``market_index.py`` — ``parse_market``, used by the live daily scanner.
 
-**No order is ever placed from this package.** It reads public books and the
-public trade tape and simulates what resting orders would have done. Live
-quoting would be a separate, operator-armed decision (``AGENTS.md``).
+Neither places an order. Both just happen to have been written for this
+package before the strategy it was named for was retired.
 """

@@ -1,23 +1,6 @@
-"""Operator controls and telemetry."""
+"""Operator controls and background recorders.
 
-from __future__ import annotations
-
-from polymarket_exec.ops.incidents import (
-    IncidentManager,
-    IncidentState,
-    RunbookActions,
-)
-from polymarket_exec.ops.telemetry import (
-    FeedHealth,
-    FeedHealthTracker,
-    LatencyTracker,
-)
-
-__all__ = [
-    "FeedHealth",
-    "FeedHealthTracker",
-    "LatencyTracker",
-    "IncidentManager",
-    "IncidentState",
-    "RunbookActions",
-]
+incidents.IncidentManager and telemetry.FeedHealthTracker/LatencyTracker used
+to be re-exported here. Neither had a live consumer anywhere outside this
+barrel and their own tests. Removed 2026-09-21.
+"""
