@@ -1,17 +1,17 @@
 name: CI
 
-# PAUSED during the dead-code-removal / re-architecture pass (chore/cleanup-dead-code,
-# 2026-09-21). Ruff and docs-drift are hard gates tuned for the old tree; they will be
-# red for the whole rebuild by design (files moving, whole packages deleted, gen_docs
-# describing a tree that no longer matches). Re-enable by restoring the `push`/
-# `pull_request` triggers below once the rebuild has a shape worth gating again — see
-# Stage F of the cleanup plan. `workflow_dispatch` keeps it runnable by hand meanwhile.
+# Re-enabled 2026-09-21: the dead-code-removal / re-architecture pass is done —
+# ruff and docs-drift are both green again on develop.
+#
+# develop is the integration branch every feature branch targets, so it has to
+# be covered: with main/master only, no PR into develop was ever tested and the
+# gates below only ran on the final develop -> main merge.
 on:
   workflow_dispatch: {}
-  # push:
-  #   branches: [main, master, develop]
-  # pull_request:
-  #   branches: [main, master, develop]
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
 
 # Adding develop roughly doubles CI volume, so stop paying for runs nobody
 # will read: a new push to the same ref cancels the one it supersedes. This
