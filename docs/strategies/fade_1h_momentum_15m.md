@@ -15,7 +15,7 @@
 
 ### Concept
 
-Zayan's idea: take the 15-minute position from the 1-hour momentum at a computed price, not a fixed 40c. The hour's side should count for more late in the hour than early. Mean reversion matters in the first windows and fades as the hour goes on. There are no gates: the entry price is the output of a calculation. The name records the hypothesis that the fitted momentum weight $\theta$ comes out negative, so the model fades; if it comes out positive, the same model follows.
+Zayan's idea: take the 15-minute position from the 1-hour momentum at a price the maths calculates live. No price rules anywhere. The hour's side should count for more late in the hour than early. Mean reversion matters in the first windows and fades as the hour goes on. The entry price is the output of a calculation. The name records the hypothesis that the fitted momentum weight $\theta$ comes out negative, so the model fades; if it comes out positive, the same model follows.
 
 ### Main assumption
 
@@ -58,8 +58,8 @@ Research only: nothing is wired to trade it, and none of $\theta$, $\kappa_0$, $
 
 ### How it was derived
 
-- **2026-09-21, Zayan.** Pulled his 18 recent manual trades on the old rule (follow the 1h side on 15m if it costs 40c or more). Four were right, for −$9.61. The opposite side would have made +$12.07.
-- **Claude.** Checked the rule on 1,088 settled 15m markets (`threshold_scan.py`). Following the 1h side lost below about 50c and made money from about 55c up (+4.66c, t = 1.98). Fading it lost (−7.84c, t = −3.33).
+- **2026-09-21, Zayan.** Pulled his 18 recent manual trades, placed by hand from the 1h momentum. Four were right, for −$9.61. The opposite side would have made +$12.07.
+- **Claude.** Measured how the 1h momentum side paid on 1,088 settled 15m markets, by the price it traded at (`threshold_scan.py`). It lost at low prices and paid at high ones; always fading it lost (−7.84c, t = −3.33).
 - **Zayan** set out the concept above. **Claude** formalised it as Brownian motion with a decaying Ornstein–Uhlenbeck pull, and the entry price as an optimisation.
 - A Monte Carlo check of every closed form (`validate_math.py`) found six errors in the first draft, all fixed. The literature changed the reversion term to a soft-clipped lag kernel (Kitron & Wengrowicz 2026).
 
@@ -87,18 +87,18 @@ It is research only: nothing is wired to trade it yet.
 ## How it was formed
 
 - **2026-09-21, Zayan (operator).** Asked to pull his recent manual trades on the idea that he
-  was wrong in most of them, so the opposite side might be right. His rule had been: read the
-  1h momentum and its side, and take the 15m position on that side if it cost at least 40c.
-  Of 18 settled trades since 2026-09-13, 4 were right: −$9.61 on $20.39 staked. The opposite
+  was wrong in most of them, so the opposite side might be right. He had been placing them by
+  hand from the 1h momentum and its side. Of 18 settled trades since 2026-09-13, 4 were right:
+  −$9.61 on $20.39 staked. The opposite
   side of each would have made +$12.07. Four of the losses were one correlated window: BTC, ETH,
   XRP and DOGE all bought Up at Sep 20 3:45–4:00PM ET, and all four fell.
-- **2026-09-21, Claude.** Checked the rule on 1,088 settled 15m markets instead of 18 trades
-  (`threshold_scan.py`). Following the 1h momentum side lost below about 50c and made money
-  from about 55c up; fading it was significantly negative (table under Evidence). The bulk
-  data did not support a flat fade.
-- **2026-09-21, Zayan.** Set out the concept: take the 15m position from the 1h momentum at a
-  computed price, not a fixed 40c. The 1h side should weigh more in the last 15m of the hour
-  than the first. At the start of the hour, a 1h market at 60c with the 15m at 55c on the same
+- **2026-09-21, Claude.** Looked at 1,088 settled 15m markets instead of 18 trades
+  (`threshold_scan.py`): how the 1h momentum side paid, by the price it traded at. It lost at
+  low prices and paid at high ones; always taking the other side lost (table under Evidence).
+  A flat fade was not supported.
+- **2026-09-21, Zayan.** Set out the concept: no rules or thresholds anywhere — the maths
+  decides the side, the entry price and the size. The 1h side should weigh more in the last
+  15m of the hour than the first. At the start of the hour, a 1h market at 60c with the 15m at 55c on the same
   side is not a buy on its own, because the 15m can still turn on its own momentum. Both
   momentums count, with importance that depends on where in the hour the window sits. Mean
   reversion belongs in the first one or two windows and should decay as the 1h momentum takes
@@ -332,7 +332,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Sources
 
-- Concept, the 40c rule and the name: Zayan (operator), 2026-09-21. His trades:
+- Concept and name: Zayan (operator), 2026-09-21. His trades:
   [0xc1daaec036a8a49e4a71cad2daa51dcb19bb00c5](https://polymarket.com/profile/0xc1daaec036a8a49e4a71cad2daa51dcb19bb00c5).
 - Research write-up with the full derivation, validation table and pre-registered historical
   test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`.
