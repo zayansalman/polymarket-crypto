@@ -37,7 +37,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from polymarket_bot.strategies import MINE
 
 RUNNING = "running"
 GATED = "operator_gated"
@@ -72,7 +71,6 @@ class Family:
     """What it has traded, in plain numbers. 'Never traded' when it has not."""
     switch: str | None = None
     """The ``strategies.STRATEGIES`` key that turns it on, when it has one."""
-    group: str = MINE
     verdict: str = ""
     """The one-line case for keeping or deleting it. Blank for the ones that
     are plainly working."""
@@ -147,20 +145,11 @@ FAMILIES: tuple[Family, ...] = (
 )
 
 
-def in_group(group: str) -> tuple[Family, ...]:
-    """Every family one card owns, in status order then registry order."""
-    ordered = sorted(
-        (f for f in FAMILIES if f.group == group),
-        key=lambda f: STATUS_ORDER.index(f.status),
-    )
-    return tuple(ordered)
-
-
-def by_status(group: str) -> list[tuple[str, list[Family]]]:
-    """``[(status, families)]`` for one card, in STATUS_ORDER."""
+def by_status() -> list[tuple[str, list[Family]]]:
+    """``[(status, families)]`` in STATUS_ORDER, registry order within each."""
     out: list[tuple[str, list[Family]]] = []
     for status in STATUS_ORDER:
-        rows = [f for f in FAMILIES if f.group == group and f.status == status]
+        rows = [f for f in FAMILIES if f.status == status]
         if rows:
             out.append((status, rows))
     return out

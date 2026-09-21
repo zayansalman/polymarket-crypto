@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Remove the strategy group split (2026-09-21)
+
+The group field existed only to move copy-trade switches onto their own card.
+With copy-trade gone every strategy and family sat in the one group, so the
+split did nothing.
+
+- Removed: `strategies.MINE`, `Strategy.group`, `strategies.in_group`,
+  `Family.group`, `inventory.in_group`, and the group argument of
+  `inventory.by_status`.
+- The strategy-doc fingerprint hashes the old constant in place of the field,
+  so no doc needed re-stamping.
+- No behaviour change: MY STRATEGIES, the STRATEGY card and the docs index
+  render byte-for-byte the same.
+
 ## Unreleased — Remove copy-trade (2026-09-21)
 
 The operator is cleaning up the app and will pick wallets to follow again,

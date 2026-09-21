@@ -118,7 +118,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/pairarb/market_index.py` | WIRED | 1 | Outcome-token -> market metadata resolver for the daily altcoin scanner. |
 | `polymarket_bot/paper.py` | WIRED | 3 | BTC 5-minute trading engine (paper by default, live opt-in). |
 | `polymarket_bot/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
-| `polymarket_bot/strategies.py` | WIRED | 8 | Operator strategy switches: which strategies may open new positions. |
+| `polymarket_bot/strategies.py` | WIRED | 7 | Operator strategy switches: which strategies may open new positions. |
 | `polymarket_bot/strategy.py` | WIRED | 3 | Shared BTC 5-minute binary strategy math. |
 | `polymarket_bot/strategy_docs.py` | WIRED | 4 | One document per strategy family, kept in step with the code it describes. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |

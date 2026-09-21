@@ -200,7 +200,7 @@ async def execution_view_html() -> str:
 
     strategy_card_html = strategy_card_panel.render(entries=[
         (f, _sd.glance(f.key))
-        for _, fams in _inv.by_status(_strategies.MINE)
+        for _, fams in _inv.by_status()
         for f in fams
     ])
     market_html = market.render(tick, open_pos)

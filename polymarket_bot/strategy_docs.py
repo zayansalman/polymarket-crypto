@@ -102,12 +102,14 @@ def tracked_files(fam: _inv.Family) -> list[Path]:
 def fingerprint(fam: _inv.Family) -> str:
     """12 hex chars over the family's identity and every tracked file's bytes.
 
-    Identity (name, status, path, switch, group) is in the hash because a
+    Identity (name, status, path, switch) is in the hash because a
     renamed or re-statused strategy is a changed strategy. ``record`` and
     ``verdict`` are not: they are running commentary, not behaviour.
     """
     h = hashlib.sha256()
-    for part in (fam.key, fam.label, fam.status, fam.path, fam.switch or "", fam.group):
+    # "mine" is the value every family held in the removed ``Family.group``.
+    # Hashing it keeps each doc's fingerprint unchanged by that removal.
+    for part in (fam.key, fam.label, fam.status, fam.path, fam.switch or "", "mine"):
         h.update(part.encode() + b"\n")
     for path in tracked_files(fam):
         h.update(path.relative_to(ROOT).as_posix().encode() + b"\n")
