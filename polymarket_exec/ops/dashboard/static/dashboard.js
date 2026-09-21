@@ -450,24 +450,6 @@ function handleRefresh() {
     .finally(function() { setButtonsDisabled(false); });
 }
 
-function handleRefreshBacktest() {
-  var btn = document.getElementById('btn-refresh-backtest');
-  if (btn) btn.disabled = true;
-  fetch('/api/data')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var el = document.getElementById('backtest-content');
-      if (el && data.backtest) el.innerHTML = data.backtest;
-      showToast('Backtest report refreshed', 'success');
-    })
-    .catch(function(err) {
-      showToast('Refresh failed: ' + err.message, 'error');
-    })
-    .finally(function() {
-      if (btn) btn.disabled = false;
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Data Refresh — updates DOM from JSON payload
 // ---------------------------------------------------------------------------
@@ -522,18 +504,6 @@ function updateDashboard(data) {
   if (data.activity) {
     var act = document.getElementById('activity-content');
     if (act) act.innerHTML = data.activity || '';
-  }
-
-  // History
-  if (data.history) {
-    var hist = document.getElementById('history-content');
-    if (hist) hist.innerHTML = data.history || '';
-  }
-
-  // Backtest
-  if (data.backtest) {
-    var bt = document.getElementById('backtest-content');
-    if (bt) bt.innerHTML = data.backtest || '';
   }
 }
 

@@ -1,8 +1,0 @@
-{
-  "slug": "btc-updown-5m-1700000000",
-  "question": "Bitcoin Up or Down - Dec 14, 2023?",
-  "start_ts": 1700000000,
-  "end_ts": 1700000300,
-  "up_price": 0.52,
-  "down_price": 0.48
-}

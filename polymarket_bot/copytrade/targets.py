@@ -1,10 +1,10 @@
 """Wallets worth mirroring, and the measurement that earned them the place.
 
 **One target, chosen 2026-09-20 on a deliberately short window.**
-`tools/wallet_research/recent_wallets.py` ranked every wallet on the last THREE
+An offline ranking script (since deleted) ranked every wallet on the last THREE
 days of resolved 15-minute Up-or-Down markets (996 markets, 822k fills, each
 fill labelled maker or taker against the `takerOnly=true` feed). The previous
-40-name registry was screened over 30 days and `holdout_test.py` showed that
+40-name registry was screened over 30 days and a holdout test showed that
 screen had no predictive value out of sample, so length of window was not what
 was missing. This list is short on purpose: follow one wallet, log every trade,
 and let real paper outcomes settle it.

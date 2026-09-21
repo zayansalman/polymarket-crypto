@@ -25,15 +25,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# `polars` + `huggingface-hub` back the offline replay/lead-lag tools and their
-# tests (tests/unit/test_offline_replay.py, test_chainlink_lead_lag.py). They
-# live in requirements.txt but were missing here, so CI's `pip install -e .[test]`
-# never installed them and those modules broke pytest COLLECTION — failing the
-# test job AND docs-drift (gen_docs can't import the tool) (#79). Pinned to
-# match requirements.txt.
+# (polars + huggingface-hub dropped 2026-09-21: they backed the offline replay
+# and Chainlink lead-lag tools, both deleted.)
 # (numpy dropped 2026-09-21: it backed tools/regime_attribution.py, #128, which
 # no longer exists in the tree — only stale .pyc files remained.)
-test = ["pytest>=8.0", "pytest-asyncio>=0.24", "polars>=1.17", "huggingface-hub>=0.26"]
+test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
 # One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
 # Day-to-day trading uses py-clob-client-v2, a core dependency.
@@ -58,9 +54,6 @@ target-version = "py311"
 "polymarket_exec/ops/dashboard/app.py" = ["E402"]
 "tests/e2e/test_dashboard_flow.py" = ["E402"]
 "tests/unit/test_dashboard.py" = ["E402"]
-"tools/backtest_btc_strategy.py" = ["E402"]
-"tools/copytrade_dashboard.py" = ["E402"]
-"tools/copytrade_shadow.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

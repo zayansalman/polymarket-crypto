@@ -23,7 +23,7 @@ phases ran on it:
 - A shadow-only copy-trade / maker-quoting line (#182, reopened 2026-08-04) tested
   whether a top Polymarket account's two-sided quoting strategy was reproducible
   natively (`polymarket_bot/pairarb/`) or copy-tradeable
-  (`polymarket_bot/pairarb/mirror.py` + `tools/copytrade_*.py`). A second independent
+  (`polymarket_bot/pairarb/mirror.py` + a copy-trade CLI, since deleted). A second independent
   read confirmed net-negative results (doge -$307.68/n=1980, min -$174.47/n=1756) and
   zero accumulated fills on the pairarb side — closed 2026-08-29, never armed for live.
 
@@ -46,7 +46,7 @@ polymarket_bot/           # the live loop + signal math
 
 polymarket_exec/          # execution / connectors / ops
 ├── core/                 #   domain types, interfaces, exceptions
-├── strategy/  connectors/  storage/  backtest/
+├── strategy/  connectors/  storage/
 ├── execution/            #   paper lifecycle + LIVE executor (multi-gated) + RiskGate
 └── ops/dashboard/         #   FastAPI operator dashboard (SSE), panels, runtime controls
 

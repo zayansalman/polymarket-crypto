@@ -88,7 +88,6 @@ def price_the_copy(
     fee_rate: float = 0.07,
     min_shares: float = MIN_ORDER_SHARES,
     skip_below_min: bool = False,
-    max_their_size: float | None = None,
     max_slippage: float | None = None,
 ) -> CopyFill | None:
     """Price a copy of ``trade`` against the book we would actually face.
@@ -121,13 +120,6 @@ def price_the_copy(
     if not asks:
         return None
     if skip_below_min and their_size < min_shares:
-        return None
-    if max_their_size is not None and their_size > max_their_size:
-        # Decline the target's largest clips. NOTE: the size/PnL analysis that
-        # motivated this filter was WITHDRAWN — it inferred outcomes from the
-        # target's redemptions, and redemption is lazy (winners sit unredeemed
-        # for days), so it could not distinguish a loss from an un-cashed win.
-        # This ceiling is an untested operator hypothesis, not a finding.
         return None
 
     # Clamp to the venue floor: an order below it is unplaceable, not merely

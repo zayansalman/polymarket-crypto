@@ -20,12 +20,5 @@ websockets==16.0
 # calendar parsers convert naive US Eastern release times (DST-aware).
 tzdata==2025.3
 
-# Offline replay harness (tools/offline_replay.py, issue #56).
-# Parquet via huggingface-hub direct download (no `datasets` runtime needed);
-# polars for the joins because the underlying Polymarket dataset is tagged
-# polars and it's materially lighter than pandas for the orderbook scale.
-huggingface-hub==0.26.2
-polars==1.17.1
-
 pytest==8.3.3
 pytest-asyncio==0.24.0
