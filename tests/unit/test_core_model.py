@@ -103,6 +103,9 @@ class TestPosition:
         assert p.state == "open"
         assert p.closed_at is None
         assert p.realized_pnl_usd is None
+        assert p.id is None
+        assert p.mode is None
+        assert p.exit_reason is None
 
     def test_notional_is_entry_price_times_size(self) -> None:
         p = Position(
