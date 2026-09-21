@@ -24,7 +24,8 @@ Statuses, narrowest to widest:
 Every entry was verified against the tree on 2026-09-21, the day
 chronos_signal.py, the shadow roster's table and five dead scratch databases
 were deleted off the back of this list — and the day #267 deleted the v0 stack
-and the pair-arb strategy, which dropped off it the same way. ``tests/unit/
+and the pair-arb strategy, and copy-trade was removed, all of which dropped
+off it the same way. ``tests/unit/
 test_inventory.py`` re-checks the falsifiable half of that on every run — that
 each path still exists, and that the switch registry and this list agree — so
 a family cannot quietly drop off the card by being deleted or renamed.
@@ -34,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from polymarket_bot.strategies import COPY, MINE
+from polymarket_bot.strategies import MINE
 
 RUNNING = "running"
 GATED = "operator_gated"
@@ -105,20 +106,6 @@ FAMILIES: tuple[Family, ...] = (
         record="19 positions · 18 settled −$67.08 · 1 open",
         switch="daily_altcoin",
     ),
-    Family(
-        key="copytrade",
-        label="Copy trade — followed wallets",
-        path="polymarket_bot/copytrade/",
-        what=(
-            "Polls each followed wallet's activity feed (~20s behind) and "
-            "books a paper copy of its fills, priced against the live ask."
-        ),
-        status=RUNNING,
-        record="55 copies · all settled −$93.45 · 200 decisions logged",
-        switch="copy_macro_daily",
-        group=COPY,
-        verdict="switches are on the COPY TRADE WALLETS card",
-    ),
     # ---- wired, but cannot trade --------------------------------------
     Family(
         key="btc_updown",
@@ -150,23 +137,6 @@ FAMILIES: tuple[Family, ...] = (
         status=RESEARCH,
         record="Never traded — offline only",
         verdict="Backtests a strategy that no longer exists.",
-    ),
-    Family(
-        key="copytrade_v1",
-        label="Copy trade v1 CLI (shadow / live / on-chain)",
-        path="tools/copytrade_shadow.py",
-        what=(
-            "The earlier copy-trade line, cut down to one CLI: polls a "
-            "wallet's public activity and records what copying it would "
-            "have cost. Places no orders."
-        ),
-        status=RESEARCH,
-        record="never traded here · its 4 scratch DBs were deleted 2026-09-21",
-        verdict=(
-            "Superseded by polymarket_bot/copytrade/, which does the same "
-            "job on the dashboard. The live-order and on-chain variants were "
-            "deleted in #267; this is the last piece of that line."
-        ),
     ),
     Family(
         key="wallet_research",

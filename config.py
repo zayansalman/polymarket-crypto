@@ -73,14 +73,6 @@ DASHBOARD_SERVER_PORT = int(os.getenv("DASHBOARD_SERVER_PORT", "7860"))
 # networks, while data-api.binance.vision serves the same /api/v3 endpoints.
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
-# Public trade/position history, no key required. Used by the copy-trade watcher
-# to see a target wallet's fills. It runs ~20s behind the chain, which is
-# irrelevant for the daily markets it watches (median 2-3.5 HOURS of runway) and
-# would be fatal on the 15m/1h ones, where measured slippage at 11-30s lag is
-# 9.56c against edges under 1c.
-POLYMARKET_DATA_API = os.getenv(
-    "POLYMARKET_DATA_API", "https://data-api.polymarket.com"
-)
 CHAINLINK_STREAM_URL = "https://data.chain.link/streams/btc-usd-cexprice-streams"
 MARKET_TIMEFRAME_MINUTES = 5
 

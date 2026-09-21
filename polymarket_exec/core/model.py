@@ -91,14 +91,13 @@ class Quote:
 
 @dataclass(frozen=True)
 class Fill:
-    """One executed trade, ours or observed from someone else's wallet.
+    """One executed trade.
 
-    Deliberately venue-agnostic: the live executor's own fills, a copy-trade
-    target's public fill, and a maker's resting-order fill all reduce to
-    "this many shares of this side, at this price, for this fee" once
-    they're through the venue-specific parsing. What differs — how the fill
-    was detected, whether it crossed the spread — belongs in the strategy
-    that produced it, not in the fill itself.
+    Deliberately venue-agnostic: the live executor's own fills and a maker's
+    resting-order fill both reduce to "this many shares of this side, at this
+    price, for this fee" once they're through the venue-specific parsing.
+    What differs — how the fill was detected, whether it crossed the spread —
+    belongs in the strategy that produced it, not in the fill itself.
     """
 
     market_slug: str
@@ -122,12 +121,11 @@ class Fill:
 class Position:
     """One strategy's position in one market: entry, and, once closed, exit.
 
-    Every ledger in the repo (``polymarket_bot/{copytrade,maker,daily}/
-    ledger.py``, and the ``paper_positions`` table itself) stores exactly
-    this shape today, each with its own column names and its own
-    hand-written SQL. This is the type a repository (issue #266, step 2)
-    reads a row into and writes a row from, so that shape stops being
-    reinvented per strategy.
+    Every ledger in the repo (``polymarket_bot/{maker,daily}/ledger.py``,
+    and the ``paper_positions`` table itself) stores exactly this shape
+    today, each with its own column names and its own hand-written SQL. This
+    is the type a repository (issue #266, step 2) reads a row into and writes
+    a row from, so that shape stops being reinvented per strategy.
     """
 
     market_slug: str
