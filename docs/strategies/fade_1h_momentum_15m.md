@@ -8,7 +8,7 @@
 | Status | offline only |
 | Switch | none — nothing to turn on |
 | Code | `tools/fade_1h_momentum_15m/` — 3 files |
-| Code fingerprint | `8e64a661d470` |
+| Code fingerprint | `a3ca60e9bd16` |
 <!-- END GENERATED:strategy -->
 
 ## What it does
@@ -202,4 +202,5 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-21 · `a3ca60e9bd16` · Lint only: removed an unused import from threshold_scan.py. No change to the analysis.
 - 2026-09-21 · `8e64a661d470` · Doc created: Zayan's concept, the maths as validated against simulation and the literature, and the two analyses that started it. Historical test pending.
