@@ -582,12 +582,16 @@ def render(
     rows = build_rows(snap, flow, macro, marketdata)
     issues = sum(r.level in ("warn", "down") for r in rows)
     note = "all OK" if not issues else f"{issues} issue{'s' if issues != 1 else ''}"
+    # A <details> fold like ORDER SIZE: the table is long, and the issue count
+    # stays in the header when it is closed. dashboard.js stores open/closed
+    # by ``data-fold`` and re-applies it after every refresh swaps this HTML out.
     return (
-        "<section class='card feeds-card'>"
-        f"<div class='card-h'>FEEDS<span class='win{' warn' if issues else ''}'>{note}</span></div>"
+        "<details class='card feeds-card fold' data-fold='feeds' open>"
+        "<summary class='card-h'><span class='fold-title'>FEEDS</span>"
+        f"<span class='win{' warn' if issues else ''}'>{note}</span></summary>"
         "<div class='feeds-scroll'><table class='de-tail-tbl feeds-tbl'>"
         "<thead><tr><th>Feed</th><th>Connection</th><th>Used for</th><th>Used by</th>"
         "<th class='feeds-delay'>Delay</th><th>Status</th></tr></thead>"
         f"<tbody>{''.join(_row_html(r) for r in rows)}</tbody></table></div>"
-        "</section>"
+        "</details>"
     )

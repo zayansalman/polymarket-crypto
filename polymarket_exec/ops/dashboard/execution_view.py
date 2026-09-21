@@ -33,6 +33,7 @@ from polymarket_exec.ops.dashboard.panels import (
     ribbon,
     settings as settings_panel,
     strategies as strategies_panel,
+    strategy_card as strategy_card_panel,
     tca,
 )
 
@@ -192,6 +193,16 @@ async def execution_view_html() -> str:
             },
         },
     )
+    # STRATEGY card, under ORDER SIZE: the At a glance summary from the doc of
+    # each strategy of ours that has one, in MY STRATEGIES order.
+    from polymarket_bot import inventory as _inv
+    from polymarket_bot import strategy_docs as _sd
+
+    strategy_card_html = strategy_card_panel.render(entries=[
+        (f, _sd.glance(f.key))
+        for _, fams in _inv.by_status(_strategies.MINE)
+        for f in fams
+    ])
     market_html = market.render(tick, open_pos)
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
@@ -218,7 +229,9 @@ async def execution_view_html() -> str:
         + ribbon_html
         + "<div class='execution-grid'>"
         + feeds_html
-        + controls_html
+        # ORDER SIZE and STRATEGY share the column beside FEEDS, one under
+        # the other, so the grid keeps its cell count.
+        + "<div class='grid-stack'>" + controls_html + strategy_card_html + "</div>"
         + strategies_html
         + market_html
         + decision_html

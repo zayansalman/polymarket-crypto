@@ -10,7 +10,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
 | `logging_setup.py` | WIRED | 19 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 15 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 16 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/controller.py` | WIRED | 1 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
 | `polymarket_bot/daily/__init__.py` | pkg | 1 | Daily (24h-window) altcoin Up/Down shadow strategy (issue #185). |
 | `polymarket_bot/daily/ledger.py` | WIRED | 1 | Persistence for the daily altcoin scanner's paper positions. |
@@ -19,7 +19,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/fees.py` | WIRED | 2 | Canonical Polymarket taker-fee math. |
-| `polymarket_bot/inventory.py` | WIRED | 3 | Every strategy family in this repo, including the ones that do nothing. |
+| `polymarket_bot/inventory.py` | WIRED | 5 | Every strategy family in this repo, including the ones that do nothing. |
 | `polymarket_bot/maker/__init__.py` | pkg | 3 | (needs docstring) |
 | `polymarket_bot/maker/filler.py` | WIRED | 1 | Decide whether a resting quote would really have filled, and settle it. |
 | `polymarket_bot/maker/ledger.py` | WIRED | 3 | Paper ledger for resting maker quotes. |
@@ -32,7 +32,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
 | `polymarket_bot/strategies.py` | WIRED | 8 | Operator strategy switches: which strategies may open new positions. |
 | `polymarket_bot/strategy.py` | WIRED | 3 | Shared BTC 5-minute binary strategy math. |
-| `polymarket_bot/strategy_docs.py` | WIRED | 2 | One document per strategy family, kept in step with the code it describes. |
+| `polymarket_bot/strategy_docs.py` | WIRED | 4 | One document per strategy family, kept in step with the code it describes. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/connectors/__init__.py` | pkg | 2 | Exchange and data connectors. |
 | `polymarket_exec/connectors/chainlink_settlement.py` | WIRED | 2 | Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21). |
@@ -59,7 +59,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/__init__.py` | pkg | 3 | Operator controls and background recorders. |
 | `polymarket_exec/ops/dashboard/__init__.py` | pkg | 2 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/ops/dashboard/app.py` | WIRED | 1 | FastAPI dashboard for the local Polymarket crypto trading lab. |
-| `polymarket_exec/ops/dashboard/docs_view.py` | WIRED | 1 | Strategy docs in the dashboard: ``/strategy-docs`` and ``/strategy-docs/<key>``. |
+| `polymarket_exec/ops/dashboard/docs_view.py` | WIRED | 2 | Strategy docs in the dashboard: ``/strategy-docs`` and ``/strategy-docs/<key>``. |
 | `polymarket_exec/ops/dashboard/execution_view.py` | WIRED | 1 | Execution view orchestrator (#37). |
 | `polymarket_exec/ops/dashboard/panels/__init__.py` | pkg | 2 | Dashboard panels. |
 | `polymarket_exec/ops/dashboard/panels/_data.py` | WIRED | 2 | Read-only SQLite loaders for dashboard panels. |
@@ -77,6 +77,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/dashboard/panels/ribbon.py` | WIRED | 1 | Top status ribbon: wallet, P&L, open-position (live) P&L, loss-halt control. |
 | `polymarket_exec/ops/dashboard/panels/settings.py` | WIRED | 1 | Settings panel: every dashboard-editable runtime knob (#206). |
 | `polymarket_exec/ops/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
+| `polymarket_exec/ops/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
 | `polymarket_exec/ops/dashboard/panels/tca.py` | WIRED | 1 | TCA panel: quoted spread, half-spread, edge capture, Brier calibration. |
 | `polymarket_exec/ops/dashboard/quote_feed.py` | WIRED | 2 | Background quote poller for the dashboard's order-size ticket. |
 | `polymarket_exec/ops/feed_monitor.py` | WIRED | 3 | Always-on feed monitor: keeps the live feeds connected and checks each one. |

@@ -11,6 +11,69 @@
 | Code fingerprint | `91319a8794bc` |
 <!-- END GENERATED:strategy -->
 
+## At a glance
+
+### Concept
+
+Zayan's idea: take the 15-minute position from the 1-hour momentum at a computed price, not a fixed 40c. The hour's side should count for more late in the hour than early. Mean reversion matters in the first windows and fades as the hour goes on. There are no gates: the entry price is the output of a calculation. The name records the hypothesis that the fitted momentum weight $\theta$ comes out negative, so the model fades; if it comes out positive, the same model follows.
+
+### Main assumption
+
+The log price is Brownian motion with a drift, plus an Ornstein–Uhlenbeck pull whose strength decays through the hour. The 1-hour market is priced efficiently when read, so its price can be inverted for the drift. Increments are Gaussian, and Binance stands in for Chainlink, which settles these markets.
+
+### The maths
+
+The price process, with $s$ in hours from the top of the hour:
+
+$$dX=\big[\mu-\kappa(s)\,(X-a_t)\big]\,ds+\sigma\,dW,\qquad \kappa(s)=\kappa_0e^{-\lambda s}$$
+
+The stretch it reverts from, a decaying kernel over the last twelve 15m candles, each soft-clipped:
+
+$$M_t=\sum_{j=1}^{12}w_j\,c\tanh\!\Big(\frac{r_{-j}}{c}\Big),\qquad w_j\propto j^{-\alpha}$$
+
+The drift the 1h price implies, given the hour's move so far $x_t$:
+
+$$\hat\mu_H=\frac{\sigma\sqrt{1-t}\;\Phi^{-1}(m_H)-x_t}{1-t}$$
+
+The chance the window closes Up, with $y_\tau$ the window's move so far:
+
+$$p=\Phi\!\left(\frac{y_\tau-(1-e^{-K})\,M_t+\theta\hat\mu\,G}{\sqrt{V+\theta^2\hat v\,G^2}}\right)$$
+
+The taker break-even price, with fee rate $f=0.07$:
+
+$$a^*=\frac{(1+f)-\sqrt{(1+f)^2-4fp}}{2f}$$
+
+$K$, $G$ and $V$ are the exact integrals of the decaying pull over the time left. The full doc derives them.
+
+### How it works
+
+At a decision time inside one of the hour's four windows:
+
+1. Read the hour's move $x_t$, the window's move $y_\tau$, the last twelve 15m returns, and $\sigma$ from the last 60 one-minute returns.
+2. Invert the 1h market's price for the drift, and blend it with the trailing spot return using minimum-variance weights.
+3. Compute $p$ for the window.
+4. As taker, buy below $a^*$. As maker, rest the bid that maximises fill probability times edge. Size by Kelly.
+
+Research only: nothing is wired to trade it, and none of $\theta$, $\kappa_0$, $\lambda$, $\alpha$ or $c$ is fitted yet.
+
+### How it was derived
+
+- **2026-09-21, Zayan.** Pulled his 18 recent manual trades on the old rule (follow the 1h side on 15m if it costs 40c or more). Four were right, for −$9.61. The opposite side would have made +$12.07.
+- **Claude.** Checked the rule on 1,088 settled 15m markets (`threshold_scan.py`). Following the 1h side lost below about 50c and made money from about 55c up (+4.66c, t = 1.98). Fading it lost (−7.84c, t = −3.33).
+- **Zayan** set out the concept above. **Claude** formalised it as Brownian motion with a decaying Ornstein–Uhlenbeck pull, and the entry price as an optimisation.
+- A Monte Carlo check of every closed form (`validate_math.py`) found six errors in the first draft, all fixed. The literature changed the reversion term to a soft-clipped lag kernel (Kitron & Wengrowicz 2026).
+
+### References
+
+- Full derivation and the pre-registered historical test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`
+- Scripts: `tools/fade_1h_momentum_15m/manual_trades_flip.py`, `threshold_scan.py`, `validate_math.py`
+- Binaries as options on Brownian motion: Taleb, *Quantitative Finance* 2019, [arXiv 1703.06351](https://arxiv.org/abs/1703.06351)
+- 15m reversal in crypto: Kitron & Wengrowicz 2026, [arXiv 2608.21888](https://arxiv.org/abs/2608.21888)
+- Time-varying Ornstein–Uhlenbeck: Vasicek 1977; Hull & White 1990
+- Boundary crossing: Wang & Pötzelberger, *J. Appl. Prob.* 1997
+- Forecast combination: Bates & Granger 1969
+- Kelly sizing: Kelly 1956; Thorp 2006
+
 ## What it does
 
 Prices each 15-minute Up/Down window from a model of how the price moves through the hour. The
@@ -202,6 +265,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-21 · `91319a8794bc` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `91319a8794bc` · Status moved from offline only to cannot trade: the offline-only status was removed (#273). Nothing is wired to trade it yet.
 - 2026-09-21 · `a3ca60e9bd16` · Lint only: removed an unused import from threshold_scan.py. No change to the analysis.
 - 2026-09-21 · `8e64a661d470` · Doc created: Zayan's concept, the maths as validated against simulation and the literature, and the two analyses that started it. Historical test pending.

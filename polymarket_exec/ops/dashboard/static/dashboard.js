@@ -239,7 +239,18 @@ function swapKeepingInputs(container, html) {
       kept.push({ id: el.id, value: el.value, focus: el === active, dirty: el.dataset.dirty });
     }
   });
+  // Cards marked data-static hold reference text, not live data (the STRATEGY
+  // card). The live node goes back in place of its fresh copy, so the pick and
+  // the rendered maths survive without being redone every refresh.
+  var statics = {};
+  container.querySelectorAll('[data-static]').forEach(function(el) {
+    statics[el.dataset.static] = el;
+  });
   container.innerHTML = html;
+  container.querySelectorAll('[data-static]').forEach(function(el) {
+    var live = statics[el.dataset.static];
+    if (live) el.replaceWith(live);
+  });
   restoreFolds(container);  // a collapsed panel must stay collapsed across refreshes
 
   kept.forEach(function(k) {
@@ -259,6 +270,78 @@ function swapKeepingInputs(container, html) {
   // actually stops the jumping.
   updateTicket();  // a kept share count must be re-priced at the fresh quote
 }
+
+// ---------------------------------------------------------------------------
+// STRATEGY card: pick a strategy, read its summary
+// ---------------------------------------------------------------------------
+
+// A native dropdown closes the moment its node leaves the page, and every
+// refresh moves the card. While the picker has focus the newest view is
+// parked and applied once the pick is made — or after HOLD_MAX_MS, so an
+// abandoned dropdown can't freeze the dashboard.
+var HOLD_MAX_MS = 15000;
+var heldExecView = null;
+var heldSince = 0;
+
+function pickerHasFocus() {
+  var a = document.activeElement;
+  return !!(a && a.id === 'strategy-pick');
+}
+
+function applyExecView(html) {
+  var execEl = document.getElementById('execution-content');
+  if (execEl) swapKeepingInputs(execEl, html);
+}
+
+function releaseHeldView() {
+  if (heldExecView === null) return;
+  var html = heldExecView;
+  heldExecView = null;
+  applyExecView(html);
+}
+
+function showStrategy(key) {
+  var card = document.querySelector('.strategy-card');
+  if (!card || !card.querySelector('.sc-body[data-strategy="' + key + '"]')) return;
+  card.querySelectorAll('.sc-body').forEach(function(el) {
+    el.hidden = el.dataset.strategy !== key;
+  });
+  var pick = document.getElementById('strategy-pick');
+  if (pick) pick.value = key;
+  var docs = card.querySelector('.sc-docs');
+  if (docs) docs.href = '/strategy-docs/' + encodeURIComponent(key);
+}
+
+function pickStrategy(el) {
+  showStrategy(el.value);
+  try { localStorage.setItem('strategy-card:pick', el.value); } catch (e) {}
+  el.blur();          // hands the refresh back to the stream...
+  releaseHeldView();  // ...and applies what it held (onblur won't fire in a window without focus)
+}
+
+// Called by KaTeX's auto-render once it loads. Each summary is rendered once:
+// the card node is kept across refreshes, so its maths stays rendered.
+function renderStrategyMath() {
+  if (typeof renderMathInElement !== 'function') return;
+  document.querySelectorAll('.strategy-card .sc-body').forEach(function(el) {
+    if (el.dataset.math === '1') return;
+    renderMathInElement(el, {
+      delimiters: [
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false }
+      ],
+      throwOnError: false
+    });
+    el.dataset.math = '1';
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  try {
+    var saved = localStorage.getItem('strategy-card:pick');
+    if (saved) showStrategy(saved);
+  } catch (e) {}
+});
 
 function setLossHalt() {
   var el = document.getElementById('halt-usd');
@@ -467,8 +550,13 @@ function updateDashboard(data) {
 
   // Execution view (status ribbon + strategy/market/perf/TCA/blotter)
   if (data.execution_view) {
-    var execEl = document.getElementById('execution-content');
-    if (execEl) swapKeepingInputs(execEl, data.execution_view || '');
+    if (pickerHasFocus() && (heldExecView === null || Date.now() - heldSince < HOLD_MAX_MS)) {
+      if (heldExecView === null) heldSince = Date.now();
+      heldExecView = data.execution_view;
+    } else {
+      heldExecView = null;
+      applyExecView(data.execution_view);
+    }
   }
 
   // Activity
