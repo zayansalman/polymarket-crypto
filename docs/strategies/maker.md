@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `maker` on the MY STRATEGIES card |
 | Code | `polymarket_bot/maker/` — 5 files |
-| Code fingerprint | `ed4856e27df9` |
+| Code fingerprint | `1b7011906a67` |
 <!-- END GENERATED:strategy -->
 
 ## What it does
@@ -148,4 +148,5 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 
 ## Changelog
 
+- 2026-09-21 · `1b7011906a67` · Docstring-only change in ledger.py from the copy-trade removal (#272); behaviour unchanged.
 - 2026-09-21 · `ed4856e27df9` · Doc created.

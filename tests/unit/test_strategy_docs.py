@@ -29,7 +29,7 @@ def lab(tmp_path, monkeypatch):
     code.write_text("EDGE = 1\n")
     fam = _inv.Family(
         key="toy", label="Toy strategy", path="strat.py",
-        what="Does one thing.", status=_inv.RESEARCH, record="never traded",
+        what="Does one thing.", status=_inv.UNWIRED, record="never traded",
     )
     monkeypatch.setattr(sd, "ROOT", tmp_path)
     monkeypatch.setattr(sd, "DOCS_DIR", tmp_path / "docs")

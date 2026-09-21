@@ -15,16 +15,19 @@ Statuses, narrowest to widest:
 
 ``RUNNING``       auto-runs whenever the dashboard is up.
 ``GATED``         has a loop, but only runs while the operator holds Start.
-``UNWIRED``       code is imported at runtime but cannot reach a market.
+``UNWIRED``       cannot reach a market: imported at runtime with nothing
+                  wired to it, or built but not wired in yet.
 ``DEAD``          nothing imports it outside tests; it cannot run at all.
                   No family holds this status today — chronos_signal.py and
                   the shadow roster's table were deleted on 2026-09-21.
-``RESEARCH``      an offline script or CLI. Never part of the live process.
 
 Every entry was verified against the tree on 2026-09-21, the day
 chronos_signal.py, the shadow roster's table and five dead scratch databases
 were deleted off the back of this list — and the day #267 deleted the v0 stack
-and the pair-arb strategy, which dropped off it the same way. ``tests/unit/
+and the pair-arb strategy, and copy-trade was removed, all of which dropped
+off it the same way. The same day the whole offline-only group went too —
+the 5m backtest and replay, the wallet-research scripts, the forecast journal
+and the Chainlink lead-lag study — and its status with it. ``tests/unit/
 test_inventory.py`` re-checks the falsifiable half of that on every run — that
 each path still exists, and that the switch registry and this list agree — so
 a family cannot quietly drop off the card by being deleted or renamed.
@@ -34,23 +37,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from polymarket_bot.strategies import COPY, MINE
+from polymarket_bot.strategies import MINE
 
 RUNNING = "running"
 GATED = "operator_gated"
 UNWIRED = "unwired"
 DEAD = "dead"
-RESEARCH = "research_only"
 
 STATUS_LABEL: dict[str, str] = {
     RUNNING: "running now",
     GATED: "runs on Start",
     UNWIRED: "cannot trade",
     DEAD: "dead",
-    RESEARCH: "offline only",
 }
 
-STATUS_ORDER: list[str] = [RUNNING, GATED, UNWIRED, DEAD, RESEARCH]
+STATUS_ORDER: list[str] = [RUNNING, GATED, UNWIRED, DEAD]
 
 
 @dataclass(frozen=True)
@@ -105,20 +106,6 @@ FAMILIES: tuple[Family, ...] = (
         record="19 positions · 18 settled −$67.08 · 1 open",
         switch="daily_altcoin",
     ),
-    Family(
-        key="copytrade",
-        label="Copy trade — followed wallets",
-        path="polymarket_bot/copytrade/",
-        what=(
-            "Polls each followed wallet's activity feed (~20s behind) and "
-            "books a paper copy of its fills, priced against the live ask."
-        ),
-        status=RUNNING,
-        record="55 copies · all settled −$93.45 · 200 decisions logged",
-        switch="copy_macro_daily",
-        group=COPY,
-        verdict="switches are on the COPY TRADE WALLETS card",
-    ),
     # ---- wired, but cannot trade --------------------------------------
     Family(
         key="btc_updown",
@@ -138,7 +125,7 @@ FAMILIES: tuple[Family, ...] = (
             "TRADE BLOTTER card is permanently empty because of this."
         ),
     ),
-    # ---- offline only -------------------------------------------------
+    # ---- built, nothing wired to trade it -----------------------------
     Family(
         key="fade_1h_momentum_15m",
         label="Fade 1h Momentum on 15m",
@@ -149,82 +136,12 @@ FAMILIES: tuple[Family, ...] = (
             "mean reversion that decays through the hour — and computes the "
             "entry price instead of using a threshold."
         ),
-        status=RESEARCH,
+        status=UNWIRED,
         record="Never traded · maths validated 2026-09-21, historical test pending",
         verdict=(
-            "Offline until the pre-registered historical test says whether a "
-            "fee-free edge survives on the real 15m tape; paper only after that."
-        ),
-    ),
-    Family(
-        key="btc5m_backtest",
-        label="BTC 5m offline backtest / replay",
-        path="polymarket_bot/backtest.py",
-        what=(
-            "Offline grid search over recorded 5m windows for the retired "
-            "BTC binary pricing strategy, plus a deterministic replay."
-        ),
-        status=RESEARCH,
-        record="Never traded — offline only",
-        verdict="Backtests a strategy that no longer exists.",
-    ),
-    Family(
-        key="copytrade_v1",
-        label="Copy trade v1 CLI (shadow / live / on-chain)",
-        path="tools/copytrade_shadow.py",
-        what=(
-            "The earlier copy-trade line, cut down to one CLI: polls a "
-            "wallet's public activity and records what copying it would "
-            "have cost. Places no orders."
-        ),
-        status=RESEARCH,
-        record="never traded here · its 4 scratch DBs were deleted 2026-09-21",
-        verdict=(
-            "Superseded by polymarket_bot/copytrade/, which does the same "
-            "job on the dashboard. The live-order and on-chain variants were "
-            "deleted in #267; this is the last piece of that line."
-        ),
-    ),
-    Family(
-        key="wallet_research",
-        label="Wallet-research programme",
-        path="tools/wallet_research/",
-        what=(
-            "Offline wallet screening — maker/taker labelling, edge-per-"
-            "share ranking, band tests, holdout falsification. Produced the "
-            "0.55-0.92 band the maker now quotes."
-        ),
-        status=RESEARCH,
-        record="Never traded · 8.0 GB of scratch DBs under data/wallet_research/",
-        verdict=(
-            "The scripts earn their place; the 8 GB of scratch databases do "
-            "not. m15.db alone is 4.6 GB."
-        ),
-    ),
-    Family(
-        key="forecast_journal",
-        label="Slow-market forecasting pilot",
-        path="tools/forecast_journal.py",
-        what=(
-            "Logs a hand-made probability on a slow market before looking at "
-            "the book, then scores that forecast once it resolves."
-        ),
-        status=RESEARCH,
-        record="Never traded · not one forecast ever logged",
-        verdict="A CLI whose signal generator is you. Never started.",
-    ),
-    Family(
-        key="chainlink_lead_lag",
-        label="Chainlink-vs-Binance lead-lag study",
-        path="tools/chainlink_lead_lag.py",
-        what=(
-            "Measures how far Chainlink BTC/USD lags Binance, and whether "
-            "the next Chainlink print is predictable from it."
-        ),
-        status=RESEARCH,
-        record="Never traded · never even run (no output file exists)",
-        verdict=(
-            "Diagnostics behind the entry_edge_max cap, not a trading rule."
+            "Not wired to trade until the pre-registered historical test says "
+            "whether a fee-free edge survives on the real 15m tape; paper only "
+            "after that."
         ),
     ),
 )

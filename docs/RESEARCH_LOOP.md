@@ -19,7 +19,7 @@ inside a closed, human-gated loop.
 
 3. **Backtest** — every proposal is replayed on the recorded archive
    **walk-forward, out-of-sample** (train window → test window, never
-   in-sample), using the existing replay harness. Selection-bias and
+   in-sample), on a replay harness still to be built. Selection-bias and
    multiple-testing caveats are reported (N hypotheses tried → expected
    false positives).
 

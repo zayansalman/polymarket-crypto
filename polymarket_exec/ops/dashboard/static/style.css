@@ -384,9 +384,8 @@ body {
   .tk-apply { margin-left: 0; }
 }
 
-/* ── secondary panels ── */
-.secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-.feed-wrap, .backtest-report { font-size: 11.5px; max-height: 320px; overflow: auto; }
+/* ── activity feed ── */
+.feed-wrap { font-size: 11.5px; max-height: 320px; overflow: auto; }
 .feed-list { list-style: none; margin: 0; padding: 0; }
 .feed-list li { padding: 5px 0; border-bottom: 1px solid var(--border-strong); color: var(--muted); }
 .feed-list code { font-family: var(--font-mono); color: var(--label); margin-right: 6px; }
@@ -412,9 +411,6 @@ body {
 .feed-list li[class^="k-"] { border-left: 3px solid var(--k); padding-left: 8px; }
 .feed-list li[class^="k-"] strong { color: var(--k); font-weight: 600; }
 .feed-list li.k-other strong { color: var(--text); font-weight: 500; }
-.backtest-report h2, .backtest-report h3 { font-size: 12px; color: var(--text); margin: 10px 0 6px; }
-.backtest-report ul { margin: 0; padding-left: 16px; color: var(--muted); }
-.backtest-report code, .backtest-report pre { font-family: var(--font-mono); }
 
 /* ── sse indicator ── */
 .sse-indicator { display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-right: 4px; }
@@ -433,7 +429,7 @@ body {
 @keyframes slidein { from { transform: translateX(20px); opacity: 0; } }
 
 @media (max-width: 880px) {
-  .execution-grid, .secondary { grid-template-columns: 1fr; }
+  .execution-grid { grid-template-columns: 1fr; }
   .statrow { grid-template-columns: repeat(2, 1fr); }
   .ribbon-stats { gap: 14px; }
 }
@@ -473,62 +469,6 @@ body {
 .halt-status { font-family: var(--font-mono); font-weight: 700; }
 .halt-status.warn { color: var(--warn, #c98a3a); }
 
-/* COPY TRADE card ------------------------------------------------------- */
-.copy-evidence {
-  font-size: 11px; color: var(--muted); line-height: 1.5;
-  padding-bottom: 8px; border-bottom: 1px solid var(--border);
-}
-.copy-evidence b { color: var(--fg); }
-.copy-stats {
-  display: flex; flex-wrap: wrap; gap: 6px 18px;
-  font-size: 11px; color: var(--muted); padding: 8px 0;
-}
-.copy-stats b { color: var(--fg); }
-.copy-error { font-size: 11px; color: var(--bad); padding: 4px 0; }
-.copy-fills { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
-/* Two rows per fill: the card sits in a half-width column, so a single-row
-   grid truncates the market title to "Silve..." — and which market a fill is
-   on is the whole point of watching a target that might drift. */
-.copy-fill {
-  display: grid; align-items: baseline; gap: 2px 10px; padding: 6px 0;
-  grid-template-columns: 62px 78px 1fr auto auto;
-  font-size: 11px; border-top: 1px solid var(--border);
-}
-.copy-fill .copy-title { grid-column: 1 / -1; white-space: normal; }
-.copy-fill .copy-other-tag { grid-column: 1 / -1; justify-self: start; }
-/* A fill on a market the target was never measured on still shows, dimmed:
-   a target drifting elsewhere is the failure we most need to see. */
-.copy-fill-other { opacity: 0.55; }
-.copy-when, .copy-lag { color: var(--muted); }
-.copy-buy { color: var(--good); }
-.copy-sell { color: var(--bad); }
-.copy-size, .copy-notional { font-variant-numeric: tabular-nums; }
-.copy-notional { text-align: right; }
-.copy-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copy-backfill { font-style: italic; opacity: 0.7; }
-.copy-other-tag {
-  font-size: 10px; color: var(--muted); border: 1px solid var(--border);
-  border-radius: 0; padding: 0 4px; white-space: nowrap;
-}
-.copy-bad { color: var(--bad); }
-@media (max-width: 900px) {
-  .copy-fill { grid-template-columns: 58px 74px 1fr auto; }
-  .copy-lag { grid-column: 1 / -1; }
-}
-.copy-link { color: inherit; text-decoration: underline dotted; }
-.copy-link:hover { color: var(--fg); text-decoration: underline; }
-.copy-results { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
-.copy-results-h { font-size: 10px; letter-spacing: .08em; color: var(--muted); padding-bottom: 4px; }
-.copy-result {
-  display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; padding: 3px 0;
-  font-variant-numeric: tabular-nums;
-}
-.copy-result > span:last-child { margin-left: auto; }
-.copy-result-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
-.copy-good { color: var(--good); }
-.copy-warn { color: var(--warn, #b8860b); }
-.copy-muted { color: var(--muted); }
-
 /* --- MAKER card ---------------------------------------------------------
    Unfilled and expired quotes are shown, not filtered: for a passive strategy
    the fill rate is the result, so a card listing only fills would be a
@@ -564,80 +504,12 @@ body {
   .mk-band-row { grid-template-columns: 74px 58px 1fr 52px; }
 }
 
-/* Per-copy blotter: one row per trade, because an aggregate can hide a run of
-   identical losers behind a flat total. */
-.copy-trades { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
-.copy-t-h { font-size: 10px; color: var(--muted); text-transform: uppercase; padding: 6px 0 2px; }
-.copy-trade {
-  display: grid; align-items: baseline; gap: 2px 8px; padding: 4px 0;
-  grid-template-columns: 1fr 42px 38px 42px 44px 38px;
-  font-size: 11px; border-top: 1px solid var(--border);
-}
-.copy-trade .copy-t-res { grid-column: 1 / -1; justify-self: start; }
-.copy-t-mkt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copy-t-px, .copy-t-sz, .copy-t-slip, .copy-t-age {
-  font-variant-numeric: tabular-nums; color: var(--muted);
-}
-.copy-t-slip { cursor: help; }
-
-/* COPY TRADE WALLETS card ------------------------------------------------
-   One block per followed wallet: who, what they trade, what they did in the
-   last hour, then their most recent fills with a Copy button on each. */
-.cw-wallet { border-top: 1px solid var(--border-strong); padding-top: 10px; margin-top: 10px; }
-.cw-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.cw-name { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
-.cw-addr { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
-.cw-hour {
-  margin-left: auto; font-family: var(--font-mono); font-size: 9.5px;
-  letter-spacing: .5px; padding: 2px 6px;
-}
-.cw-hour.cw-live { color: var(--pos); background: rgba(43, 212, 125, .1); }
-.cw-hour.cw-idle { color: var(--label); background: var(--bg-alt); }
-.cw-what, .cw-evidence {
-  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
-  line-height: 1.5; padding-top: 3px;
-}
-.cw-what b, .cw-evidence b { color: var(--text); }
-.cw-counts {
-  display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 10.5px;
-  color: var(--muted); padding: 6px 0 2px;
-}
-.cw-counts b { color: var(--text); }
-.cw-fills { display: flex; flex-direction: column; }
-/* Two rows per fill: the card sits in a half-width column, so one grid row
-   truncates the market title, and which market they are in is the point. */
-.cw-fill {
-  display: grid; align-items: baseline; gap: 2px 8px; padding: 6px 0;
-  grid-template-columns: 52px 74px 1fr auto auto;
-  font-size: 11px; border-top: 1px solid var(--border);
-}
-.cw-when { color: var(--muted); font-variant-numeric: tabular-nums; }
-.cw-sz, .cw-notional { font-variant-numeric: tabular-nums; color: var(--muted); }
-.cw-notional { text-align: right; }
-.cw-title { grid-column: 1 / -1; color: var(--muted); white-space: normal; }
-.cw-state { grid-column: 1 / -1; justify-self: start; font-size: 10px; }
-.cw-state.cw-live { color: var(--warn); }
-.cw-state.cw-good { color: var(--pos); }
-.cw-state.cw-bad { color: var(--neg); }
-.cw-state.cw-unknown { color: var(--label); }
-.cw-copy-btn {
-  font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em;
-  text-transform: uppercase; color: var(--text); background: var(--bg-alt);
-  border: 1px solid var(--border-strong); border-radius: 0;
-  padding: 2px 8px; cursor: pointer;
-}
-.cw-copy-btn:hover { background: var(--border); }
-.cw-copy-btn:disabled { color: var(--label); cursor: default; }
-.cw-copy-none { color: var(--label); }
-@media (max-width: 900px) {
-  .cw-fill { grid-template-columns: 50px 70px 1fr auto; }
-  .cw-notional { grid-column: 1 / -1; text-align: left; }
-}
-
 /* MY STRATEGIES lists EVERY family in the tree, grouped by status, so a dead
    one is deleted for being visible rather than rotting unseen. Each row shows
    what it has actually settled — a strategy wired to nothing cannot then be
-   mistaken for one that is working. */
+   mistaken for one that is working. It spans both columns: nothing sits
+   beside it, and a half-width list leaves a card-sized hole next to it. */
+.strategies-card { grid-column: 1 / -1; }
 .strategy-group {
   font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .08em;
   text-transform: uppercase; color: var(--label);

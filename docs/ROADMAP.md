@@ -17,10 +17,8 @@ systems.
   dashboard state.
 
 > Several earlier roadmap items have since shipped and were removed from this
-> list: the market-data recorder (`polymarket_exec/storage/recorder.py`), the
-> full-market replay + backtest harness (`polymarket_exec/storage/replay.py`,
-> `polymarket_exec/backtest/harness.py` — built, though not yet wired into the live
-> tooling; see `docs/BACKTESTING.md`), feed/latency telemetry
+> list: the market-data recorder (`polymarket_exec/storage/recorder.py`),
+> feed/latency telemetry
 > (`polymarket_exec/ops/telemetry.py`), incident states (`polymarket_exec/ops/incidents.py`
 > + `docs/OPERATIONS_RUNBOOK.md`), the dedicated-wallet live executor
 > (`polymarket_exec/execution/live.py`), and CI with deterministic fixtures

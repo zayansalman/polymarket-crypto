@@ -2,9 +2,6 @@
 
 Pure ``render(...)`` transform like every other panel — the switch states and
 records are loaded by ``execution_view.py`` and passed in.
-
-The copy-trade switches are deliberately NOT here: they act on somebody else's
-wallet and are rendered on COPY TRADE WALLETS, beside the wallet they control.
 """
 
 from __future__ import annotations
@@ -41,15 +38,6 @@ def test_every_row_links_to_its_strategy_doc_and_the_header_to_all_docs() -> Non
     for family in _inv.in_group(_strategies.MINE):
         assert f"href='/strategy-docs/{family.key}'" in html
     assert "href='/strategy-docs'" in html
-
-
-def test_copy_switches_are_not_in_this_card() -> None:
-    # They belong beside the wallet they act on. A switch listed away from the
-    # thing it controls cannot be judged.
-    html = panel.render(enabled=ALL_ON)
-    for name, strategy in _strategies.in_group(_strategies.COPY).items():
-        assert f"id='strategy-{name}'" not in html
-        assert strategy.label not in html
 
 
 def test_an_enabled_strategy_renders_a_checked_switch() -> None:

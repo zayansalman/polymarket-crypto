@@ -5,10 +5,10 @@
 |---|---|
 | Name | Fade 1h Momentum on 15m |
 | Key | `fade_1h_momentum_15m` |
-| Status | offline only |
+| Status | cannot trade |
 | Switch | none — nothing to turn on |
 | Code | `tools/fade_1h_momentum_15m/` — 3 files |
-| Code fingerprint | `a3ca60e9bd16` |
+| Code fingerprint | `91319a8794bc` |
 <!-- END GENERATED:strategy -->
 
 ## What it does
@@ -202,5 +202,6 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-21 · `91319a8794bc` · Status moved from offline only to cannot trade: the offline-only status was removed (#273). Nothing is wired to trade it yet.
 - 2026-09-21 · `a3ca60e9bd16` · Lint only: removed an unused import from threshold_scan.py. No change to the analysis.
 - 2026-09-21 · `8e64a661d470` · Doc created: Zayan's concept, the maths as validated against simulation and the literature, and the two analyses that started it. Historical test pending.

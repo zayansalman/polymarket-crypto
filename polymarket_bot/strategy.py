@@ -97,10 +97,6 @@ def fair_up_probability(
     return min(0.995, max(0.005, p_above + p_tie))
 
 
-def confidence_from_edge(edge: float) -> float:
-    return min(0.99, max(0.0, 0.50 + abs(edge) * 2.8))
-
-
 def notional_from_confidence(confidence: float, params: StrategyParams) -> float:
     if confidence < params.min_confidence:
         return 0.0
@@ -156,29 +152,3 @@ def signal_from_executable_edges(
         notional,
         f"enter {side}: executable edge {edge:+.3f} @ ask {entry_price:.3f}",
     )
-
-
-def signal_from_edge(
-    edge: float,
-    remaining_seconds: int,
-    up_price: float,
-    down_price: float,
-    params: StrategyParams,
-) -> tuple[str | None, float, float, str]:
-    """Return side, confidence, paper notional, and reason for a current tick.
-
-    Legacy single-edge form (assumes up/down prices sum to ~1); kept for
-    backtest tooling. The live signal path uses
-    :func:`signal_from_executable_edges` against CLOB best asks.
-    """
-    confidence = confidence_from_edge(edge)
-    if remaining_seconds <= params.entry_min_remaining_seconds:
-        return None, confidence, 0.0, "skip: too close to window end"
-    if abs(edge) < params.entry_edge_min or confidence < params.min_confidence:
-        return None, confidence, 0.0, "skip: edge/confidence below threshold"
-    side = "Up" if edge > 0 else "Down"
-    entry_price = up_price if side == "Up" else down_price
-    if entry_price < params.min_entry_price or entry_price > params.max_entry_price:
-        return None, confidence, 0.0, "skip: entry price too extreme for paper fill model"
-    notional = notional_from_confidence(confidence, params)
-    return side, confidence, notional, f"enter {side}: edge {edge:+.3f}"

@@ -25,7 +25,7 @@ from datetime import date
 from pathlib import Path
 
 from polymarket_bot import inventory as _inv
-from polymarket_bot.strategies import COPY, STRATEGIES
+from polymarket_bot.strategies import STRATEGIES
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs" / "strategies"
@@ -104,8 +104,7 @@ def fingerprint(fam: _inv.Family) -> str:
 def _switch_text(fam: _inv.Family) -> str:
     if fam.switch is None or fam.switch not in STRATEGIES:
         return "none — nothing to turn on"
-    card = "COPY TRADE WALLETS" if fam.group == COPY else "MY STRATEGIES"
-    return f"`{fam.switch}` on the {card} card"
+    return f"`{fam.switch}` on the MY STRATEGIES card"
 
 
 def generated_block(fam: _inv.Family) -> str:

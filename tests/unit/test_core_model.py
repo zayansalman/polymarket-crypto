@@ -17,9 +17,9 @@ class TestSide:
         assert Side.DOWN.value == "Down"
 
     def test_is_a_str_so_it_compares_equal_to_the_raw_string(self) -> None:
-        """paper.py, copytrade, maker and daily all compare against bare
-        "Up"/"Down" strings — Side must interoperate with that unmigrated
-        code, not just with itself."""
+        """paper.py, maker and daily all compare against bare "Up"/"Down"
+        strings — Side must interoperate with that unmigrated code, not just
+        with itself."""
         assert Side.UP == "Up"
         assert Side.DOWN == "Down"
         assert Side.UP != Side.DOWN

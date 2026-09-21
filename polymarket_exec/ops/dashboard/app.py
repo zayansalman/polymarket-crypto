@@ -46,7 +46,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config import (  # type: ignore[import-untyped]
     BOT_MODE,
     DASHBOARD_SERVER_PORT,
-    DATA_DIR,
 )
 from db import connect, init_db  # type: ignore[import-untyped]
 from polymarket_bot import runtime_knobs as _knobs
@@ -75,7 +74,6 @@ try:
         request_stop,
         set_mode,
     )
-    from polymarket_bot.backtest import format_report  # type: ignore[import-untyped]
     from polymarket_exec.execution.live import (  # type: ignore[import-untyped]
         live_boot_problems,
     )
@@ -143,15 +141,6 @@ async def _lifespan(app: FastAPI):
     macro_task = asyncio.create_task(macro.run(macro_stop_event))
     _macro_recorder.set_current(macro)
 
-    # Copy-trade watcher (#copytrade): follows one target wallet's fills on the
-    # daily macro Up/Down markets. Observation only — it places nothing — and
-    # like the daily scanner it runs for the process lifetime with its
-    # STRATEGIES switch as the only gate.
-    from polymarket_bot.copytrade.watcher import run_forever as _run_copy_watcher
-
-    copy_stop_event = asyncio.Event()
-    copy_task = asyncio.create_task(_run_copy_watcher(copy_stop_event))
-
     # Maker (#maker): rests passive bids on the favourite in crypto Up/Down
     # markets and never crosses. Paper only — it records quotes, the queue each
     # one joined, and whether flow ever traded through it. Gated by the
@@ -177,9 +166,6 @@ async def _lifespan(app: FastAPI):
     _flow_recorder.set_current(None)
     _macro_recorder.set_current(None)
     _marketdata_hub.set_current(None)
-    from polymarket_bot.copytrade import watcher as _copy_watcher
-
-    _copy_watcher.set_current(None)
     for stop_event, task in (
         (daily_stop_event, daily_task),
         (quote_stop_event, quote_task),
@@ -187,7 +173,6 @@ async def _lifespan(app: FastAPI):
         (flow_stop_event, flow_task),
         (macro_stop_event, macro_task),
         (marketdata_stop_event, marketdata_task),
-        (copy_stop_event, copy_task),
         (maker_stop_event, maker_task),
     ):
         stop_event.set()
@@ -358,45 +343,6 @@ async def _activity_html() -> str:
     return "\n".join(lines)
 
 
-def _backtest_html() -> str:
-    report_path = DATA_DIR / "backtests" / "latest.json"
-    if not report_path.exists():
-        return (
-            "<h3>BTC 5m Binary Pricing Model Backtest</h3>\n"
-            "<p>No local report yet. Run:</p>\n"
-            '<pre><code>./.venv/bin/python tools/backtest_btc_strategy.py</code></pre>'
-        )
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        if _BTC_BOT_AVAILABLE:
-            return format_report(report)
-        # Fallback rendering when polymarket_bot.backtest is unavailable
-        baseline = report.get("baseline", {})
-        current = report.get("current", {})
-        best = report.get("best", {})
-        lines = [
-            "<h2>BTC 5m Binary Pricing Model Backtest</h2>",
-            "<ul>",
-            f"<li>Opportunities: {report.get('opportunities', 'N/A')}</li>",
-            f"<li>Method: {report.get('method', 'N/A')}</li>",
-            "</ul>",
-            "<h3>Results</h3>",
-            "<ul>",
-            f"<li>All historical buys: trades={baseline.get('trades', 'N/A')}, pnl=${baseline.get('total_pnl_usd', 0):+.2f}, roi={baseline.get('roi', 0):.1%}</li>",
-            f"<li>Current defaults: trades={current.get('trades', 'N/A')}, pnl=${current.get('total_pnl_usd', 0):+.2f}, roi={current.get('roi', 0):.1%}</li>",
-            f"<li>Optimized filter: trades={best.get('trades', 'N/A')}, pnl=${best.get('total_pnl_usd', 0):+.2f}, roi={best.get('roi', 0):.1%}</li>",
-            "</ul>",
-            "<h3>Optimized Parameters</h3>",
-            "<ul>",
-        ]
-        for key, value in best.get("params", {}).items():
-            lines.append(f"<li>{key}: {value}</li>")
-        lines.append("</ul>")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"<h3>Backtest Error</h3><p>Failed to load report: {escape(str(e))}</p>"
-
-
 # ---------------------------------------------------------------------------
 # Aggregated data helpers
 # ---------------------------------------------------------------------------
@@ -424,10 +370,6 @@ async def _get_activity_data() -> str:
     return await _activity_html()
 
 
-def _get_backtest_data() -> str:
-    return _backtest_html()
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -444,7 +386,6 @@ async def dashboard(request: Request) -> Any:
             "execution_view": await _execution_view_safe(),
             "market_selector": await _market_selector_safe(),
             "activity": await _get_activity_data(),
-            "backtest": _get_backtest_data(),
             "mode": mode,
             "live_armed": live_armed,
             "live_hint": live_hint,
@@ -736,70 +677,6 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
     return {"status": "error", "detail": f"unknown runtime key {key!r}"}
 
 
-@app.post("/api/copy-fill")
-async def api_copy_fill(request: Request) -> dict[str, Any]:
-    """Book ONE of a target's observed fills as a paper copy, by hand.
-
-    The Copy button on the COPY TRADE WALLETS card. It runs exactly the same
-    path autocopy runs — ``trader.consider`` prices the fill against the live
-    ask ladder and charges the taker fee — so a hand-picked copy and an
-    automatic one are the same kind of row in the ledger and can be compared.
-    Nothing here places a real order.
-    """
-    import httpx
-
-    from db import notify  # type: ignore[import-untyped]
-    from polymarket_bot.copytrade import trader as _trader
-    from polymarket_bot.copytrade import watcher as _copy_watcher
-
-    body = await request.json()
-    tx = str((body or {}).get("tx") or "")
-    if not tx:
-        return {"status": "error", "detail": "tx required"}
-
-    watcher = _copy_watcher.current()
-    if watcher is None:
-        return {"status": "error", "detail": "watcher is not running"}
-    fill = watcher.state.find_fill(tx)
-    if fill is None:
-        # The in-memory list is capped, so an old fill is genuinely gone
-        # rather than merely not found — say which.
-        return {"status": "error", "detail": "fill is no longer in the watch window"}
-    if fill.side != "BUY":
-        return {"status": "error", "detail": "that fill is an exit, not an entry"}
-
-    try:
-        async with httpx.AsyncClient() as client:
-            opened = await _trader.consider(client, fill, fill.wallet)
-    except Exception as exc:  # noqa: BLE001 — surfaced to the operator, never raised
-        log.warning("copytrade.manual_copy_failed", tx=tx[:14], error=str(exc))
-        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"[:160]}
-
-    if not opened:
-        # ``consider`` always writes its reason to copy_decisions; read the
-        # newest one back so the toast says why rather than just "no".
-        from polymarket_bot.copytrade import ledger as _copy_ledger
-
-        reason = "declined"
-        try:
-            for row in await _copy_ledger.decisions(limit=5):
-                if row.get("tx") == tx:
-                    reason = str(row.get("reason") or "declined")
-                    break
-        except Exception:  # noqa: BLE001
-            pass
-        return {"status": "error", "detail": reason}
-
-    await notify(
-        "copytrade",
-        f"Operator copied {fill.outcome} {fill.size:.0f}sh @ {fill.price:.3f} "
-        f"on {fill.title}",
-        {"tx": tx, "wallet": fill.wallet},
-    )
-    log.info("copytrade.manual_copy", tx=tx[:14], wallet=fill.wallet[:10])
-    return {"status": "ok", "tx": tx}
-
-
 async def _runtime_state() -> dict[str, str]:
     """Lightweight snapshot of bot state + mode for the topbar buttons."""
     from db import get_config
@@ -817,7 +694,6 @@ async def api_data() -> dict[str, Any]:
         "execution_view": await _execution_view_safe(),
         "market_selector": await _market_selector_safe(),
         "activity": await _get_activity_data(),
-        "backtest": _get_backtest_data(),
         "runtime": await _runtime_state(),
     }
 
@@ -834,7 +710,6 @@ async def api_stream(request: Request) -> StreamingResponse:
                     "execution_view": await _execution_view_safe(),
                     "market_selector": await _market_selector_safe(),
                     "activity": await _get_activity_data(),
-                    "backtest": _get_backtest_data(),
                     "runtime": await _runtime_state(),
                 }
                 yield f"data: {json.dumps(data)}\n\n"
