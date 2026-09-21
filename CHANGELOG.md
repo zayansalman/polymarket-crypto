@@ -11,14 +11,16 @@ anyone else's wallet.
   COPY TRADE WALLETS dashboard cards with their JS and CSS, `POST
   /api/copy-fill`, the copy watcher started at dashboard boot, the nine
   `copy_*` knobs (the SETTINGS card's "Copy trade" group), the
-  `copy_macro_daily` and `copy_autocopy` switches, and both copy rows on the
-  MY STRATEGIES card.
+  `copy_macro_daily` and `copy_autocopy` switches, and both copy entries in
+  the strategy inventory (only the v1 CLI one showed on MY STRATEGIES).
 - Removed with it: `polymarket_bot/pairarb/mirror.py` (copy pricing — its only
   callers were copy-trade), `tools/copytrade_shadow.py`,
   `tools/copytrade_dashboard.py`, `config.POLYMARKET_DATA_API` (only the
   watcher read it), and the dashboard's scroll-keep hook (only the copy fill
   list used it).
 - Kept: `tools/wallet_research/` — the research used to choose wallets.
+- Layout: MY STRATEGIES now spans both columns, so the removed wallets card
+  leaves no gap beside it.
 - Recorded data left alone: the `copy_trades` and `copy_decisions` tables,
   `data/copytrade_snapshots/`, and the stored `runtime.copy.*` and
   `runtime.strategy.copy_*.enabled` settings stay on disk. Nothing reads or
