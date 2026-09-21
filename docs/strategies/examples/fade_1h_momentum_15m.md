@@ -1,224 +1,8 @@
-# Fade 1h Momentum on 15m
+# Fade 1h Momentum on 15m: worked examples
 
-<!-- BEGIN GENERATED:strategy -->
-| | |
-|---|---|
-| Name | Fade 1h Momentum on 15m |
-| Key | `fade_1h_momentum_15m` |
-| Status | cannot trade |
-| Switch | none — nothing to turn on |
-| Code | `tools/fade_1h_momentum_15m/` — 10 files |
-| Code fingerprint | `4a7e98a879d9` |
-<!-- END GENERATED:strategy -->
+Generated 2026-09-21 18:52 UTC by `tools/fade_1h_momentum_15m/examples.py` from step 2's rows (`step2_polymarket.build_rows`) and `data/fade_1h_momentum_15m/params_pre_sep17.json`. 10 real decisions on the Sep 17-20 Polymarket tape, each 2 minutes into a 15-minute Up/Down window. (d) and (e) are picked on how the window settled. Picked on what traded after the decision: (f) on a later fill, which happens only when the market moves against the bid, so it leans toward a loss; (h) on the first taker buy in the 30 s after the decision; (i) on no later trade below the bid. The other filters use only what is known at the decision.
 
-## At a glance
-
-### Concept
-
-Zayan's idea: take the 15-minute position from the 1-hour momentum at a price the maths calculates live. No price rules anywhere. The hour's side should count for more late in the hour than early. He expected mean reversion to matter most in the first windows and fade as the hour goes on; the test found the opposite, it grows toward the end of the hour. The entry price is the output of a calculation. The name records the hypothesis that the fitted momentum weight $\theta$ comes out negative, so the model fades; if it comes out positive, the same model follows.
-
-### Main assumption
-
-The log price is Brownian motion with a drift, plus an Ornstein–Uhlenbeck pull whose strength changes through the hour at a fitted rate (on the data it grows). The 1-hour market is priced efficiently when read, so its price can be inverted for the drift. Increments are Gaussian, and Binance stands in for Chainlink, which settles these markets.
-
-### The maths
-
-The price process, with $s$ in hours from the top of the hour:
-
-$$dX=\big[\mu-\kappa(s)\,(X-a_t)\big]\,ds+\sigma\,dW,\qquad \kappa(s)=\kappa_0e^{-\lambda s}$$
-
-The stretch it reverts from, a decaying kernel over the last twelve 15m candles, each soft-clipped:
-
-$$M_t=\sum_{j=1}^{12}w_j\,c\tanh\!\Big(\frac{r_{-j}}{c}\Big),\qquad w_j\propto j^{-\alpha}$$
-
-The drift the 1h price implies, given the hour's move so far $x_t$:
-
-$$\hat\mu_H=\frac{\sigma\sqrt{1-t}\;\Phi^{-1}(m_H)-x_t}{1-t}$$
-
-The chance the window closes Up, with $y_\tau$ the window's move so far:
-
-$$p=\Phi\!\left(\frac{y_\tau-(1-e^{-K})\,M_t+\theta\hat\mu\,G}{\sqrt{V+\theta^2\hat v\,G^2}}\right)$$
-
-The taker break-even price, with fee rate $f=0.07$:
-
-$$a^*=\frac{(1+f)-\sqrt{(1+f)^2-4fp}}{2f}$$
-
-$K$, $G$ and $V$ are the exact integrals of the decaying pull over the time left. The full doc derives them.
-
-### How it works
-
-At a decision time inside one of the hour's four windows:
-
-1. Read the hour's move $x_t$, the window's move $y_\tau$, the last twelve 15m returns, and $\sigma$ from the last 60 one-minute returns.
-2. Invert the 1h market's price for the drift, and blend it with the trailing spot return using minimum-variance weights.
-3. Compute $p$ for the window.
-4. As taker, buy below $a^*$. As maker, rest the bid that maximises fill probability times edge. Size by Kelly.
-
-Not wired to trade yet. Fitted on Binance data before 2026-09-17: $\theta = -0.043$ (a very slight fade), the snap-back pull grows through the hour ($\lambda = -1.62$). Being built into the app as a paper strategy that re-learns these live.
-
-### How it was derived
-
-- **2026-09-21, Zayan.** Pulled his 18 recent manual trades, placed by hand from the 1h momentum. Four were right, for −$9.61. The opposite side would have made +$12.07.
-- **Claude.** Measured how the 1h momentum side paid on 1,088 settled 15m markets, by the price it traded at (`threshold_scan.py`). It lost at low prices and paid at high ones; always fading it lost (−7.84c, t = −3.33).
-- **Zayan** set out the concept above. **Claude** formalised it as Brownian motion with a decaying Ornstein–Uhlenbeck pull, and the entry price as an optimisation.
-- A Monte Carlo check of every closed form (`validate_math.py`) found six errors in the first draft, all fixed. The literature changed the reversion term to a soft-clipped lag kernel (Kitron & Wengrowicz 2026).
-
-### References
-
-- Full derivation and the pre-registered historical test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`
-- Scripts: `tools/fade_1h_momentum_15m/manual_trades_flip.py`, `threshold_scan.py`, `validate_math.py`
-- Binaries as options on Brownian motion: Taleb, *Quantitative Finance* 2019, [arXiv 1703.06351](https://arxiv.org/abs/1703.06351)
-- 15m reversal in crypto: Kitron & Wengrowicz 2026, [arXiv 2608.21888](https://arxiv.org/abs/2608.21888)
-- Time-varying Ornstein–Uhlenbeck: Vasicek 1977; Hull & White 1990
-- Boundary crossing: Wang & Pötzelberger, *J. Appl. Prob.* 1997
-- Forecast combination: Bates & Granger 1969
-- Kelly sizing: Kelly 1956; Thorp 2006
-
-## What it does
-
-Prices each 15-minute Up/Down window from a model of how the price moves through the hour. The
-inputs are the 1h market's price, the spot's trailing return, the window's own move so far, and
-a snap-back whose strength changes through the hour (on the data it grows toward the end). The
-output is a probability for the window, and from it the price to rest a bid at and how much to
-put there. Nothing in it is a threshold or a gate.
-
-Not wired to trade yet: it is being built into the app as a paper strategy.
-
-## How it was formed
-
-- **2026-09-21, Zayan (operator).** Asked to pull his recent manual trades on the idea that he
-  was wrong in most of them, so the opposite side might be right. He had been placing them by
-  hand from the 1h momentum and its side. Of 18 settled trades since 2026-09-13, 4 were right:
-  −$9.61 on $20.39 staked. The opposite
-  side of each would have made +$12.07. Four of the losses were one correlated window: BTC, ETH,
-  XRP and DOGE all bought Up at Sep 20 3:45–4:00PM ET, and all four fell.
-- **2026-09-21, Claude.** Looked at 1,088 settled 15m markets instead of 18 trades
-  (`threshold_scan.py`): how the 1h momentum side paid, by the price it traded at. It lost at
-  low prices and paid at high ones; always taking the other side lost (table under Evidence).
-  A flat fade was not supported.
-- **2026-09-21, Zayan.** Set out the concept: no rules or thresholds anywhere — the maths
-  decides the side, the entry price and the size. The 1h side should weigh more in the last
-  15m of the hour than the first. At the start of the hour, a 1h market at 60c with the 15m at 55c on the same
-  side is not a buy on its own, because the 15m can still turn on its own momentum. Both
-  momentums count, with importance that depends on where in the hour the window sits. Mean
-  reversion belongs in the first one or two windows and should decay as the 1h momentum takes
-  over. No gates: the entry price must be the result of a calculation, using calculus.
-- **2026-09-21, Claude.** Formalised it as a Brownian-motion model of the hour with a decaying
-  Ornstein–Uhlenbeck pull, and the entry price as the solution of an optimisation.
-- **2026-09-21, Zayan.** Asked for the maths to be checked against arXiv and proven methods.
-  A Monte Carlo check of every closed form, and a literature pass, found six errors in the
-  first draft, all fixed (listed under Evidence). The literature also changed the mean-reversion
-  term: crypto 15m reversal is a lag-one sign effect that saturates with move size (Kitron &
-  Wengrowicz 2026), so the pull is now a soft-clipped, decaying kernel over the last twelve 15m
-  candles rather than a linear pull toward the hour's open.
-- **2026-09-21, Zayan.** Named it Fade 1h Momentum on 15m. The name records the hypothesis
-  that the fitted momentum coefficient $\theta$ comes out negative. If it comes out positive,
-  the same model follows the momentum instead.
-
-## How it works
-
-Time $s$ is in hours from the top of the hour. Window $k = 1..4$ covers $[t_k, t_k + \tfrac14]$.
-$X = \ln S$ is the log spot price. At a decision time $t$ inside window $k$, with $h$ hours left
-in it:
-
-| symbol | meaning |
-|---|---|
-| $x_t = X(t) - X(0)$ | the hour's move so far (1h momentum and side) |
-| $y_\tau = X(t) - X(t_k)$ | the window's move so far (15m momentum) |
-| $r_{-j}$ | return of the $j$-th previous completed 15m candle, crossing into the previous hour |
-| $m_H$ | the 1h market's price for Up |
-| $\sigma^2$ | variance per hour from the last 60 one-minute returns |
-
-**Price process.** The drift is the momentum; the second term is mean reversion whose speed
-changes through the hour ($\lambda > 0$: fades; $\lambda < 0$: grows):
-
-$$dX = \big[\mu - \kappa(s)\,(X - a_t)\big]\,ds + \sigma\,dW, \qquad \kappa(s) = \kappa_0 e^{-\lambda s}.$$
-
-The level it reverts from is the **stretch** $M_t = X(t) - a_t$, a decaying kernel over the last
-twelve 15m candles, each soft-clipped:
-
-$$M_t = \sum_{j=1}^{12} w_j \, c\tanh\!\left(\frac{r_{-j}}{c}\right), \qquad w_j \propto j^{-\alpha}.$$
-
-**Exact moments of the rest of the window.** With $K = \int_t^{t+h}\kappa = \tfrac{\kappa_0}{\lambda}(e^{-\lambda t} - e^{-\lambda(t+h)})$,
-$A = \kappa_0/\lambda$, $w_1 = e^{-\lambda t}$, $w_2 = e^{-\lambda(t+h)}$ and $E_1$ the exponential integral:
-
-$$E[R] = -(1 - e^{-K})\,M_t + \mu\,G, \qquad G = \frac{e^{A w_2}}{\lambda}\big[E_1(A w_2) - E_1(A w_1)\big],$$
-
-$$V = \mathrm{Var}[R] = \frac{\sigma^2 e^{2A w_2}}{\lambda}\big[E_1(2A w_2) - E_1(2A w_1)\big].$$
-
-Reversion both shifts the mean and narrows the spread. With $\kappa_0 = 0$ it is Brownian motion.
-
-**What the 1h price says about the drift.** The hour is a binary option on the same path, so
-inverting its price removes the part of the hour already realised:
-
-$$\hat\mu_H = \frac{\sigma\sqrt{1-t}\;\Phi^{-1}(m_H) - x_t}{1-t}.$$
-
-**Blending the two momentum estimates** $\hat\mu_H$ (1h market) and $\hat\mu_L$ (trailing spot return)
-with weights that minimise the variance of the blended error, allowing for their correlation:
-
-$$w_H = \frac{v_L - c_{HL}}{v_H + v_L - 2c_{HL}}, \qquad \hat\mu = w_H\hat\mu_H + (1 - w_H)\hat\mu_L .$$
-
-**Probability the window closes Up:**
-
-$$p = \Phi\!\left(\frac{y_\tau - (1 - e^{-K})\,M_t + \theta\hat\mu\,G}{\sqrt{V + \theta^2\hat v\,G^2}}\right).$$
-
-What that does in the cases Zayan described (momentum part only):
-
-| situation | result |
-|---|---|
-| top of the hour, 1h market at 60c | window worth **55c**: nothing to buy at 55c |
-| weight on the 1h price at :00, :15, :30, :45 | **0.50, 0.58, 0.71, 1.00** — from $\tfrac{1}{2\sqrt{1-t}}$, the $\sqrt{}$ scaling of Brownian variance |
-| :45, hour already up 0.3%, 1h still 60c | last window worth **17c**: the crowd is pricing a give-back |
-| late in a window | the window's own move takes over |
-
-**Entry price.** Taker break-even, fee $f = 0.07$, solves $p - a - fa(1-a) = 0$:
-
-$$a^* = \frac{(1+f) - \sqrt{(1+f)^2 - 4fp}}{2f}.$$
-
-Resting bid (Zayan's standing rule: rest under the price, never cross): the bid $b$ maximises
-$J(b) = P_{fill}(b)\,(p_{fill}(b) - b)$, where $P_{fill}$ is the probability the path crosses the
-moving boundary $B(h') = \sigma\sqrt{h'}\,\Phi^{-1}(b) - \hat\mu_H h'$ before expiry (Wang–Pötzelberger)
-and $p_{fill}$ is our probability re-evaluated at the fill. Size by Kelly: $f^* = (p - a - c)/(1 - a - c)$
-as taker with fee $c$ per share, $(p_{fill} - b)/(1 - b)$ as maker. Side, price and size are all
-continuous in the inputs.
-
-## Parameters
-
-| parameter | meaning | how it is set |
-|---|---|---|
-| $\sigma$ | volatility per $\sqrt{\text{hour}}$ | trailing 60 one-minute returns, every minute |
-| $\theta$ | momentum: negative fades, positive follows | maximum likelihood, walk-forward |
-| $\kappa_0, \lambda$ | size of mean reversion, and how it changes through the hour | maximum likelihood |
-| $\alpha, c$ | lag-kernel decay and soft-clip scale | maximum likelihood |
-| $v_H, v_L, c_{HL}$ | blend weights | variances and covariance of each estimate's forecast errors |
-
-**Fitted values** used by the historical test, from `data/fade_1h_momentum_15m/params_pre_sep17.json`
-(written by `step1_walkforward.py`). Fit window: Binance 1-minute spot, BTC/ETH/SOL/XRP, 15m
-windows opening 2026-03-01 00:00 to 2026-09-16 23:45 UTC (384,000 rows, 19,200 windows). One set
-for all four coins, maximum likelihood, $\lambda$ free in sign. z is clustered by window.
-
-| parameter | value | z | reading |
-|---|---|---|---|
-| $\theta$ | −0.043 | −2.00 | fades the momentum estimate, slightly |
-| $\kappa_0$ | 0.345 per hour | 2.52 | reversion speed at the top of the hour |
-| $\lambda$ | −1.62 | −3.34 | negative: reversion speeds up through the hour, to $\kappa$ = 1.74 per hour by :60 |
-| $\alpha$ | 0.978 | 6.89 | lag weights fall off roughly as $1/j$ |
-| $c$ | 0.0093 | 2.72 | soft-clip scale: a 0.93% 15m move |
-
-**Blend weights** (`data/fade_1h_momentum_15m/step2.json`, `blend`): estimated on the tape's four
-days, leaving each day out when scoring it. Weight on the 1h market's implied drift $w_H$ = 0.63,
-0.84, 0.51 and 0.69 for Sep 17, 18, 19 and 20; 0.66 over all four days (descriptive only).
-
-**Sensitivities, not used in the test** (same params file). With $\lambda \ge 0$: $\theta$ −0.040,
-$\kappa_0$ 0.948, $\lambda$ 0 (on the bound), $\alpha$ 0.899, $c$ 0.0131. With a separate volatility
-scale for each quarter of the hour: $\theta$ +0.007 (z 0.23), $\kappa_0$ 1.056, $\lambda$ −0.494 (z −1.31),
-$\alpha$ 0.862, $c$ 0.0094, scales 1.14, 1.07, 1.13, 0.96.
-
-## Worked examples
-
-Real decisions from the Sep 17–20 Polymarket tape, run through the maths fitted before Sep 17, at minute 2 of each window. Each card walks through every factor behind the trade. Five of the ten cards are here; all ten are in `docs/strategies/examples/fade_1h_momentum_15m.md`, regenerated by `tools/fade_1h_momentum_15m/examples.py`.
-
-### How to read a card
+## How to read a card
 
 Each card opens with a short summary and the story in four lines: the leg, the snap-back, the momentum and the trade. The tables under them hold every number behind the story.
 
@@ -246,7 +30,7 @@ The strategy has no price rules: side, entry price and size all come out of the 
 
 The formula and the fitted parameters are in the footnote at the end.
 
-### How the examples were picked
+## How the examples were picked
 
 Each card is the first row in time order that fits its filter and is not already shown on an earlier card. The filters only choose which real rows to show; they are not part of the strategy.
 
@@ -261,7 +45,7 @@ Each card is the first row in time order that fits its filter and is not already
 - **(i) A resting bid that did not fill**: a bid rests on the maths' side and no later trade on that side is below it (92 rows qualify).
 - **(j) A Down-side entry**: the maths makes Down more likely and acts on it: it sends a taker buy of Down (the ask under the break-even) or rests a bid on Down (289 rows qualify).
 
-### (a) Top of the hour: the maths and the market agree
+## (a) Top of the hour: the maths and the market agree
 
 **XRP 2 min into the 21:00 window: the leg leads, Up 76.8%, no trade**
 
@@ -333,7 +117,7 @@ Each card is the first row in time order that fits its filter and is not already
 
 <sub>Market: `xrp-updown-15m-1789678800`. Check: explain() p = 0.767782918492, step 2 p = 0.767782918492.</sub>
 
-### (b) Late in the hour after a fast 15m up leg: the snap-back leans against it
+## (b) Late in the hour after a fast 15m up leg: the snap-back leans against it
 
 **BTC 2 min into the 22:45 window: the snap-back takes 1.7 points off Up, Up 50.5%, the maths buys Up at 48c and bids Up at 47c**
 
@@ -407,7 +191,7 @@ Each card is the first row in time order that fits its filter and is not already
 
 <sub>Market: `btc-updown-15m-1789685100`. Check: explain() p = 0.504503419923, step 2 p = 0.504503419923.</sub>
 
-### (c) The 1h market disagrees with the hour's move
+## (c) The 1h market disagrees with the hour's move
 
 **BTC 2 min into the 05:45 window: the 1h market pays 61c against 38.2c for the hour's move alone, Up 28.9%, no trade**
 
@@ -481,7 +265,155 @@ Each card is the first row in time order that fits its filter and is not already
 
 <sub>Market: `btc-updown-15m-1789710300`. Check: explain() p = 0.289169562335, step 2 p = 0.289169562335.</sub>
 
-### (f) A resting bid that filled
+## (d) A taker entry that won
+
+**BTC 2 min into the 20:45 window: the leg leads, Up 65.7%, the maths buys Up at 62c and bids Up at 60c**
+
+> The +0.026% 15m leg adds 9.7 points to Up, the snap-back adds 5.8 and the momentum adds 0.1.
+>
+> The maths makes Up 65.7% against Up's 61c market price: it buys Up at 62c as a taker, and it rests a bid on Up at 60c.
+>
+> Up won: the taker buy made 36.4c a share and the filled bid made 40.0c a share.
+
+**The story**
+
+- **Leg.** BTC is up 0.026% since the 20:45 window opened, with 13 of 15 minutes left (4th quarter of the hour). A typical move for the time left is 0.105%, from BTC's typical one-hour swing of 0.265% (up or down, realised over the last 60 min), so the leg is 0.25 typical moves, which adds 9.7 points to Up.
+- **Snap-back.** Weighted toward the newest, the last twelve 15m candles average a stretch of -0.058%. The latest candle, -0.240% (1.8 typical 15m moves), carries 32% of the weight and alone gives -0.074%. In a 4th-quarter window, where the snap-back is strongest, the maths expects 27% of the stretch back before the close, which adds 5.8 points to Up.
+- **Momentum.** The hour is down 0.061% so far, which on its own prices Up at 31.1c; the 1h market pays 28c, so the crowd expects the drop to extend (-0.052% an hour for the rest of the hour). Blended 63/37 with the trailing hour on spot (-0.021% an hour), momentum is -0.041% an hour; the maths fades it (weight -0.043), which adds only 0.1 points to Up, so it barely matters.
+- **Trade.** Net: Up 65.7%, Down 34.3%. Buys Up at 62c against a 64.1c break-even. Rests a bid on Up at 60c, 1c under the last trade.
+
+**Inputs**
+
+| input | value |
+|---|---|
+| coin | BTC |
+| window | 2026-09-17 20:45-21:00 UTC, 4th quarter of the hour |
+| decision time | 20:47 UTC: 2 min gone, 13 min left |
+| 15m leg so far | +0.026% = +0.25 typical moves for the time left |
+| typical move for the time left | 0.105% (without the snap-back or momentum adjustments, sigma × √time left: 0.123%) |
+| typical one-hour swing, up or down (sigma, realised over the last 60 min) | 0.265% |
+| last 12 15m candles, newest first | -0.240 +0.098 +0.055 -0.013 +0.029 +0.022 -0.015 -0.066 -0.153 +0.032 +0.068 -0.063 (%) |
+| weight of each candle, newest first | 31.5 16.0 10.8 8.1 6.5 5.5 4.7 4.1 3.7 3.3 3.0 2.8 (%) |
+| each candle's part of the stretch (weight × capped candle) | -0.074 +0.016 +0.006 -0.001 +0.002 +0.001 -0.001 -0.003 -0.006 +0.001 +0.002 -0.002 (%) |
+| stretch (weighted average = sum of each candle's part above) | -0.058% |
+| share pulled back before the close | 27.3% in a 4th-quarter window, so the snap-back pull is -0.0158%. The snap-back is stronger later in the hour: 1st 9.0%, 2nd 13.2%, 3rd 19.1%, 4th 27.3% at this minute |
+| hour's move so far | -0.061% (on its own it prices the hour Up at 31.1c) |
+| 1h market Up price | 28c |
+| drift implied by the 1h price | -0.052% an hour for the rest of the hour |
+| trailing 1h spot trend | -0.021% an hour |
+| blend weights | 1h market 63%, spot 37%, fitted on the other tape days' forecast errors (Sep 18, 19 and 20) |
+| blended momentum | -0.041% an hour (how far off this estimate has been: 0.313% an hour, one sd) |
+| momentum weight (theta) | -0.0434 (negative: fades the momentum) |
+| time the momentum counts for (G) | 11.0 min = 0.184 h. A drift that builds up during the window is itself partly pulled back by the snap-back, so the 13 minutes left count as 11.0 |
+| momentum push = theta × blended momentum × G | -0.0434 × -0.041% an hour × 0.184 h = +0.0003% |
+
+**Probability waterfall**: each factor's fair share of the move from 50% (the same total whichever order you add them).
+
+| step | points on Up | Up after | in typical moves for the time left |
+|---|---|---|---|
+| start |  | 50.0% |  |
+| the 15m leg so far | +9.7 | 59.7% | +0.251 |
+| the snap-back pull | +5.8 | 65.6% | +0.151 |
+| the momentum push | +0.1 | 65.7% | +0.003 |
+| net | +15.7 | 65.7% | +0.404 |
+
+**Decision**
+
+| | Up | Down |
+|---|---|---|
+| the maths' probability | 65.7% | 34.3% |
+| 15m market price (last trade, a buy or a sell) | 61c | 39c |
+| ask at the decision (last price a taker paid in the minute before 20:47) | 61c | 40c |
+| first taker buy in the 30 s after 20:47 | 62c | 39c |
+| taker break-even (a*) | 64.1c | 32.8c |
+
+- The side the maths makes more likely: **Up** (65.7%).
+- Taker: Up's ask of 61c is under the 64.1c break-even (64.1c plus the 1.61c fee at that price adds up to the maths' 65.7%). It buys with a limit at 64.1c: filled at 62c (the first taker buy after 20:47), fee 1.65c, expected profit +2.05c a share, full-Kelly size 5.6% of bankroll.
+- Maker: rests a bid on Up at 60c, 1c under the 61c last trade. Expected profit per share bid is still rising there, at the top of the paper book's bid range, so the book's range sets this level, not a peak in the maths. Fill chance 97.6%: the maths' own estimate that Up trades down to 60c before the close. A fill only happens if the price falls to the bid, which means the market has moved against Up, so the maths marks Up down from 65.7% to 64.5% for a filled bid. Expected profit +4.42c per share bid; full-Kelly size 11.3% of bankroll.
+
+**Outcome**
+
+- Up won: the maths' side won. Binance, which the maths reads, and Chainlink, which settles the market, both closed Up.
+- Taker: +36.4c a share after the fee; at full-Kelly size +$3.22 per $100 of bankroll.
+- Maker: filled (lowest later Up price: 26c); +40.0c a share, no fee; at full-Kelly size +$7.54 per $100 of bankroll.
+
+<sub>Market: `btc-updown-15m-1789677900`. Check: explain() p = 0.656992304873, step 2 p = 0.656992304873.</sub>
+
+## (e) A taker entry that lost
+
+**BTC 2 min into the 22:00 window: the leg leads, Up 69.7%, the maths buys Up at 62c and bids Up at 59c**
+
+> The +0.034% 15m leg adds 17.1 points to Up, the snap-back adds 2.3 and the momentum adds 0.3.
+>
+> The maths makes Up 69.7% against Up's 60c market price: it buys Up at 62c as a taker, and it rests a bid on Up at 59c.
+>
+> Down won: the taker buy lost 63.6c a share and the filled bid lost 59.0c a share.
+
+**The story**
+
+- **Leg.** BTC is up 0.034% since the 22:00 window opened, with 13 of 15 minutes left (1st quarter of the hour). A typical move for the time left is 0.077%, from BTC's typical one-hour swing of 0.173% (up or down, realised over the last 60 min), so the leg is 0.45 typical moves, which adds 17.1 points to Up.
+- **Snap-back.** Weighted toward the newest, the last twelve 15m candles average a stretch of -0.052%. The latest candle, -0.143% (1.7 typical 15m moves), carries 32% of the weight and alone gives -0.045%. In a 1st-quarter window, where the snap-back is weakest, the maths expects 9% of the stretch back before the close, which adds 2.3 points to Up.
+- **Momentum.** The hour is up 0.034% so far, which on its own prices Up at 58c; the 1h market pays 55c, so the crowd expects part of the rise to be given back (-0.013% an hour for the rest of the hour). Blended 63/37 with the trailing hour on spot (-0.171% an hour), momentum is -0.071% an hour; the maths fades it (weight -0.043), which adds only 0.3 points to Up, so it barely matters.
+- **Trade.** Net: Up 69.7%, Down 30.3%. Buys Up at 62c against a 68.2c break-even. Rests a bid on Up at 59c, 1c under the last trade.
+
+**Inputs**
+
+| input | value |
+|---|---|
+| coin | BTC |
+| window | 2026-09-17 22:00-22:15 UTC, 1st quarter of the hour |
+| decision time | 22:02 UTC: 2 min gone, 13 min left |
+| 15m leg so far | +0.034% = +0.45 typical moves for the time left |
+| typical move for the time left | 0.077% (without the snap-back or momentum adjustments, sigma × √time left: 0.080%) |
+| typical one-hour swing, up or down (sigma, realised over the last 60 min) | 0.173% |
+| last 12 15m candles, newest first | -0.143 -0.046 +0.069 -0.064 +0.037 -0.240 +0.098 +0.055 -0.013 +0.029 +0.022 -0.015 (%) |
+| weight of each candle, newest first | 31.5 16.0 10.8 8.1 6.5 5.5 4.7 4.1 3.7 3.3 3.0 2.8 (%) |
+| each candle's part of the stretch (weight × capped candle) | -0.045 -0.007 +0.007 -0.005 +0.002 -0.013 +0.005 +0.002 -0.000 +0.001 +0.001 -0.000 (%) |
+| stretch (weighted average = sum of each candle's part above) | -0.052% |
+| share pulled back before the close | 9.0% in a 1st-quarter window, so the snap-back pull is -0.0047%. The snap-back is stronger later in the hour: 1st 9.0%, 2nd 13.2%, 3rd 19.1%, 4th 27.3% at this minute |
+| hour's move so far | +0.034% (on its own it prices the hour Up at 58c) |
+| 1h market Up price | 55c |
+| drift implied by the 1h price | -0.013% an hour for the rest of the hour |
+| trailing 1h spot trend | -0.171% an hour |
+| blend weights | 1h market 63%, spot 37%, fitted on the other tape days' forecast errors (Sep 18, 19 and 20) |
+| blended momentum | -0.071% an hour (how far off this estimate has been: 0.205% an hour, one sd) |
+| momentum weight (theta) | -0.0434 (negative: fades the momentum) |
+| time the momentum counts for (G) | 12.4 min = 0.206 h. A drift that builds up during the window is itself partly pulled back by the snap-back, so the 13 minutes left count as 12.4 |
+| momentum push = theta × blended momentum × G | -0.0434 × -0.071% an hour × 0.206 h = +0.0006% |
+
+**Probability waterfall**: each factor's fair share of the move from 50% (the same total whichever order you add them).
+
+| step | points on Up | Up after | in typical moves for the time left |
+|---|---|---|---|
+| start |  | 50.0% |  |
+| the 15m leg so far | +17.1 | 67.1% | +0.447 |
+| the snap-back pull | +2.3 | 69.4% | +0.062 |
+| the momentum push | +0.3 | 69.7% | +0.008 |
+| net | +19.7 | 69.7% | +0.517 |
+
+**Decision**
+
+| | Up | Down |
+|---|---|---|
+| the maths' probability | 69.7% | 30.3% |
+| 15m market price (last trade, a buy or a sell) | 60c | 40c |
+| ask at the decision (last price a taker paid in the minute before 22:02) | 60c | 41c |
+| first taker buy in the 30 s after 22:02 | 62c | 39c |
+| taker break-even (a*) | 68.2c | 28.8c |
+
+- The side the maths makes more likely: **Up** (69.7%).
+- Taker: Up's ask of 60c is under the 68.2c break-even (68.2c plus the 1.52c fee at that price adds up to the maths' 69.7%). It buys with a limit at 68.2c: filled at 62c (the first taker buy after 22:02), fee 1.65c, expected profit +6.08c a share, full-Kelly size 16.7% of bankroll.
+- Maker: rests a bid on Up at 59c, 1c under the 60c last trade. Expected profit per share bid is still rising there, at the top of the paper book's bid range, so the book's range sets this level, not a peak in the maths. Fill chance 96.9%: the maths' own estimate that Up trades down to 59c before the close. A fill only happens if the price falls to the bid, which means the market has moved against Up, so the maths marks Up down from 69.7% to 68.7% for a filled bid. Expected profit +9.37c per share bid; full-Kelly size 23.6% of bankroll.
+
+**Outcome**
+
+- Down won: the maths' side lost. Binance, which the maths reads, and Chainlink, which settles the market, both closed Down.
+- Taker: -63.6c a share after the fee; at full-Kelly size -$16.72 per $100 of bankroll.
+- Maker: filled (lowest later Up price: 1c); -59.0c a share, no fee; at full-Kelly size -$23.58 per $100 of bankroll.
+
+<sub>Market: `btc-updown-15m-1789682400`. Check: explain() p = 0.697277204362, step 2 p = 0.697277204362.</sub>
+
+## (f) A resting bid that filled
 
 **XRP 2 min into the 21:15 window: the leg leads, Up 56.3%, the maths bids Up at 53c**
 
@@ -554,7 +486,225 @@ Each card is the first row in time order that fits its filter and is not already
 
 <sub>Market: `xrp-updown-15m-1789679700`. Check: explain() p = 0.563049474816, step 2 p = 0.563049474816.</sub>
 
-### (j) A Down-side entry
+## (g) The snap-back or the momentum leads
+
+**BTC 2 min into the 21:15 window: the snap-back leads, Up 54.1%, no trade**
+
+> The snap-back adds 2.2 points to Up: weighted toward the newest, the last twelve 15m candles average a stretch of -0.033%, and in a 2nd-quarter window the maths expects 13% of it back before the close. The +0.004% 15m leg adds 1.8 and the momentum adds 0.2.
+>
+> The maths makes Up 54.1% against Up's 56c market price: Up's 57c ask is at or over its 52.4c break-even, so no taker buy, and no bid is worth resting.
+>
+> Up won: the maths had no position.
+
+**The story**
+
+- **Leg.** BTC is up 0.004% since the 21:15 window opened, with 13 of 15 minutes left (2nd quarter of the hour). A typical move for the time left is 0.080%, from BTC's typical one-hour swing of 0.185% (up or down, realised over the last 60 min), so the leg is 0.04 typical moves, which adds 1.8 points to Up.
+- **Snap-back.** Weighted toward the newest, the last twelve 15m candles average a stretch of -0.033%. The latest candle, -0.064%, carries 32% of the weight and alone gives -0.020%. In a 2nd-quarter window, the maths expects 13% of the stretch back before the close, which adds 2.2 points to Up.
+- **Momentum.** The hour is down 0.061% so far, which on its own prices Up at 34.9c; the 1h market pays 37c, so the crowd expects part of the drop to be won back (+0.012% an hour for the rest of the hour). Blended 63/37 with the trailing hour on spot (-0.123% an hour), momentum is -0.038% an hour; the maths fades it (weight -0.043), which adds only 0.2 points to Up, so it barely matters.
+- **Trade.** Net: Up 54.1%, Down 45.9%. Up's 57c ask is at or over its 52.4c break-even: no taker buy. Rests no bid: a bid fills only after Up has fallen to it, and then the maths values Up at or below the bid, at every bid from 1c to 55c.
+
+**Inputs**
+
+| input | value |
+|---|---|
+| coin | BTC |
+| window | 2026-09-17 21:15-21:30 UTC, 2nd quarter of the hour |
+| decision time | 21:17 UTC: 2 min gone, 13 min left |
+| 15m leg so far | +0.004% = +0.04 typical moves for the time left |
+| typical move for the time left | 0.080% (without the snap-back or momentum adjustments, sigma × √time left: 0.086%) |
+| typical one-hour swing, up or down (sigma, realised over the last 60 min) | 0.185% |
+| last 12 15m candles, newest first | -0.064 +0.037 -0.240 +0.098 +0.055 -0.013 +0.029 +0.022 -0.015 -0.066 -0.153 +0.032 (%) |
+| weight of each candle, newest first | 31.5 16.0 10.8 8.1 6.5 5.5 4.7 4.1 3.7 3.3 3.0 2.8 (%) |
+| each candle's part of the stretch (weight × capped candle) | -0.020 +0.006 -0.025 +0.008 +0.004 -0.001 +0.001 +0.001 -0.001 -0.002 -0.005 +0.001 (%) |
+| stretch (weighted average = sum of each candle's part above) | -0.033% |
+| share pulled back before the close | 13.2% in a 2nd-quarter window, so the snap-back pull is -0.0043%. The snap-back is stronger later in the hour: 1st 9.0%, 2nd 13.2%, 3rd 19.1%, 4th 27.3% at this minute |
+| hour's move so far | -0.061% (on its own it prices the hour Up at 34.9c) |
+| 1h market Up price | 37c |
+| drift implied by the 1h price | +0.012% an hour for the rest of the hour |
+| trailing 1h spot trend | -0.123% an hour |
+| blend weights | 1h market 63%, spot 37%, fitted on the other tape days' forecast errors (Sep 18, 19 and 20) |
+| blended momentum | -0.038% an hour (how far off this estimate has been: 0.219% an hour, one sd) |
+| momentum weight (theta) | -0.0434 (negative: fades the momentum) |
+| time the momentum counts for (G) | 12.1 min = 0.201 h. A drift that builds up during the window is itself partly pulled back by the snap-back, so the 13 minutes left count as 12.1 |
+| momentum push = theta × blended momentum × G | -0.0434 × -0.038% an hour × 0.201 h = +0.0003% |
+
+**Probability waterfall**: each factor's fair share of the move from 50% (the same total whichever order you add them).
+
+| step | points on Up | Up after | in typical moves for the time left |
+|---|---|---|---|
+| start |  | 50.0% |  |
+| the 15m leg so far | +1.8 | 51.8% | +0.045 |
+| the snap-back pull | +2.2 | 53.9% | +0.054 |
+| the momentum push | +0.2 | 54.1% | +0.004 |
+| net | +4.1 | 54.1% | +0.103 |
+
+**Decision**
+
+| | Up | Down |
+|---|---|---|
+| the maths' probability | 54.1% | 45.9% |
+| 15m market price (last trade, a buy or a sell) | 56c | 44c |
+| ask at the decision (last price a taker paid in the minute before 21:17) | 57c | 43c |
+| first taker buy in the 30 s after 21:17 | 57.3c | 44c |
+| taker break-even (a*) | 52.4c | 44.2c |
+
+- The side the maths makes more likely: **Up** (54.1%).
+- Taker: Up's ask of 57c is at or over the 52.4c break-even (52.4c plus the 1.75c fee at that price adds up to the maths' 54.1%): no taker buy.
+- Maker: no bid is worth resting. A bid fills only after Up has fallen to it, and at every bid from 1c to 55c the maths then values Up at or below the bid (the best, 1c, gives -0.04c per share bid).
+
+**Outcome**
+
+- Up won: the maths' side won. Binance, which the maths reads, and Chainlink, which settles the market, both closed Up.
+
+<sub>Market: `btc-updown-15m-1789679700`. Check: explain() p = 0.541082121042, step 2 p = 0.541082121042.</sub>
+
+## (h) A taker buy that missed its limit
+
+**SOL 2 min into the 21:00 window: the leg leads, Up 55.8%, the maths sends a buy of Up limited at 54.1c that misses**
+
+> The +0.030% 15m leg adds 7.7 points to Up, the snap-back takes 1.1 off and the momentum takes 0.8 off.
+>
+> The maths makes Up 55.8% against Up's 57c market price: its taker buy limited at 54.1c does not fill, and no bid is worth resting.
+>
+> Down won: the maths had no position.
+
+**The story**
+
+- **Leg.** SOL is up 0.030% since the 21:00 window opened, with 13 of 15 minutes left (1st quarter of the hour). A typical move for the time left is 0.153%, from SOL's typical one-hour swing of 0.345% (up or down, realised over the last 60 min), so the leg is 0.19 typical moves, which adds 7.7 points to Up.
+- **Snap-back.** Weighted toward the newest, the last twelve 15m candles average a stretch of +0.046%. The latest candle, +0.237% (1.4 typical 15m moves), carries 32% of the weight and alone gives +0.073%. In a 1st-quarter window, where the snap-back is weakest, the maths expects 9% of the stretch back before the close, which takes 1.1 points off Up.
+- **Momentum.** There is no 1h market trade in the last minute, so momentum is the trailing hour on spot alone, +0.346% an hour; the maths fades it (weight -0.043), which takes 0.8 points off Up.
+- **Trade.** Net: Up 55.8%, Down 44.2%. Sends a buy of Up limited at its 54.1c break-even; the next taker buy is 70c, so it does not fill. Rests no bid: a bid fills only after Up has fallen to it, and then the maths values Up at or below the bid, at every bid from 1c to 56c.
+
+**Inputs**
+
+| input | value |
+|---|---|
+| coin | SOL |
+| window | 2026-09-17 21:00-21:15 UTC, 1st quarter of the hour |
+| decision time | 21:02 UTC: 2 min gone, 13 min left |
+| 15m leg so far | +0.030% = +0.19 typical moves for the time left |
+| typical move for the time left | 0.153% (without the snap-back or momentum adjustments, sigma × √time left: 0.161%) |
+| typical one-hour swing, up or down (sigma, realised over the last 60 min) | 0.345% |
+| last 12 15m candles, newest first | +0.237 -0.237 +0.069 +0.237 +0.030 -0.079 +0.198 -0.030 -0.327 -0.148 -0.177 +0.000 (%) |
+| weight of each candle, newest first | 31.5 16.0 10.8 8.1 6.5 5.5 4.7 4.1 3.7 3.3 3.0 2.8 (%) |
+| each candle's part of the stretch (weight × capped candle) | +0.073 -0.037 +0.007 +0.019 +0.002 -0.004 +0.009 -0.001 -0.012 -0.005 -0.005 +0.000 (%) |
+| stretch (weighted average = sum of each candle's part above) | +0.046% |
+| share pulled back before the close | 9.0% in a 1st-quarter window, so the snap-back pull is +0.0042%. The snap-back is stronger later in the hour: 1st 9.0%, 2nd 13.2%, 3rd 19.1%, 4th 27.3% at this minute |
+| hour's move so far | +0.030% (on its own it prices the hour Up at 53.5c) |
+| 1h market Up price | no trade in the last minute |
+| drift implied by the 1h price | none |
+| trailing 1h spot trend | +0.346% an hour |
+| blend weights | spot 100% (no 1h market trade in the last minute) |
+| blended momentum | +0.346% an hour (how far off this estimate has been: 0.467% an hour, one sd) |
+| momentum weight (theta) | -0.0434 (negative: fades the momentum) |
+| time the momentum counts for (G) | 12.4 min = 0.206 h. A drift that builds up during the window is itself partly pulled back by the snap-back, so the 13 minutes left count as 12.4 |
+| momentum push = theta × blended momentum × G | -0.0434 × +0.346% an hour × 0.206 h = -0.0031% |
+
+**Probability waterfall**: each factor's fair share of the move from 50% (the same total whichever order you add them).
+
+| step | points on Up | Up after | in typical moves for the time left |
+|---|---|---|---|
+| start |  | 50.0% |  |
+| the 15m leg so far | +7.7 | 57.7% | +0.194 |
+| the snap-back pull | -1.1 | 56.6% | -0.027 |
+| the momentum push | -0.8 | 55.8% | -0.020 |
+| net | +5.8 | 55.8% | +0.146 |
+
+**Decision**
+
+| | Up | Down |
+|---|---|---|
+| the maths' probability | 55.8% | 44.2% |
+| 15m market price (last trade, a buy or a sell) | 57c | 43c |
+| ask at the decision (last price a taker paid in the minute before 21:02) | 45c | 43c |
+| first taker buy in the 30 s after 21:02 | 70c | 41c |
+| taker break-even (a*) | 54.1c | 42.5c |
+
+- The side the maths makes more likely: **Up** (55.8%).
+- Taker: Up's ask of 45c is under the 54.1c break-even (54.1c plus the 1.74c fee at that price adds up to the maths' 55.8%). It buys with a limit at 54.1c, but the first taker buy after 21:02 was 70c, over the limit: no position.
+- Maker: no bid is worth resting. A bid fills only after Up has fallen to it, and at every bid from 1c to 56c the maths then values Up at or below the bid (the best, 1c, gives -0.03c per share bid).
+
+**Outcome**
+
+- Down won: the maths' side lost. Binance, which the maths reads, and Chainlink, which settles the market, both closed Down.
+
+<sub>Market: `sol-updown-15m-1789678800`. Check: explain() p = 0.558129448801, step 2 p = 0.558129448801.</sub>
+
+## (i) A resting bid that did not fill
+
+**BTC 2 min into the 21:45 window: the leg leads, Up 21.1%, the maths buys Down at 71c and bids Down at 70c**
+
+> The -0.046% 15m leg takes 31.3 points off Up, the snap-back adds 2.8 and the momentum takes 0.4 off.
+>
+> The maths makes Down 78.9% against Down's 71c market price: it buys Down at 71c as a taker, and it rests a bid on Down at 70c.
+>
+> Down won: the taker buy made 27.6c a share and the resting bid did not fill.
+
+**The story**
+
+- **Leg.** BTC is down 0.046% since the 21:45 window opened, with 13 of 15 minutes left (4th quarter of the hour). A typical move for the time left is 0.052%, from BTC's typical one-hour swing of 0.132% (up or down, realised over the last 60 min), so the leg is 0.87 typical moves, which takes 31.3 points off Up.
+- **Snap-back.** Weighted toward the newest, the last twelve 15m candles average a stretch of -0.016%. The latest candle, -0.046%, carries 32% of the weight and alone gives -0.014%. In a 4th-quarter window, where the snap-back is strongest, the maths expects 27% of the stretch back before the close, which adds 2.8 points to Up.
+- **Momentum.** The hour is down 0.086% so far, which on its own prices Up at 8c; the 1h market pays 21c, so the crowd expects part of the drop to be won back (+0.169% an hour for the rest of the hour). Blended 63/37 with the trailing hour on spot (-0.075% an hour), momentum is +0.080% an hour; the maths fades it (weight -0.043), which takes only 0.4 points off Up, so it barely matters.
+- **Trade.** Net: Up 21.1%, Down 78.9%. Buys Down at 71c against a 77.7c break-even. Rests a bid on Down at 70c, 1c under the last trade.
+
+**Inputs**
+
+| input | value |
+|---|---|
+| coin | BTC |
+| window | 2026-09-17 21:45-22:00 UTC, 4th quarter of the hour |
+| decision time | 21:47 UTC: 2 min gone, 13 min left |
+| 15m leg so far | -0.046% = -0.87 typical moves for the time left |
+| typical move for the time left | 0.052% (without the snap-back or momentum adjustments, sigma × √time left: 0.062%) |
+| typical one-hour swing, up or down (sigma, realised over the last 60 min) | 0.132% |
+| last 12 15m candles, newest first | -0.046 +0.069 -0.064 +0.037 -0.240 +0.098 +0.055 -0.013 +0.029 +0.022 -0.015 -0.066 (%) |
+| weight of each candle, newest first | 31.5 16.0 10.8 8.1 6.5 5.5 4.7 4.1 3.7 3.3 3.0 2.8 (%) |
+| each candle's part of the stretch (weight × capped candle) | -0.014 +0.011 -0.007 +0.003 -0.015 +0.005 +0.003 -0.001 +0.001 +0.001 -0.000 -0.002 (%) |
+| stretch (weighted average = sum of each candle's part above) | -0.016% |
+| share pulled back before the close | 27.3% in a 4th-quarter window, so the snap-back pull is -0.0043%. The snap-back is stronger later in the hour: 1st 9.0%, 2nd 13.2%, 3rd 19.1%, 4th 27.3% at this minute |
+| hour's move so far | -0.086% (on its own it prices the hour Up at 8c) |
+| 1h market Up price | 21c |
+| drift implied by the 1h price | +0.169% an hour for the rest of the hour |
+| trailing 1h spot trend | -0.075% an hour |
+| blend weights | 1h market 63%, spot 37%, fitted on the other tape days' forecast errors (Sep 18, 19 and 20) |
+| blended momentum | +0.080% an hour (how far off this estimate has been: 0.157% an hour, one sd) |
+| momentum weight (theta) | -0.0434 (negative: fades the momentum) |
+| time the momentum counts for (G) | 11.0 min = 0.184 h. A drift that builds up during the window is itself partly pulled back by the snap-back, so the 13 minutes left count as 11.0 |
+| momentum push = theta × blended momentum × G | -0.0434 × +0.080% an hour × 0.184 h = -0.0006% |
+
+**Probability waterfall**: each factor's fair share of the move from 50% (the same total whichever order you add them).
+
+| step | points on Up | Up after | in typical moves for the time left |
+|---|---|---|---|
+| start |  | 50.0% |  |
+| the 15m leg so far | -31.3 | 18.7% | -0.873 |
+| the snap-back pull | +2.8 | 21.5% | +0.081 |
+| the momentum push | -0.4 | 21.1% | -0.012 |
+| net | -28.9 | 21.1% | -0.804 |
+
+**Decision**
+
+| | Up | Down |
+|---|---|---|
+| the maths' probability | 21.1% | 78.9% |
+| 15m market price (last trade, a buy or a sell) | 29c | 71c |
+| ask at the decision (last price a taker paid in the minute before 21:47) | 32c | 71c |
+| first taker buy in the 30 s after 21:47 | 30c | 71c |
+| taker break-even (a*) | 20c | 77.7c |
+
+- The side the maths makes more likely: **Down** (78.9%).
+- Taker: Down's ask of 71c is under the 77.7c break-even (77.7c plus the 1.21c fee at that price adds up to the maths' 78.9%). It buys with a limit at 77.7c: filled at 71c (the first taker buy after 21:47), fee 1.44c, expected profit +6.48c a share, full-Kelly size 23.5% of bankroll.
+- Maker: rests a bid on Down at 70c, 1c under the 71c last trade. Expected profit per share bid is still rising there, at the top of the paper book's bid range, so the book's range sets this level, not a peak in the maths. Fill chance 96.5%: the maths' own estimate that Down trades down to 70c before the close. A fill only happens if the price falls to the bid, which means the market has moved against Down, so the maths marks Down down from 78.9% to 77.8% for a filled bid. Expected profit +7.51c per share bid; full-Kelly size 25.9% of bankroll.
+
+**Outcome**
+
+- Down won: the maths' side won. Binance, which the maths reads, and Chainlink, which settles the market, both closed Down.
+- Taker: +27.6c a share after the fee; at full-Kelly size +$8.94 per $100 of bankroll.
+- Maker: not filled. The lowest later Down price was 70c, and the paper book counts a fill only on a later trade below the bid, since its place in the queue at the bid is unknown.
+
+<sub>Market: `btc-updown-15m-1789681500`. Check: explain() p = 0.210796956537, step 2 p = 0.210796956537.</sub>
+
+## (j) A Down-side entry
 
 **BTC 2 min into the 22:15 window: the leg leads, Up 33.6%, the maths bids Down at 62c**
 
@@ -627,155 +777,14 @@ Each card is the first row in time order that fits its filter and is not already
 
 <sub>Market: `btc-updown-15m-1789683300`. Check: explain() p = 0.336313664064, step 2 p = 0.336313664064.</sub>
 
-## Evidence so far
+## Footnote: the formula and the parameters
 
-### Historical test (2026-09-21)
+p = Φ((y − R + Mo) / s). y is the 15m leg so far. R = share pulled back × stretch is the snap-back pull. Mo = theta × blended momentum × G is the momentum push. s = √(V + theta² × v × G²) is one typical move for the time left: V is the variance of spot's move over the time left after the snap-back, v the error variance of the blended momentum. Φ turns a number of typical moves into a probability. The waterfall splits p − 50% over y, R and Mo by exact Shapley values: each factor's effect averaged over every order of adding them.
 
-Pre-registered in the research write-up (section 8) and run after two adversarial reviews. Full
-tables, every deviation and the open review findings are in its section 11. Sources:
-`data/fade_1h_momentum_15m/step0.json`, `step1.json`, `step2.json`; the martingale taker and maker
-are a write-up check in `writeup_same_rows_vs_martingale.json`. t is clustered by 15m window. The
-model is judged only against the market's own price and the martingale $\Phi(y/\sigma\sqrt h)$, on
-the same rows.
+Parameters, from `data/fade_1h_momentum_15m/params_pre_sep17.json`:
 
-**Step 0, the 15m reversal on our Binance data** (2026-03-01 to 09-20, 19,584 bars per coin).
-Betting against the previous candle's sign: AUC 0.518 BTC, 0.522 ETH, 0.519 SOL, 0.513 XRP
-(t 3.35 to 6.49). The paper's own score, a 12-lag logit, out of sample: 0.526, 0.542, 0.527 for
-BTC, ETH, XRP against its 0.533, 0.538, 0.536.
-
-**Step 1, spot only, walk-forward by month** (April to Sep 20, 332,160 out-of-sample rows):
-
-| model | log-loss vs martingale | t |
-|---|---|---|
-| momentum only | −0.00082 | −2.39 |
-| reversion only | −0.00198 | −4.05 |
-| full | −0.00197 | −3.89 |
-
-- $\theta$ is negative in 6 of 6 folds, −0.043 (z −2.00) on the frozen fit. Adding it to
-  reversion changes log-loss by +0.00001 (t 0.15).
-- Reversion does not decay through the hour. By quarter, at minute 0:
-
-| | Q1 | Q2 | Q3 | Q4 |
-|---|---|---|---|---|
-| share of the stretch pulled back, as fitted ($\lambda$ −1.62, z −3.34) | 0.10 | 0.15 | 0.21 | 0.30 |
-| same, volatility scaled per quarter ($\lambda$ −0.49, z −1.31) | 0.24 | 0.27 | 0.30 | 0.33 |
-| AUC of betting against the previous candle, n 19,584 each | 0.500 | 0.518 | 0.512 | 0.540 |
-
-**Step 2, Polymarket tape** (Sep 17–20, 1,136 markets). Headline minute 2: 1,071 rows in 273
-windows.
-
-| same 1,071 rows | log-loss | Brier |
-|---|---|---|
-| model | 0.6402 | 0.2242 |
-| market price | 0.6330 | 0.2216 |
-| martingale | 0.6398 | 0.2243 |
-
-Model − market +0.0072 (t 0.87); model − martingale +0.0004 (t 0.11).
-
-| minute 2 | model | martingale, same rows and rules |
-|---|---|---|
-| taker entries | 355 | 253 |
-| taker c/share over the price paid, net of fee (t) | +1.38 (0.44) | −0.89 (−0.24) |
-| taker c per candidate row, n 1,071 (t) | +0.46 (0.44) | −0.21 (−0.24) |
-| maker quotes / fills | 521 / 429 | 495 / 405 |
-| maker c per quote, 0 if unfilled (t) | −2.69 (−1.08) | −2.30 (−0.95) |
-| maker c per candidate row, n 1,071 (t) | −1.31 (−1.08) | −1.06 (−0.95) |
-
-- Model minus martingale per candidate row: taker +0.67c (t 1.19), maker −0.24c (t −0.38).
-- The model expected +6.7c a share on its taker entries and made +1.4c. Its maker expected 97%
-  fills and a 63.5% win rate on them; it got 82% and 53%, at a mean bid of 0.564.
-- At minute 0 the market already leaned 1.25c against the previous candle (n 871, t 6.57) and
-  the model 2.23c. The outcome went against the previous candle in 49.3% of those rows.
-
-### Before the test
-
-**Zayan's trades** (`manual_trades_flip.py`, settled 2026-09-21): 18 trades, 4 right, −$9.61
-actual vs +$12.07 on the opposite side. On 15m only: 8 trades, −$2.34 vs +$7.41.
-
-**Following the 1h momentum side on 1,088 15m markets** (`threshold_scan.py`, BTC/ETH/SOL/XRP,
-Sep 17–20, net of taker fee, one row per market):
-
-| price band | n | c/share | t |
-|---|---|---|---|
-| 0.30–0.40 | 190 | −8.52 | −2.62 |
-| 0.40–0.50 | 309 | −5.77 | −2.06 |
-| 0.50–0.60 | 285 | −1.36 | −0.46 |
-| 0.60–0.70 | 166 | +2.01 | +0.55 |
-| 0.70–0.80 | 62 | +10.64 | +2.36 |
-
-
-**The maths** (`validate_math.py`): every closed form matches a simulation of the process it
-describes. The six errors the check found in the first draft, all fixed:
-
-1. First-order reversion was 31% off on the mean and ignored the variance; replaced by the
-   exact exponential-integral solution.
-2. Reversion toward the hour's open is zero in the first window; replaced by the lag kernel.
-3. Kelly denominator was $1 - a$; correct is $1 - a - c$.
-4. Maker fill assumed a fixed level; the level moves with time left (off by up to 8 points).
-5. Blend assumed the two momentum errors were independent; now covariance-aware.
-6. $\theta$ was limited to $[0, 1]$ and could not fade.
-
-## Known weaknesses
-
-- One 3.5-day window of Polymarket data: 1,071 rows in 273 windows at the headline minute. No
-  headline t in step 2 reaches 2.
-- Gaussian increments; crypto minutes are fat-tailed.
-- The 1h market is assumed efficiently priced when read. Thin books go stale.
-- Binance stands in for Chainlink, which settles the 15m markets. On the tape, 55 of the 1,071
-  minute-2 rows resolved against Binance's direction, and they carry most of the model's
-  log-loss gap to the market (+0.0051 of +0.0072).
-- Reversion does not decay through the hour. On 2026 Binance data it is weakest in the first
-  quarter and strongest in the last, so the fitted $\lambda$ is negative. How much of that is
-  reversion and how much is volatility differing by quarter is not settled: $\lambda$ is −1.62 as
-  fitted and −0.49 (z −1.31) with a volatility scale per quarter.
-- The fade is small and fragile. $\theta$ is −0.043 (z −2.00), adds nothing out of sample once
-  reversion is in, and turns +0.007 with a volatility scale per quarter. On the tape it changed
-  the side on 6 of 1,069 rows.
-- $\theta$ was fitted with the trailing spot return as the momentum, then applied on the tape to
-  the blend of the 1h market and the spot return.
-- The model is overconfident. Its taker entries expected +6.7c a share and made +1.4c. Its
-  rows at $p \ge 0.8$ (n 49) won 69% against a mean $p$ of 0.85.
-- The maker's fill model understates adverse selection: 82% of bids filled against 97%
-  modelled, and fills won 53% against the 63.5% the model expected at the fill.
-- On spot, the 15m reversal is too small to trade (1.3bp gross vs 5bp cost). On the tape the
-  crowd already prices part of it: at minute 0 the market leaned 1.25c against the previous
-  candle (n 871, t 6.57). Over Sep 17–20 the reversal did not show: 49.3% of those windows
-  went against the previous candle.
-
-## Sources
-
-- Concept and name: Zayan (operator), 2026-09-21. His trades:
-  [0xc1daaec036a8a49e4a71cad2daa51dcb19bb00c5](https://polymarket.com/profile/0xc1daaec036a8a49e4a71cad2daa51dcb19bb00c5).
-- Research write-up with the full derivation, validation table and pre-registered historical
-  test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`.
-- Scripts: `tools/fade_1h_momentum_15m/manual_trades_flip.py`, `threshold_scan.py`,
-  `validate_math.py`.
-- Data: `data/wallet_research/m15.db` (1,136 settled 15m markets, Sep 17–20);
-  `data/wallet_research/wallets.db` (1h markets, same days); Binance 1-minute klines.
-- Prediction-market prices as probabilities, binaries as options on Brownian motion:
-  Taleb, *Quantitative Finance* 2019, [arXiv 1703.06351](https://arxiv.org/abs/1703.06351);
-  Wolfers & Zitzewitz, [NBER w12200](https://www.nber.org/papers/w12200).
-- 15m reversal in crypto: Kitron & Wengrowicz 2026, [arXiv 2608.21888](https://arxiv.org/abs/2608.21888).
-- Quarter-hour boundaries: Kim & Hansen 2026, [arXiv 2607.09426](https://arxiv.org/abs/2607.09426).
-- Intraday momentum and reversal: Gao, Han, Li & Zhou, *JFE* 129 (2018),
-  [link](https://www.sciencedirect.com/science/article/abs/pii/S0304405X18301351); Wen, Bouri,
-  Xu & Zhao, *NAJEF* 62 (2022), [link](https://www.sciencedirect.com/science/article/abs/pii/S1062940822000833).
-- Brownian motion, first passage, reflection principle: Karatzas & Shreve, *Brownian Motion and
-  Stochastic Calculus* (1991). Time-varying Ornstein–Uhlenbeck: Vasicek 1977; Hull & White 1990.
-- Barrier crossing: Broadie, Glasserman & Kou, *Math. Finance* 1997,
-  [link](https://onlinelibrary.wiley.com/doi/abs/10.1111/1467-9965.00035); Wang & Pötzelberger,
-  *J. Appl. Prob.* 1997, [link](https://www.cambridge.org/core/journals/journal-of-applied-probability/article/abs/boundary-crossing-probability-for-brownian-motion/5D79C4BAC345AEDB816C901544B0236D).
-- Forecast combination: Bates & Granger 1969; review [arXiv 2205.04216](https://arxiv.org/abs/2205.04216).
-- Resting-order price: Avellaneda & Stoikov, *Quant. Finance* 2008; prediction-market making
-  [arXiv 2607.17991](https://arxiv.org/abs/2607.17991); fill probabilities [arXiv 2403.02572](https://arxiv.org/abs/2403.02572).
-- Kelly: Kelly 1956; Thorp 2006, [pdf](https://gwern.net/doc/statistics/decision/2006-thorp.pdf);
-  prediction markets [arXiv 2412.14144](https://arxiv.org/abs/2412.14144).
-
-## Changelog
-
-- 2026-09-22 · `4a7e98a879d9` · Added the test code (data, model, steps 0-2, explain, examples) and five worked examples in a trader's words; corrected the text to what the test found: the snap-back grows through the hour, the 1h momentum adds almost nothing, no price rules anywhere.
-- 2026-09-22 · `a5c0e596af30` · Historical test results added (Step 0-2 evidence, fitted parameters, updated weaknesses): at minute 2 the market's price scored better than the model (log-loss +0.0072, t 0.87), the taker made +1.4c/share (n 355, t 0.44) and the maker -2.7c/quote (n 521, t -1.08); the martingale on the same rows made -0.9c and -2.3c.
-- 2026-09-21 · `91319a8794bc` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
-- 2026-09-21 · `91319a8794bc` · Status moved from offline only to cannot trade: the offline-only status was removed (#273). Nothing is wired to trade it yet.
-- 2026-09-21 · `a3ca60e9bd16` · Lint only: removed an unused import from threshold_scan.py. No change to the analysis.
-- 2026-09-21 · `8e64a661d470` · Doc created: Zayan's concept, the maths as validated against simulation and the literature, and the two analyses that started it. Historical test pending.
+- theta -0.0434: the momentum weight. Negative fades the momentum, positive follows it.
+- kappa0 0.3450: how hard the snap-back pulls at the top of the hour (a speed per hour).
+- lam -1.6196: how that pull changes through the hour. The pull is kappa0 × e^(−lam × hours into the hour), so a negative lam makes it grow: 5.1× stronger at the end of the hour than at the start.
+- alpha 0.9778: how fast older candles lose weight in the stretch. The latest candle carries 32% of the weight, the 2nd back 16%, the 12th back 3%.
+- c 0.00932: the cap on one candle. Each candle enters as c × tanh(move / c), so a move well under 0.93% counts in full and no candle counts for more than 0.93%.
