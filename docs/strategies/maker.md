@@ -11,6 +11,53 @@
 | Code fingerprint | `ed4856e27df9` |
 <!-- END GENERATED:strategy -->
 
+## At a glance
+
+### Concept
+
+Rest one passive bid on the favourite of each crypto Up/Down market and hold it to resolution. A resting order pays no fee, and on this venue the fee is what cancels the taker-side edge.
+
+### Main assumption
+
+Resting fills on the favourite between 0.55 and 0.92 earn about +3.8c a share at resolution, and a bid placed now fills the way those measured fills did. The live paper ledger is the first out-of-sample test of both halves.
+
+### The maths
+
+A filled quote at price $p$ for $n$ shares settles with no fee:
+
+$$\text{pnl}=n\,\big(\mathbb{1}[\text{won}]-p\big)$$
+
+It fills only once the taker flow that sold our outcome at or below our bid $b$ has cleared the queue $D$ already resting there. A taker buying the other outcome at $q$ is selling ours at $1-q$:
+
+$$C=\sum_{\substack{\text{taker sells of ours}\\ p_i\le b}} s_i+\sum_{\substack{\text{taker buys of the other}\\ 1-p_i\le b}} s_i$$
+
+$$\text{filled}=\min(Q,\ C-D)\quad\text{when } C>D$$
+
+With about 48c of per-trade spread, seeing a 4c edge at two standard errors takes
+
+$$n\approx\Big(\frac{2\times 48}{4}\Big)^2\approx 580\ \text{settled quotes.}$$
+
+### How it works
+
+Every 45 seconds, on the BTC/ETH/XRP hourly and BTC/ETH/SOL/XRP daily Up/Down markets:
+
+1. **Settle** each filled quote once the CLOB marks its market closed with a winner.
+2. **Check fills** against taker-only trades since the quote went in.
+3. **Quote**, only while the `maker` switch is on. The favourite is the side with the higher mid. Skip it if its spread is over 6c. Bid one tick above the best bid, never at or through the ask, and only if that price is in $[0.55,\,0.92)$. 25 shares, one quote per market, ever.
+
+### How it was derived
+
+- **Taker ruled out, 2026-09-20.** Taker entries across the hourly tape had a real gross edge of +0.21c a share against a 1.13c fee: −0.91c net (`5d69d0c`). That left resting quotes as the one setup not yet tested. Proposed by Claude.
+- **Measured on real resting fills.** Every fill missing from the `takerOnly=true` trade feed was labelled passive (`maker_label.py`). `maker_band.py` then measured what those fills earned, held to resolution, over 7,010 resolved 1h and 24h markets. Every favourite bucket from 0.55 to 0.92 was positive (+3.80c a share, t = +13.1) and every bucket below 0.55 lost. The band edges were read off that table.
+- **One clip per market.** Weighted by volume the same band loses 0.61c a share, so the edge only shows at a fixed size. The loop quotes a fixed clip once per market and never takes a second bite (`19dad91`).
+
+### References
+
+- PR #264 — the band table, the 48c per-trade figure and the ~580-quote estimate
+- `tools/wallet_research/maker_band.py`, `maker_label.py`, `filter_test.py` and `README.md`
+- Commits `1179f11`, `19dad91`, `5d69d0c`
+- Code: `polymarket_bot/maker/quoter.py`, `filler.py`, `runner.py`; the queue rule is pinned by `tests/unit/test_maker_fill_model.py`
+
 ## What it does
 
 A paper-only loop. It looks at the open BTC, ETH and XRP hourly markets and the BTC, ETH, SOL and XRP daily Up/Down markets every 45 seconds. For each market it has never quoted, it rests one 25-share bid on the favourite, one tick above the best bid, if that price is between 0.55 and 0.92 and the spread is 6c or less. It never crosses the spread, so it pays no fee. A quote counts as filled only after taker volume has traded through the queue that was already resting ahead of it, and filled shares are held to resolution.
@@ -148,4 +195,5 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 
 ## Changelog
 
+- 2026-09-21 · `ed4856e27df9` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `ed4856e27df9` · Doc created.

@@ -81,7 +81,7 @@ def render(
     # operator's choice after every refresh swaps this HTML out.
     return (
         "<details class='card ticket fold' data-fold='ticket' "
-        "ontoggle='rememberFold(this)' open>"
+        "ontoggle='window.rememberFold&&rememberFold(this)' open>"
         "<summary class='card-h'><span class='fold-title'>ORDER SIZE</span>"
         f"<span class='win tk-status {status_cls}' title='{escape(status_tip, quote=True)}'>"
         f"{escape(market_lbl)} · <i class='tk-dot'></i>{escape(status_txt)}</span></summary>"

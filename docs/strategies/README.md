@@ -7,6 +7,11 @@ Every doc has the same sections: **What it does**, **How it was formed** (who pr
 and what led to it), **How it works**, **Sources**, **Changelog**. Optional: Parameters, Evidence
 so far, Known weaknesses.
 
+**At a glance** (optional, placed first) is the short version the dashboard's STRATEGY card shows,
+under ORDER SIZE. It has six `###` parts: Concept, Main assumption, The maths, How it works, How it
+was derived, References. A doc that has the section must fill all six; a doc without it is left off
+the card's dropdown.
+
 ## Keeping a doc in step with its code
 
 The block between the `GENERATED:strategy` markers holds the strategy's name, status, switch,

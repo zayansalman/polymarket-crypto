@@ -11,6 +11,48 @@
 | Code fingerprint | `4e17e45c8430` |
 <!-- END GENERATED:strategy -->
 
+## At a glance
+
+### Concept
+
+The trading loop a strategy plugs into. While the operator holds Start, every 5 seconds it prices the current BTC Up/Down window against Chainlink, the feed the market settles on, and journals the fair value and the edge on each side. No strategy is loaded, so it never enters.
+
+### Main assumption
+
+Over the minutes left in a window, BTC's log price is a random walk with no drift and a volatility taken from recent one-second Chainlink returns. Pricing off Chainlink matches how the market resolves, and an exact tie resolves Up.
+
+### The maths
+
+$$z=\frac{\ln(S/K)}{\sigma\sqrt{\max(T,1)}},\qquad w=\frac{g/K}{\sigma\sqrt{\max(T,1)}}$$
+
+$$p_{\text{up}}=\Phi(z)+\min\big(\varphi(z)\,w,\ 0.45\big),\ \text{clipped to }[0.005,\,0.995]$$
+
+$S$ is the latest Chainlink print, $K$ the window's Chainlink open, $T$ the seconds left and $g=0.01$ dollars the Chainlink print step. So $\varphi(z)\,w$ is the chance the close lands exactly on the open, which counts for Up. The edges against the asks are $e_{\text{up}}=p_{\text{up}}-a_{\text{up}}$ and $e_{\text{down}}=(1-p_{\text{up}})-a_{\text{down}}$.
+
+### How it works
+
+1. Find the window: slug `btc-updown-5m-{t0}`, with $t_0=t-(t\bmod 300)$.
+2. Read both order books (the hub's stream, else CLOB `/book`), the Chainlink spot (WebSocket, or REST if older than 15 s) and the window's open.
+3. Volatility: the stdev of one-second Chainlink log returns once there are 30 of them, else 90 Binance one-second closes, else the floor 0.00002.
+4. Journal the tick to `paper_ticks`. Decision: none, `skip: no strategy loaded`.
+
+It prices the retired 5-minute family whatever the header selector shows. A new strategy plugs into `paper.py:_build_snapshot` and inherits the entry, risk-gate and settlement plumbing.
+
+### How it was derived
+
+- **2026-05-21.** The repo's first commit is this loop, sized $1 to $5 by confidence. Who designed the model is not recorded.
+- **2026-05-24.** A backtest over the operator's own trades set the defaults: the 0.045 edge floor kept, the confidence floor cut to 0.50 (`fb68e44`).
+- **June 2026.** Chainlink replaced Binance for the reference, spot and volatility, and quotes moved to the CLOB book (#21, #22). The tie term comes from Chainlink's 1-cent print step.
+- **2026-07-10.** Stopped after the post-freeze segment lost $0.41 a trade over 37 trades.
+- **2026-09-13, Zayan.** Archived the v0 strategy; the loop kept running with none loaded (PR #226).
+
+### References
+
+- Code: `polymarket_bot/paper.py` (`_build_snapshot`, `_fetch_current_market`, `_sigma_with_fallback`); `polymarket_bot/strategy.py` (`fair_up_probability`)
+- `docs/archive/v0-strategy.md`, `docs/archive/POSTMORTEM_2026-07.md`, `docs/archive/TIMELINE.md`
+- Issues #21, #22, #28, #29, #133; PR #226
+- Commits `eebee55`, `fb68e44`, `e8565b4`, `8ece0bd`
+
 ## What it does
 
 A loop that runs while the operator holds Start. Every 5 seconds it finds the current BTC 5-minute Up/Down market, reads the Chainlink settlement feed and both order books, and journals a log-normal fair value and the executable edge. It never enters: since the v0 strategy was archived on 2026-09-13, every tick sets no side and journals `skip: no strategy loaded`. It prices `btc-updown-5m-*` windows whatever market the header selector shows.
@@ -110,4 +152,5 @@ Here $g=0.01$ is the Chainlink print step in dollars (`PRINT_GRANULARITY_USD`), 
 
 ## Changelog
 
+- 2026-09-21 · `4e17e45c8430` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `4e17e45c8430` · Doc created.

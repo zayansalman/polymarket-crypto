@@ -349,7 +349,7 @@ class TestTicketRender:
         # Same <details> pattern as the ACTIVITY LOG, so it collapses to its header.
         assert "<details class='card ticket fold' data-fold='ticket'" in html
         assert "<summary class='card-h'><span class='fold-title'>ORDER SIZE</span>" in html
-        assert "ontoggle='rememberFold(this)'" in html and " open>" in html
+        assert "rememberFold(this)'" in html and " open>" in html
         assert html.rstrip().endswith("</details>")
 
     def test_stale_error_and_pending_states_are_visible(self) -> None:

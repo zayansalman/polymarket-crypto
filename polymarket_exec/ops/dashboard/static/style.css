@@ -695,3 +695,34 @@ body {
 .doc-body .math-display { margin: 10px 0; overflow-x: auto; }
 .doc-body a { color: var(--text); }
 .strategy-doc-link { font-size: 10.5px; margin-left: 8px; font-weight: normal; }
+
+/* ── FEEDS fold ── */
+/* Closed, it shrinks to its header instead of holding the row open. */
+.execution-grid .feeds-card.fold { align-self: start; margin-bottom: 0; }
+
+/* ── the column beside FEEDS: ORDER SIZE over STRATEGY ── */
+.grid-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; align-self: start; }
+
+/* ── STRATEGY card: pick a strategy, read its At a glance summary ── */
+.sc-pick { display: flex; gap: 8px; align-items: stretch; margin-bottom: 10px; }
+.sc-select { flex: 1; min-width: 0; width: auto; padding: 5px 8px; }
+.sc-docs { display: inline-flex; align-items: center; padding: 0 14px; text-decoration: none; color: var(--text); }
+.sc-docs:hover { border-color: var(--text); }
+.sc-body[hidden] { display: none; }
+/* Scrolls inside so the column ends about where FEEDS does; Docs has the rest. */
+.sc-body { max-height: 500px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+.sc-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sc-part { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 8px; }
+.sc-part h4 {
+  margin: 0 0 5px; font-family: var(--font-mono); font-size: 9.5px; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--label);
+}
+.sc-md { font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.sc-md p { margin: 0 0 6px; }
+.sc-md p:last-child { margin-bottom: 0; }
+.sc-md ul, .sc-md ol { margin: 0 0 6px; padding-left: 18px; }
+.sc-md li { margin: 2px 0; }
+.sc-md code { font-family: var(--font-mono); font-size: 11px; background: var(--bg-alt); padding: 0 3px; }
+.sc-md a { color: var(--text); }
+.sc-md .math-display { margin: 6px 0 8px; overflow-x: auto; overflow-y: hidden; }
+.strategy-status.st-running { color: var(--pos); background: rgba(27, 122, 67, .08); }

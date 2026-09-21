@@ -11,6 +11,56 @@
 | Code fingerprint | `14f1bd0c38c4` |
 <!-- END GENERATED:strategy -->
 
+## At a glance
+
+### Concept
+
+Price each altcoin's daily Up/Down market as a log-normal bet on spot, and buy the side the market underprices the most. The thesis is Zayan's: daily markets on thinner altcoins are priced less efficiently than BTC. Issue #185 records it as a hypothesis to test, not a finding.
+
+### Main assumption
+
+For the rest of the day the coin's log price moves like a random walk with no drift, and its volatility equals the last 30 days of daily returns. Then spot, yesterday's noon-ET close and the time left are enough to price the day. Gamma's best ask is taken as fillable for the full trade size.
+
+### The maths
+
+With daily log returns $r_i=\ln(c_i/c_{i-1})$ over the last 30 closes, the volatility per second is
+
+$$\sigma=\frac{\max\big(\operatorname{stdev}(r),\ 0.00002\big)}{\sqrt{86400}}$$
+
+The chance of Up, from spot $S$, the reference close $K$ and $T$ seconds left, clipped to $[0.005,\,0.995]$:
+
+$$p_{\text{up}}=\Phi\Big(\frac{\ln(S/K)}{\sigma\sqrt{\max(T,1)}}\Big)$$
+
+The edge on each side against its ask:
+
+$$e_{\text{up}}=p_{\text{up}}-a_{\text{up}},\qquad e_{\text{down}}=(1-p_{\text{up}})-a_{\text{down}}$$
+
+It enters when the larger edge is at least 0.045, more than an hour is left, and the ask is between 0.05 and 0.95. With the taker fee $f=0.07\,a(1-a)$, PnL per share is $1-a-f$ on a win and $-a-f$ on a loss.
+
+### How it works
+
+Every 60 seconds, for DOGE, SOL, XRP, BNB and ETH:
+
+1. Settle any position past its noon-ET resolution from the Binance 1-minute close. Up wins above the reference, and an exact tie pays 0.5.
+2. Find the day's market by slug on Gamma and read its best bid and ask.
+3. Price both sides and keep the one with the larger edge.
+4. Of the assets that pass, enter only the one with the largest edge: a flat $10 paper position, at most one per asset per day, held to resolution.
+
+Paper only: there is no live order path.
+
+### How it was derived
+
+- **2026-08-29, Zayan.** Stopped all 5-minute work after the multi-coin copy-trade shadow stayed negative (#182).
+- **2026-08-30, Zayan.** Chose the mechanic: daily Up/Down on thinner altcoins, $10 paper positions, one position on the single strongest signal, always running (issue #185).
+- **2026-08-30, Claude.** Built it (`5c91228`) by reusing the BTC 5-minute log-normal price with two changes: volatility from daily closes instead of one-second closes, and no tie term, because this family splits an exact tie 50-50. The 0.045 edge floor and the 30-day look-back carried over with no reason recorded. Issue #185 asked for momentum as an input; drift is computed but not used.
+- **2026-09-17 to 19.** Fixes for the noon-ET market lookup (#239), late settlement (#245) and the reference close on DST days (#246).
+
+### References
+
+- Issue #185 and `tasks/2026-08-30-local-strategy-rebrand.md` — the thesis and the operator's decisions
+- Commit `5c91228` — the build; #239, #245, #246 — the fixes
+- Code: `polymarket_bot/daily/signal.py`, `scanner.py`, `market.py`; `polymarket_bot/strategy.py`; `polymarket_bot/fees.py`
+
 ## What it does
 
 Every 60 seconds it prices the Polymarket daily Up/Down market for DOGE, SOL, XRP, BNB and ETH from Binance spot, the previous noon-ET close and 30 days of realised volatility. When a side's ask sits at least 0.045 below that price, it records one flat $10 position on the asset with the largest gap and holds it to the noon-ET resolution. It has no live order path: positions exist only in the `daily_shadow_positions` table. As of 2026-09-21 it has settled 18 positions for −$67.08.
@@ -139,4 +189,5 @@ Read from `daily_shadow_positions` on 2026-09-21: 20 rows, 18 settled and 2 open
 
 ## Changelog
 
+- 2026-09-21 · `14f1bd0c38c4` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `14f1bd0c38c4` · Doc created.
