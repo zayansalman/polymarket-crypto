@@ -13,10 +13,6 @@ A family with a switch gets a checkbox; one that cannot run gets its status
 and its verdict instead, because a checkbox in front of code nothing can reach
 is a lie about what clicking it would do.
 
-Copy-trade switches are NOT here — they act on somebody else's wallet and
-render on COPY TRADE WALLETS, beside the wallet they control. The copy family
-still appears in the list, with a pointer to where its switches live.
-
 The switch applies on click (no Apply button, no confirm dialog — the click
 is the intent) by posting to the same ``/api/runtime-config`` endpoint every
 other runtime control uses.

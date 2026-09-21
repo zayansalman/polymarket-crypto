@@ -141,15 +141,6 @@ async def _lifespan(app: FastAPI):
     macro_task = asyncio.create_task(macro.run(macro_stop_event))
     _macro_recorder.set_current(macro)
 
-    # Copy-trade watcher (#copytrade): follows one target wallet's fills on the
-    # daily macro Up/Down markets. Observation only — it places nothing — and
-    # like the daily scanner it runs for the process lifetime with its
-    # STRATEGIES switch as the only gate.
-    from polymarket_bot.copytrade.watcher import run_forever as _run_copy_watcher
-
-    copy_stop_event = asyncio.Event()
-    copy_task = asyncio.create_task(_run_copy_watcher(copy_stop_event))
-
     # Maker (#maker): rests passive bids on the favourite in crypto Up/Down
     # markets and never crosses. Paper only — it records quotes, the queue each
     # one joined, and whether flow ever traded through it. Gated by the
@@ -175,9 +166,6 @@ async def _lifespan(app: FastAPI):
     _flow_recorder.set_current(None)
     _macro_recorder.set_current(None)
     _marketdata_hub.set_current(None)
-    from polymarket_bot.copytrade import watcher as _copy_watcher
-
-    _copy_watcher.set_current(None)
     for stop_event, task in (
         (daily_stop_event, daily_task),
         (quote_stop_event, quote_task),
@@ -185,7 +173,6 @@ async def _lifespan(app: FastAPI):
         (flow_stop_event, flow_task),
         (macro_stop_event, macro_task),
         (marketdata_stop_event, marketdata_task),
-        (copy_stop_event, copy_task),
         (maker_stop_event, maker_task),
     ):
         stop_event.set()
@@ -684,70 +671,6 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
         log.info("btc.runtime_config_set", key=key, value=value)
         return {"status": "ok", "key": key, "value": value}
     return {"status": "error", "detail": f"unknown runtime key {key!r}"}
-
-
-@app.post("/api/copy-fill")
-async def api_copy_fill(request: Request) -> dict[str, Any]:
-    """Book ONE of a target's observed fills as a paper copy, by hand.
-
-    The Copy button on the COPY TRADE WALLETS card. It runs exactly the same
-    path autocopy runs — ``trader.consider`` prices the fill against the live
-    ask ladder and charges the taker fee — so a hand-picked copy and an
-    automatic one are the same kind of row in the ledger and can be compared.
-    Nothing here places a real order.
-    """
-    import httpx
-
-    from db import notify  # type: ignore[import-untyped]
-    from polymarket_bot.copytrade import trader as _trader
-    from polymarket_bot.copytrade import watcher as _copy_watcher
-
-    body = await request.json()
-    tx = str((body or {}).get("tx") or "")
-    if not tx:
-        return {"status": "error", "detail": "tx required"}
-
-    watcher = _copy_watcher.current()
-    if watcher is None:
-        return {"status": "error", "detail": "watcher is not running"}
-    fill = watcher.state.find_fill(tx)
-    if fill is None:
-        # The in-memory list is capped, so an old fill is genuinely gone
-        # rather than merely not found — say which.
-        return {"status": "error", "detail": "fill is no longer in the watch window"}
-    if fill.side != "BUY":
-        return {"status": "error", "detail": "that fill is an exit, not an entry"}
-
-    try:
-        async with httpx.AsyncClient() as client:
-            opened = await _trader.consider(client, fill, fill.wallet)
-    except Exception as exc:  # noqa: BLE001 — surfaced to the operator, never raised
-        log.warning("copytrade.manual_copy_failed", tx=tx[:14], error=str(exc))
-        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"[:160]}
-
-    if not opened:
-        # ``consider`` always writes its reason to copy_decisions; read the
-        # newest one back so the toast says why rather than just "no".
-        from polymarket_bot.copytrade import ledger as _copy_ledger
-
-        reason = "declined"
-        try:
-            for row in await _copy_ledger.decisions(limit=5):
-                if row.get("tx") == tx:
-                    reason = str(row.get("reason") or "declined")
-                    break
-        except Exception:  # noqa: BLE001
-            pass
-        return {"status": "error", "detail": reason}
-
-    await notify(
-        "copytrade",
-        f"Operator copied {fill.outcome} {fill.size:.0f}sh @ {fill.price:.3f} "
-        f"on {fill.title}",
-        {"tx": tx, "wallet": fill.wallet},
-    )
-    log.info("copytrade.manual_copy", tx=tx[:14], wallet=fill.wallet[:10])
-    return {"status": "ok", "tx": tx}
 
 
 async def _runtime_state() -> dict[str, str]:

@@ -1,14 +1,11 @@
 """Leftovers of the two-sided 5m maker-quoting shadow line (#182, closed 2026-08-29).
 
-That line's own modules (fills, quoter, types, ledger) and the two-sided
-copy-trade research tooling built alongside it (feed, onchain, and the
-tools/copytrade_shadow.py CLI with its RPC fast feed and viewer) are gone —
-deleted 2026-09-21 once the operator confirmed polymarket_bot/copytrade's live watcher had
-replaced them. Two modules from that era are still live and stay here:
+That line's own modules (fills, quoter, types, ledger) and every piece of
+copy-trade code built alongside or after it are gone (copy-trade removed
+2026-09-21). One module from that era is still live and stays here:
 
-* ``mirror.py`` — ``price_the_copy``, used by the live copytrade trader.
 * ``market_index.py`` — ``parse_market``, used by the live daily scanner.
 
-Neither places an order. Both just happen to have been written for this
-package before the strategy it was named for was retired.
+It places no orders. It just happens to have been written for this package
+before the strategy it was named for was retired.
 """

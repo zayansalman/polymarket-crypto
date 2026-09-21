@@ -22,10 +22,11 @@ phases ran on it:
   memo, postmortem).
 - A shadow-only copy-trade / maker-quoting line (#182, reopened 2026-08-04) tested
   whether a top Polymarket account's two-sided quoting strategy was reproducible
-  natively (`polymarket_bot/pairarb/`) or copy-tradeable
-  (`polymarket_bot/pairarb/mirror.py` + a copy-trade CLI, since deleted). A second independent
-  read confirmed net-negative results (doge -$307.68/n=1980, min -$174.47/n=1756) and
-  zero accumulated fills on the pairarb side — closed 2026-08-29, never armed for live.
+  natively or copy-tradeable. A second independent read confirmed net-negative results
+  (doge -$307.68/n=1980, min -$174.47/n=1756) and zero accumulated fills on the pairarb
+  side — closed 2026-08-29, never armed for live. That code has since been deleted.
+
+Copy-trade was removed from the app on 2026-09-21: no wallets are followed.
 
 Next chapter: daily/hourly/longer-horizon crypto markets. Category not yet chosen,
 nothing built for it yet — see `tasks/todo.md` for current status and open items.
@@ -42,7 +43,7 @@ polymarket_bot/           # the live loop + signal math
 ├── params.py             #   operator-tunable runtime params
 ├── fees.py               #   canonical Polymarket taker-fee math (live + paper)
 ├── daily/                #   daily altcoin Up/Down scanner (paper only)
-└── pairarb/               #   two-sided maker quoting + copy-trade research, shadow only, closed (#182)
+└── pairarb/              #   market_index.py only (used by daily/); the rest of #182 is deleted
 
 polymarket_exec/          # execution / connectors / ops
 ├── core/                 #   domain types, interfaces, exceptions

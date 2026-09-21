@@ -49,58 +49,6 @@ class Knob:
 
 
 KNOBS: dict[str, Knob] = {
-    # --- Copy trade (polymarket_bot/copytrade/) --------------------------
-    # The target is an enum rather than free text: the candidate set is closed
-    # and each entry carries the measurement that earned it a place
-    # (copytrade/targets.py). A typo'd address would poll a wallet with no
-    # measured edge, which is worse than no copying at all.
-    "copy_follow_all": Knob(
-        "runtime.copy.follow_all", True, "bool",
-        "Follow every registered target", group="Copy trade",
-    ),
-    "copy_scale": Knob(
-        "runtime.copy.scale", 1.0, "float",
-        "Fraction of their size to mirror", 0.01, 5.0, group="Copy trade",
-    ),
-    # Their clips are often 1-5 shares, below the venue's 5-share floor. True
-    # skips those fills; False rounds the copy UP to the floor, which means
-    # taking a larger bet than they did. Skipping is the honest default.
-    "copy_skip_below_min": Knob(
-        "runtime.copy.skip_below_min", True, "bool",
-        "Skip fills under the venue minimum", group="Copy trade",
-    ),
-    "copy_max_shares": Knob(
-        "runtime.copy.max_shares", 50.0, "float",
-        "Max shares per copy", 5.0, 5000.0, unit="sh", group="Copy trade",
-    ),
-    "copy_max_slippage_cents": Knob(
-        "runtime.copy.max_slippage_cents", 3.0, "float",
-        "Skip a copy above this slippage", 0.0, 50.0, unit="c", group="Copy trade",
-    ),
-    # One registered target, so this is a one-item list. Kept as an enum rather
-    # than free text because a typo'd address polls a wallet with no measured
-    # edge, which is worse than not copying at all.
-    "copy_target_wallet": Knob(
-        "runtime.copy.target_wallet", "0xd9013df863c1ba932780857b020dfdeacedf8e14",
-        "enum", "Copy target wallet",
-        choices=("0xd9013df863c1ba932780857b020dfdeacedf8e14",),
-        group="Copy trade",
-    ),
-    "copy_poll_interval_seconds": Knob(
-        "runtime.copy.poll_interval_seconds", 12.0, "float",
-        "Target poll interval", 5.0, 600.0, unit="s", group="Copy trade",
-    ),
-    # A fill older than this cannot be followed at any latency, so it is never
-    # worth a book lookup or a ledger row. Also a backstop against dedupe slips
-    # re-surfacing history.
-    "copy_max_fill_age_seconds": Knob(
-        "runtime.copy.max_fill_age_seconds", 300.0, "float",
-        "Ignore fills older than", 30.0, 3600.0, unit="s", group="Copy trade",
-    ),
-    "copy_observe_limit": Knob(
-        "runtime.copy.observe_limit", 100, "int",
-        "Fills fetched per poll", 10, 500, group="Copy trade",
-    ),
     # --- Maker (polymarket_bot/maker/) ------------------------------------
     # Measured over 7,000 resolved crypto Up/Down markets: real resting orders
     # that filled between 0.55 and 0.92 returned +2 to +6.6c/share held to

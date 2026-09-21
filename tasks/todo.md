@@ -1,3 +1,10 @@
+# Update — copy-trade removed (2026-09-21)
+
+All copy-trade code is gone from the app (see CHANGELOG). Every open copy-trade
+item further down this file (`copytrade_*`, `assert_copy_live_allowed`, the
+fast feed) is void: the code it refers to no longer exists. Wallets to follow
+will be chosen again from `tools/wallet_research/` before any copy code returns.
+
 # Branch close-out — pivot off all 5-minute markets (2026-08-29)
 
 Operator decision this session, after re-litigating "is this viable" from scratch

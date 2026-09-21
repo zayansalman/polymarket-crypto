@@ -230,12 +230,6 @@ function swapKeepingInputs(container, html) {
       kept.push({ id: el.id, value: el.value, focus: el === active, dirty: el.dataset.dirty });
     }
   });
-  // Panels that scroll internally (e.g. the copy-trade fill list) lose their
-  // position when innerHTML is replaced, which reads as the page jumping.
-  var scrolls = [];
-  container.querySelectorAll('[data-keep-scroll]').forEach(function(el) {
-    if (el.scrollTop > 0) scrolls.push({ key: el.dataset.keepScroll, top: el.scrollTop });
-  });
   container.innerHTML = html;
   restoreFolds(container);  // a collapsed panel must stay collapsed across refreshes
 
@@ -248,10 +242,6 @@ function swapKeepingInputs(container, html) {
     // refresh every few seconds drags the page back to whatever was focused
     // however far the operator had scrolled away.
     if (k.focus) el.focus({ preventScroll: true });
-  });
-  scrolls.forEach(function(s) {
-    var el = container.querySelector('[data-keep-scroll="' + s.key + '"]');
-    if (el) el.scrollTop = s.top;
   });
   // No window-level scroll restore here. Panels change height between
   // refreshes, so forcing the old pixel offset back lands the reader somewhere
@@ -357,34 +347,6 @@ function setKnob(name, kind) {
       setTimeout(refreshAll, 300);
     })
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
-}
-
-// Copy one observed fill by hand, from the COPY TRADE WALLETS card. Same path
-// autocopy takes — prices against the live ask ladder, charges the taker fee,
-// sends no real order. The click is the intent: no confirm dialog.
-function copyFill(tx) {
-  var btn = document.getElementById('cw-copy-' + tx);
-  if (btn) { btn.disabled = true; btn.textContent = '...'; }
-  fetch('/api/copy-fill', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tx: tx })
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.status === 'ok') {
-        showToast('copied', 'success');
-      } else {
-        // The row re-renders in at most 5s; until then say why it did not book.
-        if (btn) { btn.disabled = false; btn.textContent = 'copy'; }
-        showToast('Not copied: ' + (data.detail || 'unknown error'), 'error');
-      }
-      setTimeout(refreshAll, 300);
-    })
-    .catch(function(err) {
-      if (btn) { btn.disabled = false; btn.textContent = 'copy'; }
-      showToast('Not copied: ' + err.message, 'error');
-    });
 }
 
 function setStrategy(name) {
