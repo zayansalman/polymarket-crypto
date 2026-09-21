@@ -1,6 +1,6 @@
 """Paper ledger for resting maker quotes.
 
-A taker order either fills or errors, so a copy ledger only needs the fill. A
+A taker order either fills or errors, so a taker ledger only needs the fill. A
 maker order has a third outcome that matters more than either: it rests and
 nothing happens. Most quotes end that way, and a ledger that only stored fills
 would report the edge of the orders that filled while hiding how rarely they do.

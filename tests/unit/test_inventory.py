@@ -48,8 +48,6 @@ def test_every_strategy_switch_belongs_to_some_family() -> None:
     # A switch with no family behind it is a control the card cannot explain.
     claimed = {f.switch for f in _inv.FAMILIES if f.switch}
     for name in _strategies.STRATEGIES:
-        if name == "copy_autocopy":
-            continue  # a second switch on the copytrade family, not its own
         assert name in claimed, f"{name} has a switch but no inventory entry"
 
 
@@ -85,7 +83,6 @@ def test_the_running_families_are_the_ones_the_dashboard_starts() -> None:
     for key, module in (
         ("maker", "polymarket_bot.maker.runner"),
         ("daily_altcoin", "polymarket_bot.daily.scanner"),
-        ("copytrade", "polymarket_bot.copytrade.watcher"),
     ):
         family = next(f for f in _inv.FAMILIES if f.key == key)
         assert family.status == _inv.RUNNING, key

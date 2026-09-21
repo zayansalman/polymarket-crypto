@@ -29,10 +29,6 @@ from db import get_config, set_config  # type: ignore[import-untyped]
 MINE = "mine"
 """Strategies this repo runs on its own signals."""
 
-COPY = "copy"
-"""Switches over a followed wallet — rendered on the COPY TRADE WALLETS card."""
-
-
 @dataclass(frozen=True)
 class Strategy:
     name: str
@@ -41,8 +37,7 @@ class Strategy:
     default: bool = True
     group: str = MINE
     """Which card owns the switch. ``MINE`` is a strategy this repo decides
-    for itself; ``COPY`` is a switch over somebody else's wallet, and those
-    belong next to the wallet rather than in a list they say nothing about."""
+    for itself."""
 
     @property
     def key(self) -> str:
@@ -85,33 +80,11 @@ STRATEGIES: dict[str, Strategy] = {
         ),
         group=MINE,
     ),
-    "copy_macro_daily": Strategy(
-        name="copy_macro_daily",
-        label="Watch target wallets",
-        description=(
-            "Polls each followed wallet's public activity feed and shows every "
-            "fill it makes. Off means the feed is not polled at all, so "
-            "nothing can be copied either — manually or automatically."
-        ),
-        group=COPY,
-    ),
-    "copy_autocopy": Strategy(
-        name="copy_autocopy",
-        label="Autocopy every new fill",
-        description=(
-            "On: every fresh fill on a followed market is priced against the "
-            "live ask ladder and booked as a paper copy the moment it is seen. "
-            "Off: fills are still shown, and the Copy button on each one books "
-            "it by hand. Paper either way — no real order is ever sent."
-        ),
-        group=COPY,
-    ),
 }
 
 """Registry order is render order. Keys are permanent: the switch is stored at
 ``runtime.strategy.<name>.enabled``, so renaming a ``name`` silently resets an
-operator's choice. ``copy_macro_daily`` keeps its historic name for exactly
-that reason, despite no longer being about macro or daily markets."""
+operator's choice."""
 
 
 def in_group(group: str) -> dict[str, Strategy]:

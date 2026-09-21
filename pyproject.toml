@@ -59,8 +59,6 @@ target-version = "py311"
 "tests/e2e/test_dashboard_flow.py" = ["E402"]
 "tests/unit/test_dashboard.py" = ["E402"]
 "tools/backtest_btc_strategy.py" = ["E402"]
-"tools/copytrade_dashboard.py" = ["E402"]
-"tools/copytrade_shadow.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"
