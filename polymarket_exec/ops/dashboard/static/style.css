@@ -511,7 +511,9 @@ body {
 /* MY STRATEGIES lists EVERY family in the tree, grouped by status, so a dead
    one is deleted for being visible rather than rotting unseen. Each row shows
    what it has actually settled — a strategy wired to nothing cannot then be
-   mistaken for one that is working. */
+   mistaken for one that is working. It spans both columns: nothing sits
+   beside it, and a half-width list leaves a card-sized hole next to it. */
+.strategies-card { grid-column: 1 / -1; }
 .strategy-group {
   font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .08em;
   text-transform: uppercase; color: var(--label);
