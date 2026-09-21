@@ -11,8 +11,8 @@
 
 ## What Zayan described
 
-- Take a position in the 15m Up/Down market from the 1h momentum, at an entry price that is
-  computed, not a fixed number like 40c.
+- Take a position in the 15m Up/Down market from the 1h momentum, at an entry price the maths
+  calculates live. A fixed price rule is no better than random.
 - The 1h side should carry more weight in the last 15m of the hour than in the first.
 - At the start of the hour, a 1h market at 60c and a 15m market at 55c on the same side is not
   a reason to buy: the 15m can still go the other way depending on its own momentum. Both
@@ -194,8 +194,12 @@ The question step 2 answers: on spot the 15m reversion is too small to trade (1.
 crowd does not already price it, a ~1.5% sign edge is ~1.5c/share at 50c, and a maker pays no
 fee. If the crowd does price it, the edge is zero and this will show it.
 
-**Baselines on the same rows:** Zayan's rule (1h side, price ≥ 40c) and the 2026-09-21 finding
-(1h side, price ≥ 55c).
+**Comparisons:** the model is judged only against the market's own price and the no-edge
+(martingale) baseline, on the same rows.
+
+*Amendment, 2026-09-21 (Zayan): an earlier draft also scored price-threshold rules (1h side at
+≥ 40c and ≥ 55c) as baselines. Removed: there are no rules or thresholds in this strategy, not
+even as comparisons. The maths decides.*
 
 ## 9. Validation (2026-09-21)
 
