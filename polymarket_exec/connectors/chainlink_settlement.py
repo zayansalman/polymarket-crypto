@@ -42,7 +42,7 @@ NO-MIXING RULE: reference, spot, and sigma must all come from this Chainlink
 feed. Binance price LEVELS must never be compared against Chainlink levels —
 the measured basis (Chainlink ~ $50.7 BELOW Binance, std $3.8) is larger than
 most real edges at the 5-minute scale. Binance is allowed only as a
-volatility-*shape* fallback (returns, not levels) and for backtest tooling.
+volatility-*shape* fallback (returns, not levels).
 """
 
 from __future__ import annotations

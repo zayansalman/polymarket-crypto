@@ -26,8 +26,7 @@ phases ran on it:
   (doge -$307.68/n=1980, min -$174.47/n=1756) and zero accumulated fills on the pairarb
   side — closed 2026-08-29, never armed for live. That code has since been deleted.
 
-Copy-trade was removed from the app on 2026-09-21: no wallets are followed. Which
-wallets to follow, if any, will be chosen again from `tools/wallet_research/` first.
+Copy-trade was removed from the app on 2026-09-21: no wallets are followed.
 
 Next chapter: daily/hourly/longer-horizon crypto markets. Category not yet chosen,
 nothing built for it yet — see `tasks/todo.md` for current status and open items.
@@ -48,7 +47,7 @@ polymarket_bot/           # the live loop + signal math
 
 polymarket_exec/          # execution / connectors / ops
 ├── core/                 #   domain types, interfaces, exceptions
-├── strategy/  connectors/  storage/  backtest/
+├── strategy/  connectors/  storage/
 ├── execution/            #   paper lifecycle + LIVE executor (multi-gated) + RiskGate
 └── ops/dashboard/         #   FastAPI operator dashboard (SSE), panels, runtime controls
 

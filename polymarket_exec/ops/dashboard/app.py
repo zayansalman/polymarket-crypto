@@ -46,7 +46,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config import (  # type: ignore[import-untyped]
     BOT_MODE,
     DASHBOARD_SERVER_PORT,
-    DATA_DIR,
 )
 from db import connect, init_db  # type: ignore[import-untyped]
 from polymarket_bot import runtime_knobs as _knobs
@@ -75,7 +74,6 @@ try:
         request_stop,
         set_mode,
     )
-    from polymarket_bot.backtest import format_report  # type: ignore[import-untyped]
     from polymarket_exec.execution.live import (  # type: ignore[import-untyped]
         live_boot_problems,
     )
@@ -341,45 +339,6 @@ async def _activity_html() -> str:
     return "\n".join(lines)
 
 
-def _backtest_html() -> str:
-    report_path = DATA_DIR / "backtests" / "latest.json"
-    if not report_path.exists():
-        return (
-            "<h3>BTC 5m Binary Pricing Model Backtest</h3>\n"
-            "<p>No local report yet. Run:</p>\n"
-            '<pre><code>./.venv/bin/python tools/backtest_btc_strategy.py</code></pre>'
-        )
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        if _BTC_BOT_AVAILABLE:
-            return format_report(report)
-        # Fallback rendering when polymarket_bot.backtest is unavailable
-        baseline = report.get("baseline", {})
-        current = report.get("current", {})
-        best = report.get("best", {})
-        lines = [
-            "<h2>BTC 5m Binary Pricing Model Backtest</h2>",
-            "<ul>",
-            f"<li>Opportunities: {report.get('opportunities', 'N/A')}</li>",
-            f"<li>Method: {report.get('method', 'N/A')}</li>",
-            "</ul>",
-            "<h3>Results</h3>",
-            "<ul>",
-            f"<li>All historical buys: trades={baseline.get('trades', 'N/A')}, pnl=${baseline.get('total_pnl_usd', 0):+.2f}, roi={baseline.get('roi', 0):.1%}</li>",
-            f"<li>Current defaults: trades={current.get('trades', 'N/A')}, pnl=${current.get('total_pnl_usd', 0):+.2f}, roi={current.get('roi', 0):.1%}</li>",
-            f"<li>Optimized filter: trades={best.get('trades', 'N/A')}, pnl=${best.get('total_pnl_usd', 0):+.2f}, roi={best.get('roi', 0):.1%}</li>",
-            "</ul>",
-            "<h3>Optimized Parameters</h3>",
-            "<ul>",
-        ]
-        for key, value in best.get("params", {}).items():
-            lines.append(f"<li>{key}: {value}</li>")
-        lines.append("</ul>")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"<h3>Backtest Error</h3><p>Failed to load report: {escape(str(e))}</p>"
-
-
 # ---------------------------------------------------------------------------
 # Aggregated data helpers
 # ---------------------------------------------------------------------------
@@ -407,10 +366,6 @@ async def _get_activity_data() -> str:
     return await _activity_html()
 
 
-def _get_backtest_data() -> str:
-    return _backtest_html()
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -427,7 +382,6 @@ async def dashboard(request: Request) -> Any:
             "execution_view": await _execution_view_safe(),
             "market_selector": await _market_selector_safe(),
             "activity": await _get_activity_data(),
-            "backtest": _get_backtest_data(),
             "mode": mode,
             "live_armed": live_armed,
             "live_hint": live_hint,
@@ -736,7 +690,6 @@ async def api_data() -> dict[str, Any]:
         "execution_view": await _execution_view_safe(),
         "market_selector": await _market_selector_safe(),
         "activity": await _get_activity_data(),
-        "backtest": _get_backtest_data(),
         "runtime": await _runtime_state(),
     }
 
@@ -753,7 +706,6 @@ async def api_stream(request: Request) -> StreamingResponse:
                     "execution_view": await _execution_view_safe(),
                     "market_selector": await _market_selector_safe(),
                     "activity": await _get_activity_data(),
-                    "backtest": _get_backtest_data(),
                     "runtime": await _runtime_state(),
                 }
                 yield f"data: {json.dumps(data)}\n\n"

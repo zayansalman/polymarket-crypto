@@ -384,9 +384,8 @@ body {
   .tk-apply { margin-left: 0; }
 }
 
-/* ── secondary panels ── */
-.secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-.feed-wrap, .backtest-report { font-size: 11.5px; max-height: 320px; overflow: auto; }
+/* ── activity feed ── */
+.feed-wrap { font-size: 11.5px; max-height: 320px; overflow: auto; }
 .feed-list { list-style: none; margin: 0; padding: 0; }
 .feed-list li { padding: 5px 0; border-bottom: 1px solid var(--border-strong); color: var(--muted); }
 .feed-list code { font-family: var(--font-mono); color: var(--label); margin-right: 6px; }
@@ -412,9 +411,6 @@ body {
 .feed-list li[class^="k-"] { border-left: 3px solid var(--k); padding-left: 8px; }
 .feed-list li[class^="k-"] strong { color: var(--k); font-weight: 600; }
 .feed-list li.k-other strong { color: var(--text); font-weight: 500; }
-.backtest-report h2, .backtest-report h3 { font-size: 12px; color: var(--text); margin: 10px 0 6px; }
-.backtest-report ul { margin: 0; padding-left: 16px; color: var(--muted); }
-.backtest-report code, .backtest-report pre { font-family: var(--font-mono); }
 
 /* ── sse indicator ── */
 .sse-indicator { display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-right: 4px; }
@@ -433,7 +429,7 @@ body {
 @keyframes slidein { from { transform: translateX(20px); opacity: 0; } }
 
 @media (max-width: 880px) {
-  .execution-grid, .secondary { grid-template-columns: 1fr; }
+  .execution-grid { grid-template-columns: 1fr; }
   .statrow { grid-template-columns: repeat(2, 1fr); }
   .ribbon-stats { gap: 14px; }
 }

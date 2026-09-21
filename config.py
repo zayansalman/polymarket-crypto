@@ -80,7 +80,7 @@ MARKET_TIMEFRAME_MINUTES = 5
 # Polymarket resolves BTC 5m markets on its Chainlink BTC/USD stream, NOT on
 # Binance (measured basis: Chainlink ~ $50.7 BELOW Binance, std $3.8). The
 # reference open, live spot, and sigma all come from these two endpoints;
-# Binance remains only as a volatility-shape fallback and for backtest tooling.
+# Binance remains only as a volatility-shape fallback.
 POLYMARKET_CRYPTO_PRICE_API = os.getenv(
     "POLYMARKET_CRYPTO_PRICE_API", "https://polymarket.com/api/crypto/crypto-price"
 )
@@ -146,13 +146,6 @@ PAPER_ENTRY_MIN_REMAINING_SECONDS = int(
 PAPER_TARGET_RETURN = _env_float("PAPER_TARGET_RETURN", 0.10)
 PAPER_STOP_RETURN = _env_float("PAPER_STOP_RETURN", -0.08)
 PAPER_TIME_EXIT_SECONDS = int(os.getenv("PAPER_TIME_EXIT_SECONDS", "45"))
-
-HISTORY_CSV_PATH = Path(
-    os.getenv(
-        "HISTORY_CSV_PATH",
-        str(DATA_DIR / "polymarket_history.csv"),
-    )
-).expanduser()
 
 # --- Daily altcoin Up/Down scanner (issue #185) -----------------------------
 # Paper-only, no live gate. Scans the daily (24h-window) Up/Down family across

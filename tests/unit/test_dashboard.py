@@ -68,10 +68,9 @@ class TestDashboardPage:
         assert "setTradeShares()" in text
         assert "min 5 sh" in text
 
-    def test_has_secondary_panels(self, client: TestClient):
+    def test_has_activity_log(self, client: TestClient):
         text = client.get("/").text
         assert "ACTIVITY LOG" in text
-        assert "BACKTEST" in text
 
 
 class TestStaticFiles:
@@ -123,7 +122,6 @@ class TestApiData:
         data = client.get("/api/data").json()
         assert "execution_view" in data
         assert "activity" in data
-        assert "backtest" in data
 
     def test_api_data_execution_view_is_rendered_html(self, client: TestClient):
         execution_view = client.get("/api/data").json()["execution_view"]

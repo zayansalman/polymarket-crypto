@@ -66,13 +66,13 @@ def test_a_family_that_cannot_run_carries_the_case_for_deleting_it() -> None:
     # "This is dead" with no reason attached is not actionable; the operator
     # asked to be told what to remove, not merely that something is unused.
     for family in _inv.FAMILIES:
-        if family.status in (_inv.DEAD, _inv.UNWIRED, _inv.RESEARCH):
+        if family.status in (_inv.DEAD, _inv.UNWIRED):
             assert family.verdict, f"{family.key} has no verdict"
 
 
 def test_a_dead_family_never_offers_a_switch() -> None:
     for family in _inv.FAMILIES:
-        if family.status in (_inv.DEAD, _inv.RESEARCH):
+        if family.status == _inv.DEAD:
             assert family.switch is None, family.key
 
 
