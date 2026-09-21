@@ -347,9 +347,11 @@ class TestTicketRender:
     def test_the_card_is_a_fold_the_operator_can_close(self) -> None:
         html = _render()
         # Same <details> pattern as the ACTIVITY LOG, so it collapses to its header.
-        assert "<details class='card ticket fold' data-fold='ticket'" in html
+        assert "<details class='card ticket fold' data-fold='ticket' open>" in html
         assert "<summary class='card-h'><span class='fold-title'>ORDER SIZE</span>" in html
-        assert "ontoggle='rememberFold(this)'" in html and " open>" in html
+        # No inline handler: it fired before dashboard.js loaded and threw
+        # "rememberFold is not defined". dashboard.js listens on the document.
+        assert "ontoggle" not in html
         assert html.rstrip().endswith("</details>")
 
     def test_stale_error_and_pending_states_are_visible(self) -> None:

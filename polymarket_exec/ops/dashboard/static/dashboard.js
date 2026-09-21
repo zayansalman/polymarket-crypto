@@ -50,7 +50,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Panel folds inside the refreshed views (e.g. ORDER SIZE). Their HTML is
 // replaced every few seconds, so open/closed is stored per fold and re-applied
-// after each swap — an inline ontoggle survives innerHTML, a listener does not.
+// after each swap. The listener sits on the document, not the fold, so it
+// survives innerHTML swaps. ``toggle`` does not bubble, hence the capture flag.
+// No inline ontoggle: a <details open> fires toggle while the page is still
+// loading, before this script exists, which threw "rememberFold is not
+// defined". Missing that first event is harmless — restoreFolds applies the
+// stored state on DOMContentLoaded.
 function rememberFold(el) {
   if (!el || !el.dataset.fold) return;
   try { localStorage.setItem('fold:' + el.dataset.fold, el.open ? '1' : '0'); } catch (e) {}
@@ -66,6 +71,10 @@ function restoreFolds(root) {
 }
 
 document.addEventListener('DOMContentLoaded', function() { restoreFolds(document); });
+document.addEventListener('toggle', function(e) {
+  var el = e.target;
+  if (el && el.matches && el.matches('details[data-fold]')) rememberFold(el);
+}, true);
 
 // ---------------------------------------------------------------------------
 // Toast Notifications

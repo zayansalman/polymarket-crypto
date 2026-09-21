@@ -109,6 +109,13 @@ class TestStaticFiles:
         assert "setTradeShares" in js
         assert "updateTicket" in js
 
+    def test_js_remembers_folds_from_the_document(self, client: TestClient):
+        # A document-level capture listener, not an inline ontoggle: the inline
+        # one fired before this script loaded and threw on every page load.
+        js = client.get("/static/dashboard.js").text
+        assert "document.addEventListener('toggle'" in js
+        assert "details[data-fold]" in js
+
     def test_css_has_control_input(self, client: TestClient):
         assert ".ctl-input" in client.get("/static/style.css").text
 
