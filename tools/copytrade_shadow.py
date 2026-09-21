@@ -138,7 +138,7 @@ def report(db_path: Path) -> None:
 
 
 async def _settle_due(con: sqlite3.Connection, client: httpx.AsyncClient) -> list[Any]:
-    """Settle every fill old enough to have resolved. Shared by both feeds."""
+    """Settle every fill old enough to have resolved."""
     unsettled = list(
         con.execute(
             "SELECT id, window_slug, outcome, our_price, fee, size, their_price"
@@ -233,101 +233,6 @@ async def run(
             await asyncio.sleep(4)
 
 
-async def run_rpc(
-    target: str, scale: float, max_shares: float, min_shares: float,
-    skip_small: bool, max_their: float | None, max_slip: float | None,
-    assets: list[str], once: bool, db_path: Path,
-) -> int:
-    """Same ledger and pricing as :func:`run`, sourced from the fast feed.
-
-    No ``POLYGON_RPC_WSS`` key required — polls ``eth_getLogs`` on a public
-    Polygon RPC (:func:`~polymarket_bot.pairarb.feed.http_poll_fills`), which reads
-    the same on-chain event as the WSS transport at poll-interval-plus-block-
-    time latency instead of the ``data-api``'s ~20s-stale batching. Detection
-    time stands in for the fill timestamp (see
-    ``mirror.trade_dict_from_fast_fill``), so ``their_ts`` and ``seen_ts`` are
-    seconds apart here, not the tens of seconds the api feed measures.
-    """
-    from polymarket_bot.pairarb.feed import FeedUnavailable, http_poll_fills
-    from polymarket_bot.pairarb.market_index import TokenIndex
-    from polymarket_bot.pairarb.mirror import trade_dict_from_fast_fill
-
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(db_path)
-    con.executescript(SCHEMA)
-    con.commit()
-    seen: set[str] = {r[0] for r in con.execute("SELECT tx_key FROM copy_fills")}
-    index = TokenIndex(assets or ["btc", "eth", "sol", "xrp", "doge", "bnb"])
-    print(f"copy shadow (rpc feed) | target={target} scale={scale} "
-          f"size={min_shares}-{max_shares}sh skip_small={skip_small} "
-          f"max_their={max_their}")
-    print("SHADOW ONLY — no orders are placed.\n")
-
-    async with httpx.AsyncClient(headers={"User-Agent": "copy-shadow/0.1"}) as index_client:
-        await index.refresh(index_client)
-
-        async def _settle_loop() -> None:
-            async with httpx.AsyncClient(headers={"User-Agent": "copy-shadow/0.1"}) as c:
-                while True:
-                    await index.refresh(c)
-                    await _settle_due(con, c)
-                    if once:
-                        return
-                    await asyncio.sleep(30)
-
-        settle_task = asyncio.ensure_future(_settle_loop())
-        try:
-            async for fill in http_poll_fills(target):
-                token = fill.token_id
-                resolved = index.resolve(token)
-                if resolved is None:
-                    await index.refresh(index_client)
-                    resolved = index.resolve(token)
-                if resolved is None:
-                    continue  # not a tracked 5m window — not our market
-                slug, outcome, _condition_id = resolved
-                if assets and not any(slug.startswith(a + "-") for a in assets):
-                    continue
-                k = "|".join((fill.tx_hash, token, f"{fill.price}", f"{fill.shares}"))
-                if k in seen:
-                    continue
-                seen.add(k)
-                now = int(time.time())
-                t = trade_dict_from_fast_fill(fill.price, fill.shares, fill.tx_hash, resolved, now)
-                asks = await fetch_asks(index_client, token) if token else []
-                priced = price_the_copy(
-                    t, asks, scale=scale, max_shares=max_shares,
-                    min_shares=min_shares, skip_below_min=skip_small,
-                    max_their_size=max_their, max_slippage=max_slip,
-                )
-                if priced is None:
-                    continue
-                con.execute(
-                    "INSERT OR IGNORE INTO copy_fills (tx_key, window_slug, condition_id,"
-                    " outcome, their_price, our_price, fee, size, slippage, their_ts, seen_ts)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        k, priced.window_slug, priced.condition_id, priced.outcome,
-                        priced.their_price, priced.our_price, priced.fee, priced.size,
-                        priced.slippage_per_share, priced.their_ts, now,
-                    ),
-                )
-                con.commit()
-                print(
-                    f"  COPY {priced.window_slug:<28} {priced.outcome:<5} "
-                    f"them {priced.their_price:.3f}  us {priced.cost_per_share:.3f}  "
-                    f"slip {100 * priced.slippage_per_share:+.2f}c  x{priced.size:.0f}sh"
-                )
-                if once:
-                    return 0
-        except FeedUnavailable as exc:
-            print(f"rpc feed unavailable: {exc}")
-            return 1
-        finally:
-            settle_task.cancel()
-    return 0
-
-
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -360,20 +265,13 @@ def main() -> int:
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--once", action="store_true")
     p.add_argument("--report", action="store_true", help="print ledger and exit")
-    p.add_argument(
-        "--feed", choices=("api", "rpc"), default="api",
-        help="'api' polls data-api (~20s stale, the historical default); "
-             "'rpc' reads on-chain OrderFilled logs via a public Polygon RPC "
-             "(~poll-interval + block time, no API key needed)",
-    )
     a = p.parse_args()
     if a.report:
         report(Path(a.db))
         return 0
-    runner = run_rpc if a.feed == "rpc" else run
     try:
         return asyncio.run(
-            runner(
+            run(
                 a.target.lower(), a.scale, a.max_shares, a.min_shares,
                 a.skip_small, a.max_their_size, a.max_slippage,
                 [x.strip().lower() for x in a.assets.split(',') if x.strip()],
