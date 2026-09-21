@@ -139,6 +139,19 @@ class Position:
     exit_price_usd: float | None = None
     closed_at: str | None = None
     realized_pnl_usd: float | None = None
+    exit_reason: str | None = None
+    # "paper" | "live" | None (legacy rows predating the column). Read by
+    # execution/live.py's reconciliation and the dashboard's mode split —
+    # kept as a plain field rather than folded into `state` because the two
+    # are independent: a row can be open-live, open-paper, closed-live, or
+    # closed-paper.
+    mode: str | None = None
+    # The identity SQLite assigns on insert. None before a row exists; a
+    # repository sets it on every read and expects it on every write that
+    # targets an existing row (close, etc.) — this is the one field on this
+    # dataclass that is about storage, not the trade itself, because without
+    # it there is no way to say *which* position to close.
+    id: int | None = None
 
     @property
     def notional_usd(self) -> float:
