@@ -29,7 +29,7 @@ def lab(tmp_path, monkeypatch):
     code.write_text("EDGE = 1\n")
     fam = _inv.Family(
         key="toy", label="Toy strategy", path="strat.py",
-        what="Does one thing.", status=_inv.RESEARCH, record="never traded",
+        what="Does one thing.", status=_inv.UNWIRED, record="never traded",
     )
     monkeypatch.setattr(sd, "ROOT", tmp_path)
     monkeypatch.setattr(sd, "DOCS_DIR", tmp_path / "docs")
@@ -129,7 +129,7 @@ def test_an_incomplete_at_a_glance_is_named(lab) -> None:
 def test_every_running_strategy_of_ours_has_an_at_a_glance() -> None:
     # The dashboard's STRATEGY card lists only docs with the section, so a
     # running strategy without one would be missing from it.
-    running = [f for f in _inv.FAMILIES if f.group == _inv.MINE and f.status == _inv.RUNNING]
+    running = [f for f in _inv.FAMILIES if f.status == _inv.RUNNING]
     assert running
     missing = [f.key for f in running if not sd.glance(f.key)]
     assert not missing, f"no At a glance section in the docs of: {missing}"

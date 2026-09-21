@@ -697,7 +697,7 @@ def test_price_row_states() -> None:
 
 def test_card_folds_and_keeps_the_issue_count_in_its_header() -> None:
     html = feeds.render(_snap())
-    assert html.startswith("<details class='card feeds-card fold' data-fold='feeds'")
-    assert "rememberFold(this)'" in html
+    assert html.startswith("<details class='card feeds-card fold' data-fold='feeds' open>")
+    assert "ontoggle" not in html  # dashboard.js listens on the document
     summary = html[html.index("<summary"):html.index("</summary>")]
     assert "FEEDS" in summary and "all OK" in summary

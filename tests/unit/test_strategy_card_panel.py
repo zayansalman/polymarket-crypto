@@ -32,12 +32,12 @@ def _bodies(html: str) -> dict[str, bool]:
 
 def test_dropdown_lists_each_strategy_with_a_summary_under_its_status() -> None:
     html = panel.render(entries=[
-        (_fam("a"), PARTS), (_fam("b"), PARTS), (_fam("c", _inv.RESEARCH), PARTS),
+        (_fam("a"), PARTS), (_fam("b"), PARTS), (_fam("c", _inv.UNWIRED), PARTS),
     ])
     assert "<select id='strategy-pick'" in html
     assert re.search(
         r"<optgroup label='running now'><option value='a'>.*<option value='b'>.*</optgroup>"
-        r"<optgroup label='offline only'><option value='c'>",
+        r"<optgroup label='cannot trade'><option value='c'>",
         html,
     )
 

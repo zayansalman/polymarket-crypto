@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `maker` on the MY STRATEGIES card |
 | Code | `polymarket_bot/maker/` — 5 files |
-| Code fingerprint | `ed4856e27df9` |
+| Code fingerprint | `1b7011906a67` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -54,7 +54,7 @@ Every 45 seconds, on the BTC/ETH/XRP hourly and BTC/ETH/SOL/XRP daily Up/Down ma
 ### References
 
 - PR #264 — the band table, the 48c per-trade figure and the ~580-quote estimate
-- `tools/wallet_research/maker_band.py`, `maker_label.py`, `filter_test.py` and `README.md`
+- `tools/wallet_research/maker_band.py`, `maker_label.py`, `filter_test.py` and `README.md` — deleted in #273, still in git history
 - Commits `1179f11`, `19dad91`, `5d69d0c`
 - Code: `polymarket_bot/maker/quoter.py`, `filler.py`, `runner.py`; the queue rule is pinned by `tests/unit/test_maker_fill_model.py`
 
@@ -162,7 +162,7 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 - **The fill model is conservative in two ways.** It never credits cancellations in the queue ahead of us. It also reads at most 5,500 taker trades, so on a very busy market it misses the oldest flow, which is the flow closest to when the quote was placed.
 - **Scope.** The band was measured on 1h and 24h markets only. When PR #264 was written, only 996 of 11,520 15m markets were labelled. The maker does not quote 15m markets.
 - **Code comments disagree on the sample.** `quoter.py` says 2,600 markets and "+2 to +6.6c/share". `runtime_knobs.py` says 7,000. The README and PR #264 say 7,010, which is the figure used here.
-- **The research can no longer be re-run from local data.** On 2026-09-21, `data/wallet_research/wallets.db` held 392 markets (2026-08-22 to 2026-09-20), not 7,010. See the wallet-research doc.
+- **The research can no longer be re-run from local data.** On 2026-09-21, `data/wallet_research/wallets.db` held 392 markets (2026-08-22 to 2026-09-20), not 7,010. The scripts that measured it were deleted in #273 and are still in git history.
 - **No supervisor.** The loop lives inside the dashboard process, so when that process stops, quoting, fill checks and settlement all stop with it.
 
 ## Sources
@@ -195,5 +195,6 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 
 ## Changelog
 
-- 2026-09-21 · `ed4856e27df9` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
+- 2026-09-21 · `1b7011906a67` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
+- 2026-09-21 · `1b7011906a67` · Docstring-only change in ledger.py from the copy-trade removal (#272); behaviour unchanged.
 - 2026-09-21 · `ed4856e27df9` · Doc created.

@@ -583,11 +583,10 @@ def render(
     issues = sum(r.level in ("warn", "down") for r in rows)
     note = "all OK" if not issues else f"{issues} issue{'s' if issues != 1 else ''}"
     # A <details> fold like ORDER SIZE: the table is long, and the issue count
-    # stays in the header when it is closed. ``rememberFold`` re-applies the
-    # operator's choice after every refresh swaps this HTML out.
+    # stays in the header when it is closed. dashboard.js stores open/closed
+    # by ``data-fold`` and re-applies it after every refresh swaps this HTML out.
     return (
-        "<details class='card feeds-card fold' data-fold='feeds' "
-        "ontoggle='window.rememberFold&&rememberFold(this)' open>"
+        "<details class='card feeds-card fold' data-fold='feeds' open>"
         "<summary class='card-h'><span class='fold-title'>FEEDS</span>"
         f"<span class='win{' warn' if issues else ''}'>{note}</span></summary>"
         "<div class='feeds-scroll'><table class='de-tail-tbl feeds-tbl'>"

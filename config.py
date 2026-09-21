@@ -73,14 +73,6 @@ DASHBOARD_SERVER_PORT = int(os.getenv("DASHBOARD_SERVER_PORT", "7860"))
 # networks, while data-api.binance.vision serves the same /api/v3 endpoints.
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
-# Public trade/position history, no key required. Used by the copy-trade watcher
-# to see a target wallet's fills. It runs ~20s behind the chain, which is
-# irrelevant for the daily markets it watches (median 2-3.5 HOURS of runway) and
-# would be fatal on the 15m/1h ones, where measured slippage at 11-30s lag is
-# 9.56c against edges under 1c.
-POLYMARKET_DATA_API = os.getenv(
-    "POLYMARKET_DATA_API", "https://data-api.polymarket.com"
-)
 CHAINLINK_STREAM_URL = "https://data.chain.link/streams/btc-usd-cexprice-streams"
 MARKET_TIMEFRAME_MINUTES = 5
 
@@ -88,7 +80,7 @@ MARKET_TIMEFRAME_MINUTES = 5
 # Polymarket resolves BTC 5m markets on its Chainlink BTC/USD stream, NOT on
 # Binance (measured basis: Chainlink ~ $50.7 BELOW Binance, std $3.8). The
 # reference open, live spot, and sigma all come from these two endpoints;
-# Binance remains only as a volatility-shape fallback and for backtest tooling.
+# Binance remains only as a volatility-shape fallback.
 POLYMARKET_CRYPTO_PRICE_API = os.getenv(
     "POLYMARKET_CRYPTO_PRICE_API", "https://polymarket.com/api/crypto/crypto-price"
 )
@@ -154,13 +146,6 @@ PAPER_ENTRY_MIN_REMAINING_SECONDS = int(
 PAPER_TARGET_RETURN = _env_float("PAPER_TARGET_RETURN", 0.10)
 PAPER_STOP_RETURN = _env_float("PAPER_STOP_RETURN", -0.08)
 PAPER_TIME_EXIT_SECONDS = int(os.getenv("PAPER_TIME_EXIT_SECONDS", "45"))
-
-HISTORY_CSV_PATH = Path(
-    os.getenv(
-        "HISTORY_CSV_PATH",
-        str(DATA_DIR / "polymarket_history.csv"),
-    )
-).expanduser()
 
 # --- Daily altcoin Up/Down scanner (issue #185) -----------------------------
 # Paper-only, no live gate. Scans the daily (24h-window) Up/Down family across

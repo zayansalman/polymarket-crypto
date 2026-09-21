@@ -68,10 +68,9 @@ class TestDashboardPage:
         assert "setTradeShares()" in text
         assert "min 5 sh" in text
 
-    def test_has_secondary_panels(self, client: TestClient):
+    def test_has_activity_log(self, client: TestClient):
         text = client.get("/").text
         assert "ACTIVITY LOG" in text
-        assert "BACKTEST" in text
 
 
 class TestStaticFiles:
@@ -109,6 +108,13 @@ class TestStaticFiles:
         assert "setTradeShares" in js
         assert "updateTicket" in js
 
+    def test_js_remembers_folds_from_the_document(self, client: TestClient):
+        # A document-level capture listener, not an inline ontoggle: the inline
+        # one fired before this script loaded and threw on every page load.
+        js = client.get("/static/dashboard.js").text
+        assert "document.addEventListener('toggle'" in js
+        assert "details[data-fold]" in js
+
     def test_css_has_control_input(self, client: TestClient):
         assert ".ctl-input" in client.get("/static/style.css").text
 
@@ -123,7 +129,6 @@ class TestApiData:
         data = client.get("/api/data").json()
         assert "execution_view" in data
         assert "activity" in data
-        assert "backtest" in data
 
     def test_api_data_execution_view_is_rendered_html(self, client: TestClient):
         execution_view = client.get("/api/data").json()["execution_view"]

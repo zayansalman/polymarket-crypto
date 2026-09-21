@@ -12,7 +12,7 @@
   - **`polymarket_bot/`** — the live trading loop + signal math (`paper.py:run_paper_loop`
     is *the* loop; `strategy.py` is the live signal math).
   - **`polymarket_exec/`** — execution gates, live CLOB executor, connectors, FastAPI
-    dashboard, recorder, backtest harness.
+    dashboard, recorder.
   - They are **bidirectionally coupled**: the dashboard imports `polymarket_bot.*`;
     `polymarket_bot` imports back into `polymarket_exec.{execution,connectors}`. Top-level
     `config.py` / `db.py` / `logging_setup.py` are the shared foundation.
@@ -89,8 +89,6 @@ In scope:
 - Size trades between $1 and $5 by confidence.
 - Persist every tick, position, exit, and dashboard event in SQLite.
 - Provide dashboard Start, Stop, Refresh, activity feed, and summary metrics.
-- Summarize the optional exported BTC Polymarket history CSV.
-- Run a local trade-history conditional backtest and parameter grid optimizer.
 - Present a concise systems scorecard covering scope, risk, feed discipline,
   auditability, and failure visibility.
 - Maintain a public engineering roadmap focused on market-data recording,
@@ -171,8 +169,8 @@ Optional snapshot:
 ## Live module status (generated)
 
 <!-- BEGIN GENERATED:summary -->
-- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
+- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1331.
-- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
+- **Tests:** 965.
+- **Built-but-dead (do not edit expecting runtime effect):** `polymarket_exec/ops/dashboard/panels/_shared.py`.
 <!-- END GENERATED:summary -->

@@ -48,7 +48,6 @@ class TestFullPageLoad:
         text = client.get("/").text
         assert "execution-content" in text
         assert "activity-content" in text
-        assert "backtest-content" in text
 
     def test_strategy_panel_is_gone(self, client: TestClient):
         # The v0 Strategy card was archived (2026-09-13).
@@ -86,7 +85,6 @@ class TestApiRoundTrip:
         data = client.get("/api/data").json()
         assert "execution_view" in data
         assert "activity" in data
-        assert "backtest" in data
 
 
 class TestStaticAssets:
