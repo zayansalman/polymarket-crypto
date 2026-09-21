@@ -7,8 +7,8 @@
 | Key | `fade_1h_momentum_15m` |
 | Status | cannot trade |
 | Switch | none — nothing to turn on |
-| Code | `tools/fade_1h_momentum_15m/` — 10 files |
-| Code fingerprint | `4a7e98a879d9` |
+| Code | `tools/fade_1h_momentum_15m/` — 11 files |
+| Code fingerprint | `096e99578fbf` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -773,6 +773,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-22 · `096e99578fbf` · Settlement correction (Zayan): the 15m market settles on a Chainlink TWAP, not on the close. Added the average-price probability with one switch between the two rules (task doc section 1b), checked by simulation (52 checks, largest |z| 2.43). On the tape, the real resolutions follow the TWAP-60s value at the close against its value before the open (96.8% of 1,136 markets) far better than a 15-minute average (85.2%). Nothing refitted; the maths on this page still describes the close.
 - 2026-09-22 · `4a7e98a879d9` · Added the test code (data, model, steps 0-2, explain, examples) and five worked examples in a trader's words; corrected the text to what the test found: the snap-back grows through the hour, the 1h momentum adds almost nothing, no price rules anywhere.
 - 2026-09-22 · `a5c0e596af30` · Historical test results added (Step 0-2 evidence, fitted parameters, updated weaknesses): at minute 2 the market's price scored better than the model (log-loss +0.0072, t 0.87), the taker made +1.4c/share (n 355, t 0.44) and the maker -2.7c/quote (n 521, t -1.08); the martingale on the same rows made -0.9c and -2.3c.
 - 2026-09-21 · `91319a8794bc` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.

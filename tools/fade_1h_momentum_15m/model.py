@@ -1,4 +1,4 @@
-"""Fade 1h Momentum on 15m: the model of tasks/2026-09-21-fade-1h-momentum-on-15m.md, sections 1-6.
+"""Fade 1h Momentum on 15m: the model of tasks/2026-09-21-fade-1h-momentum-on-15m.md, sections 1-6 and 1b.
 
 Pure numpy/scipy, vectorised over arrays of observations, no I/O. Units: time in hours,
 sigma per sqrt(hour), drift per hour, prices as probabilities in (0, 1), returns as log
@@ -17,6 +17,14 @@ Numerical choices (the maths is the document's; these are how it is evaluated):
 - Maker fill (section 6). The Wang-Poetzelberger piecewise-linear crossing formula is used
   as the doc says, with its Gaussian expectation evaluated by recursive quadrature on a grid
   aligned with the boundary instead of by Monte Carlo; see ``maker_fill``.
+- Average-price settlement (section 1b, 2026-09-22). The 15m market settles on a Chainlink
+  TWAP, not on the close. ``prob_up_twap`` prices P(average of the log price over the last
+  ``avg_len`` hours of the window >= the start reference). Its moments need the forward
+  integral L(u) = int_u^end exp(-K(u,s)) ds, which is section 1's G on the reversed clock
+  (kappa0 e^{+lam s}), so ``_G_and_grad`` evaluates it exactly; the outer integrals
+  int L and int L^2 are 64-point Gauss-Legendre (relative error ~1e-12 against adaptive
+  quadrature). ``window_prob_up`` is the one switch: settlement="twap" | "close". The old
+  endpoint functions (``prob_up``, ``martingale_prob_up``) are unchanged, for comparison.
 """
 from __future__ import annotations
 
@@ -44,6 +52,15 @@ _GL_X, _GL_W = roots_legendre(48)
 _GL_S = 0.5 * (_GL_X + 1.0)
 _GL_W = 0.5 * _GL_W
 _SAFE_SD = 8.5  # mass this many remaining sd above the fill boundary never fills (~1e-17)
+
+# Section 1b: average-price settlement.
+Q = 0.25  # hours in a 15m window
+AVG_60S = 1.0 / 60.0  # a trailing 60-second average (the Chainlink TWAP-60s stream's own window)
+SETTLEMENTS = ("twap", "close")
+_TW_X, _TW_W = roots_legendre(64)
+_TW_S = 0.5 * (_TW_X + 1.0)  # outer nodes on [0, 1]
+_TW_W = 0.5 * _TW_W
+_TW_CHUNK = 256  # unique (t, h, kappa0, lam, avg_len) rows per block: 256 * 64 * 48 floats per temporary
 
 
 def _arr(x) -> np.ndarray:
@@ -215,6 +232,91 @@ def _ou_unit_moments_and_grad(t, h, kappa0, lam):
     }
 
 
+# --------------------------------------------------------------------------- section 1b
+
+
+def _forward_L(u, end, kappa0, lam, grad: bool = True):
+    """L(u) = int_u^end exp(-K(u, s)) ds and, if grad, dL/dkappa0, dL/dlam.
+
+    Section 1's G integrates over the START of the interval with its end fixed; L integrates
+    over the END with its start fixed. Reversing time (s -> -s) swaps the two and turns
+    kappa0 e^{-lam s} into kappa0 e^{+lam s}, so L(u) = G(-end, end - u; kappa0, -lam),
+    evaluated by the same exact routine (closed form or clock-variable quadrature).
+    """
+    end = _arr(end)
+    G, gk, gl = _G_and_grad(-end, end - _arr(u), kappa0, -_arr(lam), grad)
+    return G, gk, (None if gl is None else -gl)
+
+
+def _twap_unit_moments_and_grad(t, h, kappa0, lam, avg_len=Q, grad: bool = True):
+    """Section 1b moments of I = int_{a'}^{t+h} (X(s) - X(t)) ds at sigma = 1.
+
+    The average is over the last avg_len hours of the window, [t + h - avg_len, t + h];
+    a' = max(t, t + h - avg_len) is where the unknown part of it starts. With gap =
+    a' - t, ell = t + h - a', L the forward integral (``_forward_L``) and K, G, V1
+    section 1's over [t, a']:
+
+        B    = ell - e^{-K} L(a')                       (E[I] = -B M + mu Gbar)
+        Gbar = G L(a') + int_{a'}^{t+h} L(u) du
+        Psi  = V1 L(a')^2 + int_{a'}^{t+h} L(u)^2 du     (Var[I] = sigma^2 Psi)
+
+    Returns a dict with the keys of ``_ou_unit_moments_and_grad`` ("A" = B, "G" = Gbar,
+    "V1" = Psi, each with _k and _l derivatives when grad) plus "ell" and "L": broadcast
+    over its arguments, NaN where an input is not finite.
+    """
+    args = np.broadcast_arrays(*(_arr(a) for a in (t, h, kappa0, lam, avg_len)))
+    shape = args[0].shape
+    flat = np.stack([a.ravel() for a in args], 1) if args[0].size else np.zeros((0, 5))
+    ok = np.isfinite(flat).all(1)
+    safe = np.where(ok[:, None], flat, np.array([[0.0, Q, 0.0, 0.0, Q]]))
+    uniq, inv = np.unique(safe, axis=0, return_inverse=True)
+    inv = inv.ravel()
+    keys = ("A", "G", "V1", "ell", "L") + (("A_k", "A_l", "G_k", "G_l", "V1_k", "V1_l") if grad else ())
+    res = {k: np.empty(len(uniq)) for k in keys}
+    for lo in range(0, len(uniq), _TW_CHUNK):
+        tt, hh, k0, lm, av = uniq[lo:lo + _TW_CHUNK].T
+        end = tt + hh
+        ell = np.minimum(hh, av)
+        gap = hh - ell
+        sec1 = _ou_unit_moments_and_grad(tt, gap, k0, lm)  # section 1 over [t, a']
+        la, la_k, la_l = _forward_L(end - ell, end, k0, lm, grad)
+        nodes = end[:, None] - ell[:, None] * (1.0 - _TW_S[None, :])
+        ln, ln_k, ln_l = _forward_L(nodes, end[:, None], k0[:, None], lm[:, None], grad)
+        il = ell * (ln @ _TW_W)
+        il2 = ell * ((ln * ln) @ _TW_W)
+        stay = 1.0 - sec1["A"]  # e^{-K} over [t, a']
+        # B = ell - e^{-K} L(a') cancels when the pull is weak; there B = int (1 - e^{-K(t,s)}) ds
+        # is taken directly on the same nodes (smooth, so exact to rounding at K < 1/2).
+        k_ts, k_ts_k, k_ts_l = _reversion_K(tt[:, None], nodes - tt[:, None], k0[:, None], lm[:, None])
+        weak = _reversion_K(tt, hh, k0, lm)[0] < 0.5  # K over the whole of [t, t+h]
+        b_int = ell * (-np.expm1(-k_ts) @ _TW_W)
+        sl = slice(lo, lo + _TW_CHUNK)
+        res["A"][sl] = np.where(weak, b_int, ell - stay * la)
+        res["G"][sl] = sec1["G"] * la + il
+        res["V1"][sl] = sec1["V1"] * la * la + il2
+        res["ell"][sl] = ell
+        res["L"][sl] = la
+        if grad:
+            for name, l_d, n_d, k_d in (("k", la_k, ln_k, k_ts_k), ("l", la_l, ln_l, k_ts_l)):
+                b_int_d = ell * ((np.exp(-k_ts) * k_d) @ _TW_W)
+                res[f"A_{name}"][sl] = np.where(weak, b_int_d, sec1[f"A_{name}"] * la - stay * l_d)
+                res[f"G_{name}"][sl] = sec1[f"G_{name}"] * la + sec1["G"] * l_d + ell * (n_d @ _TW_W)
+                res[f"V1_{name}"][sl] = (sec1[f"V1_{name}"] * la * la + 2.0 * sec1["V1"] * la * l_d
+                                         + 2.0 * ell * ((ln * n_d) @ _TW_W))
+    return {k: np.where(ok, v[inv], np.nan).reshape(shape) for k, v in res.items()}
+
+
+def twap_moments(t, h, kappa0, lam, sigma, avg_len=Q):
+    """(B, Gbar, Var[I]) of section 1b, the average-price counterpart of ``ou_moments``.
+
+    I = int_{a'}^{t+h} (X(s) - X(t)) ds over the unknown part of the averaging window (the
+    last avg_len hours of the window; a' = max(t, t + h - avg_len)); E[I] = -B M + mu Gbar.
+    Brownian limit (kappa0 = 0, avg_len = Q): B = 0, Gbar = h^2 / 2, Var[I] = sigma^2 h^3 / 3.
+    """
+    m = _twap_unit_moments_and_grad(t, h, kappa0, lam, avg_len, grad=False)
+    return m["A"], m["G"], _arr(sigma) ** 2 * m["V1"]
+
+
 # --------------------------------------------------------------------------- sections 2-4
 
 
@@ -286,6 +388,96 @@ def prob_up(y, M, mu, v, t, h, sigma, theta, kappa0, lam):
 def martingale_prob_up(y, h, sigma):
     """Step 1 baseline: Phi(y / (sigma sqrt(h)))."""
     return ndtr(_arr(y) / (_arr(sigma) * np.sqrt(_arr(h))))
+
+
+def _avg_split(h, avg_len):
+    """(eps, ell): hours of the averaging window already gone, and still to come."""
+    h, avg_len = _arr(h), _arr(avg_len)
+    ell = np.minimum(h, avg_len)
+    return avg_len - ell, ell
+
+
+_EPS_GONE = 1e-12  # hours; less than this of the average gone counts as none (float noise in h)
+
+
+def _known_part(abar, d, h, avg_len):
+    """eps * abar + ell * d: what the decision already knows of avg_len * (average - x0)."""
+    eps, ell = _avg_split(h, avg_len)
+    with np.errstate(invalid="ignore"):
+        past = np.where(eps > _EPS_GONE, eps * _arr(abar), 0.0)  # abar unused (may be NaN) when none gone
+    return past + ell * _arr(d)
+
+
+def _settle_prob(num, den):
+    """Phi(num / den); den = 0 is settled (1 if num >= 0, ties Up); NaN in, NaN out."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = ndtr(num / den)
+    settled = np.where(num >= 0, 1.0, 0.0)
+    return np.where(np.isnan(num) | np.isnan(den), np.nan, np.where(den > 0, p, settled))
+
+
+def prob_up_twap(abar, d, M, mu, v, t, h, sigma, theta, kappa0, lam, avg_len=Q):
+    """Section 1b: P(average log price over the last avg_len hours of the window >= x0).
+
+    x0 = log of the start reference (the Chainlink TWAP-60s value at the window open). d =
+    X(t) - x0, the current log price measured from the start reference. abar = realised
+    average of X over the part of the averaging window already gone, minus x0 (ignored while
+    that part is empty, i.e. while h >= avg_len). t = hour-time of the decision, h = hours
+    left in the window; M, mu, v, sigma, theta, kappa0, lam as ``prob_up``.
+
+        p = Phi((eps abar + ell d - B M + theta mu Gbar) / sqrt(sigma^2 Psi + theta^2 v Gbar^2))
+
+    eps = avg_len - ell, ell = min(h, avg_len). avg_len = Q averages the whole window (the
+    resolution text read literally); AVG_60S the trailing minute (the TWAP-60s stream's value
+    at the close); avg_len -> 0 recovers ``prob_up`` with d = y. At h = 0 it is settled:
+    1 if abar >= 0 (ties go Up), else 0.
+    """
+    m = _twap_unit_moments_and_grad(t, h, kappa0, lam, avg_len, grad=False)
+    theta, Gb = _arr(theta), m["G"]
+    num = _known_part(abar, d, h, avg_len) - m["A"] * _arr(M) + theta * _arr(mu) * Gb
+    den = np.sqrt(_arr(sigma) ** 2 * m["V1"] + theta * theta * _arr(v) * Gb * Gb)
+    return _settle_prob(num, den)
+
+
+def martingale_prob_up_twap(abar, d, h, sigma, avg_len=Q):
+    """The no-edge baseline under average-price settlement (no drift, no reversion).
+
+    Phi((eps abar + ell d) / (sigma sqrt(gap ell^2 + ell^3 / 3))), gap = h - ell: the
+    Brownian case of ``prob_up_twap`` in closed form.
+    """
+    eps, ell = _avg_split(h, avg_len)
+    gap = _arr(h) - ell
+    den = _arr(sigma) * np.sqrt(gap * ell * ell + ell ** 3 / 3.0)
+    return _settle_prob(_known_part(abar, d, h, avg_len), den)
+
+
+def _check_settlement(settlement):
+    if settlement not in SETTLEMENTS:
+        raise ValueError(f"settlement must be one of {SETTLEMENTS}")
+
+
+def window_prob_up(y, M, mu, v, t, h, sigma, theta, kappa0, lam, *, settlement, abar=np.nan,
+                   avg_len=Q):
+    """P(the 15m window resolves Up) under either settlement rule: the one switch.
+
+    settlement="twap": ``prob_up_twap`` (the market's rule since the 2026-09-22 correction),
+    with y = X(t) - x0 measured from the start reference and abar the realised average so far
+    minus x0. settlement="close": ``prob_up`` (the old endpoint target, kept for comparison),
+    with y = X(t) - X(window open); abar and avg_len are ignored.
+    """
+    _check_settlement(settlement)
+    if settlement == "close":
+        return prob_up(y, M, mu, v, t, h, sigma, theta, kappa0, lam)
+    return prob_up_twap(abar, y, M, mu, v, t, h, sigma, theta, kappa0, lam, avg_len)
+
+
+def martingale_window_prob_up(y, h, sigma, *, settlement, abar=np.nan, avg_len=Q):
+    """The martingale (no-edge) baseline under either settlement rule; arguments as
+    ``window_prob_up``."""
+    _check_settlement(settlement)
+    if settlement == "close":
+        return martingale_prob_up(y, h, sigma)
+    return martingale_prob_up_twap(abar, y, h, sigma, avg_len)
 
 
 # --------------------------------------------------------------------------- section 6
@@ -597,22 +789,29 @@ def maker_best_bid(price_now, y, t, h, sigma, mu_H, M, mu, v, theta, kappa0, lam
 # --------------------------------------------------------------------------- section 7
 
 
-def neg_log_lik(params, obs: Mapping, grad: bool = True):
+def neg_log_lik(params, obs: Mapping, grad: bool = True, *, settlement: str = "close",
+                avg_len=Q):
     """-sum[o ln p + (1-o) ln(1-p)] over quarter outcomes, and its analytic gradient.
 
     params = (theta, kappa0, lam, alpha, c). obs maps: 'up' (1 if the quarter closed Up),
     'y' (quarter move at the decision), 'prev_returns' (n, 12; column 0 the candle just
     before the window), 'mu' and 'v' (blended drift and its error variance, section 4),
     't' (hour-time of the decision), 'h' (hours left), 'sigma' (per sqrt hour).
+
+    settlement="close" (default, what every fit so far used) scores ``prob_up``;
+    settlement="twap" scores ``prob_up_twap`` over the last avg_len hours of the window,
+    with 'y' = X(t) - x0 from the start reference and 'up' the average-price outcome, and
+    needs 'abar' (realised average minus x0; ignored where none of the average has passed).
     """
-    nll, g, _ = _neg_log_lik_core(params, obs, None, grad)
+    nll, g, _ = _neg_log_lik_core(params, obs, None, grad, settlement, avg_len)
     return (nll, g) if grad else nll
 
 
 N_QUARTERS = 4
 
 
-def neg_log_lik_vol_by_quarter(params, obs: Mapping, grad: bool = True):
+def neg_log_lik_vol_by_quarter(params, obs: Mapping, grad: bool = True, *,
+                               settlement: str = "close", avg_len=Q):
     """Sensitivity, not in the document: ``neg_log_lik`` with the diffusion variance of each
     quarter of the hour scaled by its own factor, V = s_k^2 sigma^2 V1(kappa0, lam).
 
@@ -622,20 +821,27 @@ def neg_log_lik_vol_by_quarter(params, obs: Mapping, grad: bool = True):
     hour, and in the document's model kappa sets both the mean pull (1 - e^-K) and the variance
     shrink V < sigma^2 h, so an intra-hour volatility pattern can load on lam. Freeing s_k
     separates the two. At ln s_k = 0 this is ``neg_log_lik``. Gradient over all nine.
+    settlement and avg_len as ``neg_log_lik``.
     """
     params = _arr(params)
     k = np.asarray(obs["k"], dtype=int) - 1
     q = np.exp(2.0 * params[5:5 + N_QUARTERS])[k]
-    nll, g, row = _neg_log_lik_core(params[:5], obs, q, grad)
+    nll, g, row = _neg_log_lik_core(params[:5], obs, q, grad, settlement, avg_len)
     if not grad:
         return nll
     g_s = -np.bincount(k, weights=row, minlength=N_QUARTERS)
     return nll, np.concatenate([g, g_s])
 
 
-def _neg_log_lik_core(params, obs: Mapping, var_mult, grad: bool):
+def _neg_log_lik_core(params, obs: Mapping, var_mult, grad: bool, settlement: str = "close",
+                      avg_len=Q):
     """(nll, gradient over the five parameters, per-row d ln L / d ln s) with the diffusion
-    variance sigma^2 V1 multiplied per row by var_mult (None = 1; the last output is then None)."""
+    variance sigma^2 V1 multiplied per row by var_mult (None = 1; the last output is then None).
+
+    Both settlement rules share one form, z = (known - A M + theta mu G) / sqrt(sigma^2 V1 +
+    theta^2 v G^2): "close" has known = y and section 1's (A, G, V1); "twap" has known =
+    eps abar + ell y and section 1b's (B, Gbar, Psi) in their place."""
+    _check_settlement(settlement)
     theta, kappa0, lam, alpha, c = (float(x) for x in params)
     up = _arr(obs["up"])
     y, mu, v = _arr(obs["y"]), _arr(obs["mu"]), _arr(obs["v"])
@@ -646,10 +852,15 @@ def _neg_log_lik_core(params, obs: Mapping, var_mult, grad: bool):
     th = np.stack(np.broadcast_arrays(_arr(obs["t"]), _arr(obs["h"])), 1)
     uniq, inv = np.unique(th, axis=0, return_inverse=True)
     inv = inv.ravel()
-    mom = {k: x[inv] for k, x in _ou_unit_moments_and_grad(uniq[:, 0], uniq[:, 1],
-                                                             kappa0, lam).items()}
+    if settlement == "close":
+        known = y
+        unit = _ou_unit_moments_and_grad(uniq[:, 0], uniq[:, 1], kappa0, lam)
+    else:
+        known = _known_part(obs.get("abar", np.nan), y, obs["h"], avg_len)  # NaN only where used
+        unit = _twap_unit_moments_and_grad(uniq[:, 0], uniq[:, 1], kappa0, lam, avg_len)
+    mom = {k: x[inv] for k, x in unit.items()}
     a, G = mom["A"], mom["G"]
-    num = y - a * m + theta * mu * G
+    num = known - a * m + theta * mu * G
     s2 = sig2 * mom["V1"] + theta * theta * v * G * G
     s = np.sqrt(s2)
     z = num / s
@@ -678,18 +889,21 @@ def _neg_log_lik_core(params, obs: Mapping, var_mult, grad: bool):
 
 
 def fit_mle(obs: Mapping, x0=(0.0, 1.0, 1.0, 1.0, 0.003), c_unit=1e-3,
-            param_bounds=PARAM_BOUNDS, **kw) -> OptimizeResult:
+            param_bounds=PARAM_BOUNDS, *, settlement: str = "close", avg_len=Q,
+            **kw) -> OptimizeResult:
     """Maximum likelihood of (theta, kappa0, lam, alpha, c) by L-BFGS-B within param_bounds.
 
     c is optimised in units of c_unit (1e-3 = 0.1% log return) so all five parameters are
     of order one for the optimiser; the result's x is in natural units. The default bounds
-    leave lam free in sign; PARAM_BOUNDS_LAM_GE_0 is the lam >= 0 sensitivity.
+    leave lam free in sign; PARAM_BOUNDS_LAM_GE_0 is the lam >= 0 sensitivity. settlement
+    and avg_len as ``neg_log_lik`` (default "close", what every fit so far used).
     """
+    _check_settlement(settlement)
     scale = np.array([1.0, 1.0, 1.0, 1.0, c_unit])
     n = max(len(_arr(obs["up"])), 1)
 
     def f(x):
-        nll, g = neg_log_lik(x * scale, obs)
+        nll, g = neg_log_lik(x * scale, obs, settlement=settlement, avg_len=avg_len)
         return nll / n, g * scale / n
 
     bounds = [(lo / s if lo is not None else None, hi / s if hi is not None else None)

@@ -1,8 +1,8 @@
 """Unit tests for the Fade 1h Momentum on 15m model (tools/fade_1h_momentum_15m/model.py).
 
-Every number the task doc quotes (tasks/2026-09-21-fade-1h-momentum-on-15m.md, sections 5,
-6 and 9) is checked, plus the closed forms against direct quadrature and the maker fill
-against seeded Monte Carlo of the same dynamics.
+Every number the task doc quotes (tasks/2026-09-21-fade-1h-momentum-on-15m.md, sections 1b,
+5, 6 and 9) is checked, plus the closed forms against direct quadrature, the maker fill and the
+average-price (TWAP) settlement against seeded Monte Carlo of the same dynamics.
 """
 from __future__ import annotations
 
@@ -11,11 +11,12 @@ import pytest
 np = pytest.importorskip("numpy")
 pytest.importorskip("scipy")
 
-from scipy.integrate import quad  # noqa: E402
+from scipy.integrate import dblquad, quad  # noqa: E402
 from scipy.optimize import minimize_scalar  # noqa: E402
-from scipy.special import ndtri  # noqa: E402
+from scipy.special import ndtr, ndtri  # noqa: E402
 
 from tools.fade_1h_momentum_15m import model as fm  # noqa: E402
+from tools.fade_1h_momentum_15m import validate_math as vm  # noqa: E402
 from tools.fade_1h_momentum_15m.validate_math import ou_moments as reference_ou  # noqa: E402
 
 SIGMA = 0.005
@@ -216,6 +217,227 @@ def test_moment_derivatives_match_finite_differences():
                 rounding = 1e-13 * float(abs(hi[key])) / e  # finite-difference noise floor
                 assert float(mom[f"{key}_{name}"]) == pytest.approx(float(fd), rel=1e-5,
                                                                     abs=rounding)
+
+
+# ------------------------------------------------------------------ section 1b: average-price settlement
+
+
+def _K(u, s, kappa0, lam):
+    if lam == 0:
+        return kappa0 * (s - u)
+    return kappa0 * (np.exp(-lam * u) - np.exp(-lam * s)) / lam
+
+
+def _twap_by_quadrature(t, h, kappa0, lam, avg):
+    """(B, Gbar, Psi) straight from their definitions by nested adaptive quadrature.
+
+    B = int (1 - e^{-K(t,s)}) ds and Gbar = int G(t,s) ds over the unknown part of the
+    average; Psi = int l(u)^2 du, l(u) = int_{max(u,a')}^{end} e^{-K(u,s)} ds (section 1b).
+    """
+    end = t + h
+    a1 = end - min(h, avg)
+    kw = dict(epsabs=0, epsrel=1e-12, limit=400)
+
+    def ell_u(u):
+        return quad(lambda s: np.exp(-_K(u, s, kappa0, lam)), max(u, a1), end, **kw)[0]
+
+    def g_ts(s):
+        return quad(lambda u: np.exp(-_K(u, s, kappa0, lam)), t, s, **kw)[0]
+
+    B = quad(lambda s: -np.expm1(-_K(t, s, kappa0, lam)), a1, end, **kw)[0]
+    Gb = quad(g_ts, a1, end, **kw)[0]
+    Psi = quad(lambda u: ell_u(u) ** 2, t, end, points=[a1] if a1 > t else None, **kw)[0]
+    return B, Gb, Psi
+
+
+def test_twap_brownian_closed_forms():
+    for t, lam in ((0.0, 0.0), (0.3, 2.0), (0.8, -1.6)):
+        h = 0.25 - (t % 0.25)
+        B, Gb, var = fm.twap_moments(t, h, 0.0, lam, SIGMA)  # whole window
+        assert float(B) == pytest.approx(0.0, abs=1e-15)
+        assert float(Gb) == pytest.approx(h**2 / 2, rel=1e-12)
+        assert float(var) == pytest.approx(SIGMA**2 * h**3 / 3, rel=1e-12)
+        ell = min(h, fm.AVG_60S)
+        gap = h - ell
+        B, Gb, var = fm.twap_moments(t, h, 0.0, lam, SIGMA, fm.AVG_60S)  # trailing minute
+        assert float(Gb) == pytest.approx(gap * ell + ell**2 / 2, rel=1e-12)
+        assert float(var) == pytest.approx(SIGMA**2 * (gap * ell**2 + ell**3 / 3), rel=1e-12)
+
+
+@pytest.mark.parametrize("lam", [0.0, 1e-9])
+def test_twap_constant_speed_is_the_integrated_ou(lam):
+    k, h = 3.0, 0.2
+    one = -np.expm1(-k * h) / k
+    B, Gb, var = fm.twap_moments(0.3, h, k, lam, SIGMA)
+    assert float(B) == pytest.approx(h - one, rel=1e-8)
+    assert float(Gb) == pytest.approx((h - one) / k, rel=1e-8)
+    assert float(var) == pytest.approx(
+        SIGMA**2 * (h - 2 * one - np.expm1(-2 * k * h) / (2 * k)) / k**2, rel=1e-8)
+
+
+def test_twap_moments_match_nested_adaptive_quadrature():
+    rng = np.random.default_rng(20260922)
+    for _ in range(14):
+        t, h = rng.uniform(0, 0.9), rng.uniform(1e-3, 0.25)
+        kappa0 = 10 ** rng.uniform(-2, 1.5)
+        lam = rng.choice([-1.0, 1.0]) * 10 ** rng.uniform(-3, 1)
+        avg = rng.choice([fm.Q, fm.AVG_60S, 0.1])
+        got = fm.twap_moments(t, h, kappa0, lam, 1.0, avg)
+        ref = _twap_by_quadrature(t, h, kappa0, lam, avg)
+        for g, r in zip(got, ref):
+            assert float(g) == pytest.approx(r, rel=1e-8)
+
+
+def test_twap_moments_match_validate_math_exponential_integral_reference():
+    rng = np.random.default_rng(3)
+    for _ in range(60):
+        t, h = rng.uniform(0, 0.9), rng.uniform(1e-3, 0.25)
+        kappa0 = 10 ** rng.uniform(-3, 1.3)
+        lam = rng.choice([-1.0, 1.0]) * 10 ** rng.uniform(-2, 1)
+        avg = rng.choice([fm.Q, fm.AVG_60S])
+        got = fm.twap_moments(t, h, kappa0, lam, 1.0, avg)
+        ref = vm.twap_unit_moments(kappa0, lam, t, h, avg)
+        # the reference forms B = ell - e^{-K} L(a') as written, which cancels under a weak pull
+        # (model.py integrates it directly there): B is compared on the scale of ell it multiplies
+        assert float(got[0]) == pytest.approx(ref[0], rel=1e-9, abs=1e-12 * min(h, avg))
+        for g, r in zip(got[1:], ref[1:]):
+            assert float(g) == pytest.approx(r, rel=1e-9, abs=1e-18)
+
+
+@pytest.mark.parametrize("avg", [fm.Q, fm.AVG_60S])
+def test_twap_variance_is_the_double_integral_of_the_covariance(avg):
+    # Var[I] = int int Cov(D(s1), D(s2)), Cov = e^{-K(s1,s2)} V(t, s1) for s1 <= s2: the form
+    # before the stochastic-Fubini reduction to sigma^2 int l(u)^2 du.
+    t, h, kappa0, lam = 0.78, 0.2, 0.9, -1.6
+    a1 = t + h - min(h, avg)
+
+    def cov(s2, s1):  # s1 <= s2
+        v = float(fm.ou_moments(t, s1 - t, kappa0, lam, SIGMA)[2])
+        return np.exp(-_K(s1, s2, kappa0, lam)) * v
+
+    tri = dblquad(cov, a1, t + h, lambda s1: s1, lambda s1: t + h, epsabs=0, epsrel=1e-10)[0]
+    assert 2 * tri == pytest.approx(float(fm.twap_moments(t, h, kappa0, lam, SIGMA, avg)[2]),
+                                    rel=1e-7)
+
+
+def test_twap_moment_derivatives_match_finite_differences():
+    rng = np.random.default_rng(12)
+    for _ in range(24):
+        t, h = rng.uniform(0, 0.9), rng.uniform(1e-2, 0.25)
+        kappa0 = 10 ** rng.uniform(-2, 1.3)
+        lam = rng.choice([-1.0, 1.0]) * 10 ** rng.uniform(-2, 1)
+        avg = rng.choice([fm.Q, fm.AVG_60S])
+        mom = fm._twap_unit_moments_and_grad(t, h, kappa0, lam, avg)
+        for name, idx in (("k", 0), ("l", 1)):
+            x = [kappa0, lam]
+            e = 1e-6 * abs(x[idx])
+            up, dn = list(x), list(x)
+            up[idx] += e
+            dn[idx] -= e
+            hi = fm._twap_unit_moments_and_grad(t, h, *up, avg)
+            lo = fm._twap_unit_moments_and_grad(t, h, *dn, avg)
+            for key in ("A", "G", "V1"):
+                fd = (hi[key] - lo[key]) / (2 * e)
+                rounding = 1e-13 * float(abs(hi[key])) / e
+                assert float(mom[f"{key}_{name}"]) == pytest.approx(float(fd), rel=1e-5, abs=rounding)
+
+
+def test_a_vanishing_average_is_the_close():
+    args = (0.001, -0.02, 1e-5, 0.3, 0.2, SIGMA, -0.7, 3.0, -1.2)
+    close = float(fm.prob_up(0.0004, *args))
+    twap = float(fm.prob_up_twap(np.nan, 0.0004, *args, avg_len=1e-7))
+    assert twap == pytest.approx(close, abs=1e-7)
+
+
+def test_window_prob_up_is_one_switch_over_the_two_rules():
+    y, M, mu, v, t, h = 0.0004, 0.001, -0.02, 1e-5, 0.3 + 2 / 60, 0.2
+    params = (SIGMA, -0.7, 3.0, -1.2)
+    close = fm.window_prob_up(y, M, mu, v, t, h, *params, settlement="close", abar=0.5)
+    assert float(close) == float(fm.prob_up(y, M, mu, v, t, h, *params))
+    twap = fm.window_prob_up(y, M, mu, v, t, h, *params, settlement="twap", abar=0.0002)
+    assert float(twap) == float(fm.prob_up_twap(0.0002, y, M, mu, v, t, h, *params))
+    sixty = fm.window_prob_up(y, M, mu, v, t, h, *params, settlement="twap", avg_len=fm.AVG_60S)
+    assert np.isfinite(sixty) and float(sixty) != float(twap)
+    with pytest.raises(ValueError):
+        fm.window_prob_up(y, M, mu, v, t, h, *params, settlement="average")
+    assert float(fm.martingale_window_prob_up(y, h, SIGMA, settlement="close")) == float(
+        fm.martingale_prob_up(y, h, SIGMA))
+    for avg in (fm.Q, fm.AVG_60S):
+        mart = fm.martingale_window_prob_up(y, h, SIGMA, settlement="twap", abar=0.0002, avg_len=avg)
+        assert float(mart) == pytest.approx(
+            float(fm.prob_up_twap(0.0002, y, M, mu, v, t, h, SIGMA, 0.0, 0.0, 0.0, avg)), rel=1e-12)
+
+
+def test_twap_worked_examples():
+    mu = fm.mu_hat_H(0.60, 0.0, SIGMA, 0.0)  # 60c hour at :00
+    p = fm.prob_up_twap(np.nan, 0.0, 0.0, mu, 0.0, 0.0, 0.25, SIGMA, 1.0, 0.0, 0.0)
+    assert float(p) == pytest.approx(0.5437, abs=5e-5)  # Phi(Phi^-1(0.6) sqrt(3)/4)
+    assert float(p) == pytest.approx(float(ndtr(ndtri(0.6) * np.sqrt(3) / 4)), rel=1e-12)
+    p60 = fm.prob_up_twap(np.nan, 0.0, 0.0, mu, 0.0, 0.0, 0.25, SIGMA, 1.0, 0.0, 0.0, fm.AVG_60S)
+    assert float(p60) == pytest.approx(0.5498, abs=5e-5)
+    mu = fm.mu_hat_H(0.60, 0.003, SIGMA, 0.75)  # :45, hour up 0.3%, 1h still 60c
+    p = fm.prob_up_twap(np.nan, 0.0, 0.0, mu, 0.0, 0.75, 0.25, SIGMA, 1.0, 0.0, 0.0)
+    assert float(p) == pytest.approx(0.2062, abs=5e-5)
+    p60 = fm.prob_up_twap(np.nan, 0.0, 0.0, mu, 0.0, 0.75, 0.25, SIGMA, 1.0, 0.0, 0.0, fm.AVG_60S)
+    assert float(p60) == pytest.approx(0.1746, abs=5e-5)
+
+
+@pytest.mark.parametrize("t", [0.0, 0.25, 0.5, 0.75])
+def test_twap_weight_on_the_hour_price_is_sqrt3_over_4_of_the_close(t):
+    def z(z_hour):
+        mu = fm.mu_hat_H(fm.martingale_prob_up(z_hour, 1.0, 1.0), 0.001, SIGMA, t)
+        return ndtri(fm.prob_up_twap(np.nan, 0.0, 0.0, mu, 0.0, t, 0.25, SIGMA, 1.0, 0.0, 0.0))
+
+    slope = (z(0.3 + 1e-6) - z(0.3 - 1e-6)) / 2e-6
+    assert float(slope) == pytest.approx(np.sqrt(3) / 4 / np.sqrt(1 - t), rel=1e-6)
+
+
+def test_twap_weights_on_what_is_known():
+    # z's numerator is eps * abar + ell * d: the average so far counts for the time it covers,
+    # the current displacement for the time still to come.
+    h, avg = 0.15, fm.Q
+    base = dict(M=0.0, mu=0.0, v=0.0, t=0.1, h=h, sigma=SIGMA, theta=0.0, kappa0=0.0, lam=0.0)
+    den = SIGMA * np.sqrt(h**3 / 3)
+    for abar, d in ((0.0003, 0.0), (0.0, 0.0003), (0.0002, -0.0001)):
+        p = fm.prob_up_twap(abar, d, avg_len=avg, **base)
+        assert float(ndtri(p)) == pytest.approx(((avg - h) * abar + h * d) / den, rel=1e-9)
+
+
+def test_twap_settles_at_the_end_and_ignores_an_unused_average():
+    p = fm.prob_up_twap(np.array([-1e-4, 0.0, 1e-4]), 5.0, 0.0, 0.0, 0.0, 0.5, 0.0, SIGMA, 1.0, 0.3, 1.0)
+    assert p.tolist() == [0.0, 1.0, 1.0]  # h = 0: only the realised average counts, ties go Up
+    at_open = fm.prob_up_twap(np.nan, 0.0003, 0.0, 0.0, 0.0, 0.0, 0.25, SIGMA, 1.0, 0.0, 0.0)
+    assert np.isfinite(at_open)  # nothing of the average has passed, abar is not read
+    early_60s = fm.prob_up_twap(np.nan, 0.0003, 0.0, 0.0, 0.0, 0.1, 0.1, SIGMA, 1.0, 0.0, 0.0, fm.AVG_60S)
+    assert np.isfinite(early_60s)
+    late = fm.prob_up_twap(np.nan, 0.0003, 0.0, 0.0, 0.0, 0.1, 0.1, SIGMA, 1.0, 0.0, 0.0)
+    assert np.isnan(late)  # part of the whole-window average has passed and was not given
+    bad = fm.twap_moments(np.array([0.1, np.nan]), 0.2, 1.0, 1.0, SIGMA)
+    assert np.isfinite(bad[1][0]) and np.isnan(bad[1][1])
+    no_sigma = fm.prob_up_twap(0.0, 0.0003, 0.0, 0.0, 0.0, 0.1, 0.1, np.nan, 1.0, 0.0, 0.0)
+    assert np.isnan(no_sigma)
+    open_h = 0.25 - 1e-17 * 3  # float noise in h at the open: none of the average has gone
+    assert np.isfinite(fm.prob_up_twap(np.nan, 0.0003, 0.0, 0.0, 0.0, 0.5, open_h, SIGMA, 1.0, 0.0, 0.0))
+
+
+def test_twap_probability_matches_monte_carlo():
+    gen = np.random.default_rng(20260922)
+    n = 60_000
+    for c in (vm.TWAP_CASES[3], vm.TWAP_CASES[6], vm.TWAP_CASES[7]):
+        t, h = (c["k"] - 1) / 4 + c["tau"] / 4, (1 - c["tau"]) / 4
+        B, Gb, var = fm.twap_moments(t, h, c["k0"], c["lam"], SIGMA, c["avg"])
+        integ = vm.simulate_future_average(c["M"], c["mu"], c["v_mu"], c["k0"], c["lam"], t, h, c["avg"],
+                                       n, gen, n_gap=100, n_avg=200)
+        # theta = 1 carries the drift and its uncertainty: mu ~ N(mu, v_mu)
+        p = float(fm.prob_up_twap(c["abar"], c["d"], c["M"], c["mu"], c["v_mu"], t, h, SIGMA, 1.0,
+                                  c["k0"], c["lam"], c["avg"]))
+        ell = min(h, c["avg"])
+        eps = c["avg"] - ell
+        known = (eps * c["abar"] if eps > 0 else 0.0) + ell * c["d"]
+        total_var = float(var) + c["v_mu"] * float(Gb) ** 2
+        assert integ.mean() == pytest.approx(float(-B * c["M"] + c["mu"] * Gb), abs=4 * integ.std() / np.sqrt(n))
+        assert integ.var() == pytest.approx(total_var, rel=4 * np.sqrt(2 / n))
+        assert np.mean(known + integ >= 0) == pytest.approx(p, abs=4 * np.sqrt(p * (1 - p) / n))
 
 
 # ------------------------------------------------------------------ stretch and blend
@@ -520,6 +742,71 @@ def test_mle_recovers_a_planted_negative_lam_and_the_lam_ge_0_fit_sits_on_its_bo
     ge0 = fm.fit_mle(obs, param_bounds=fm.PARAM_BOUNDS_LAM_GE_0)
     assert ge0.x[2] == pytest.approx(0.0, abs=1e-8)
     assert fm.neg_log_lik(res.x, obs, grad=False) < fm.neg_log_lik(ge0.x, obs, grad=False)
+
+
+def _synthetic_twap(n, params, seed, avg):
+    """Rows scored on average-price settlement: y = X(t) - x0, abar = realised average - x0."""
+    obs = _synthetic(n, params, seed)
+    rng = np.random.default_rng(seed + 100)
+    tau = 1 - 4 * obs["h"]
+    offset = obs["sigma"] * np.sqrt(fm.AVG_60S / 3) * rng.standard_normal(n)  # X(open) - x0
+    obs["y"] = obs["y"] + offset
+    obs["abar"] = np.where(tau > 0, offset + 0.5 * obs["y"] + 0.3 * obs["sigma"] * np.sqrt(tau / 12)
+                           * rng.standard_normal(n), np.nan)
+    theta, kappa0, lam, alpha, c = params
+    m = fm.stretch(obs["prev_returns"], alpha, c)
+    p = fm.prob_up_twap(obs["abar"], obs["y"], m, obs["mu"], obs["v"], obs["t"], obs["h"],
+                        obs["sigma"], theta, kappa0, lam, avg)
+    obs["up"] = (rng.random(n) < p).astype(float)
+    return obs
+
+
+@pytest.mark.parametrize("avg", [fm.Q, fm.AVG_60S])
+def test_twap_likelihood_matches_prob_up_twap_and_its_gradient(avg):
+    params = (-0.5, 4.0, -1.5, 1.0, 0.002)
+    obs = _synthetic_twap(1500, params, 9, avg)
+    m = fm.stretch(obs["prev_returns"], 1.0, 0.002)
+    p = fm.window_prob_up(obs["y"], m, obs["mu"], obs["v"], obs["t"], obs["h"], obs["sigma"],
+                          -0.5, 4.0, -1.5, settlement="twap", abar=obs["abar"], avg_len=avg)
+    ll = np.where(obs["up"] == 1, np.log(p), np.log(1 - p)).sum()
+    kw = dict(settlement="twap", avg_len=avg)
+    assert fm.neg_log_lik(params, obs, grad=False, **kw) == pytest.approx(-ll, rel=1e-10)
+    assert fm.neg_log_lik(params, obs, grad=False) != pytest.approx(-ll, rel=1e-6)  # "close" differs
+    x = np.array([-0.3, 3.0, -1.2, 1.1, 0.003])
+    _, grad = fm.neg_log_lik(x, obs, **kw)
+    for i in range(5):
+        e = 1e-6 * abs(x[i])
+        hi, lo = x.copy(), x.copy()
+        hi[i] += e
+        lo[i] -= e
+        fd = (fm.neg_log_lik(hi, obs, grad=False, **kw) - fm.neg_log_lik(lo, obs, grad=False, **kw)) / (2 * e)
+        assert grad[i] == pytest.approx(fd, rel=1e-4, abs=1e-4)
+    obs["k"] = (np.floor(obs["t"] * 4) + 1).astype(int)
+    x9 = np.concatenate([x, [0.15, -0.2, 0.1, -0.05]])
+    _, g9 = fm.neg_log_lik_vol_by_quarter(x9, obs, **kw)
+    for i in (1, 2, 5, 8):
+        e = 1e-6 * max(abs(x9[i]), 0.1)
+        hi, lo = x9.copy(), x9.copy()
+        hi[i] += e
+        lo[i] -= e
+        fd = (fm.neg_log_lik_vol_by_quarter(hi, obs, grad=False, **kw)
+              - fm.neg_log_lik_vol_by_quarter(lo, obs, grad=False, **kw)) / (2 * e)
+        assert g9[i] == pytest.approx(fd, rel=1e-4, abs=1e-4)
+
+
+def test_mle_recovers_planted_parameters_under_twap_settlement():
+    true = (-0.5, 4.0, 2.0, 1.0, 0.002)
+    obs = _synthetic_twap(40_000, true, 5, fm.Q)
+    res = fm.fit_mle(obs, settlement="twap")
+    assert res.success
+    theta, kappa0, lam, alpha, c = res.x
+    assert theta == pytest.approx(-0.5, abs=0.15)
+    assert kappa0 == pytest.approx(4.0, abs=1.5)
+    assert lam == pytest.approx(2.0, abs=1.5)
+    kw = dict(grad=False, settlement="twap")
+    assert fm.neg_log_lik(res.x, obs, **kw) <= fm.neg_log_lik(true, obs, **kw)
+    with pytest.raises(ValueError):
+        fm.fit_mle(obs, settlement="average")
 
 
 # ------------------------------------------------------------------ step 2 decision rules
