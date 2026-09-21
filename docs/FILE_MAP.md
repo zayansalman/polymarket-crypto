@@ -10,7 +10,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
 | `logging_setup.py` | WIRED | 19 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 12 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 15 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/controller.py` | WIRED | 1 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
 | `polymarket_bot/daily/__init__.py` | pkg | 1 | Daily (24h-window) altcoin Up/Down shadow strategy (issue #185). |
 | `polymarket_bot/daily/ledger.py` | WIRED | 1 | Persistence for the daily altcoin scanner's paper positions. |
@@ -19,7 +19,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/fees.py` | WIRED | 2 | Canonical Polymarket taker-fee math. |
-| `polymarket_bot/inventory.py` | WIRED | 1 | Every strategy family in this repo, including the ones that do nothing. |
+| `polymarket_bot/inventory.py` | WIRED | 3 | Every strategy family in this repo, including the ones that do nothing. |
 | `polymarket_bot/maker/__init__.py` | pkg | 3 | (needs docstring) |
 | `polymarket_bot/maker/filler.py` | WIRED | 1 | Decide whether a resting quote would really have filled, and settle it. |
 | `polymarket_bot/maker/ledger.py` | WIRED | 3 | Paper ledger for resting maker quotes. |
@@ -30,8 +30,9 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/pairarb/market_index.py` | WIRED | 1 | Outcome-token -> market metadata resolver for the daily altcoin scanner. |
 | `polymarket_bot/paper.py` | WIRED | 3 | BTC 5-minute trading engine (paper by default, live opt-in). |
 | `polymarket_bot/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
-| `polymarket_bot/strategies.py` | WIRED | 7 | Operator strategy switches: which strategies may open new positions. |
+| `polymarket_bot/strategies.py` | WIRED | 8 | Operator strategy switches: which strategies may open new positions. |
 | `polymarket_bot/strategy.py` | WIRED | 3 | Shared BTC 5-minute binary strategy math. |
+| `polymarket_bot/strategy_docs.py` | WIRED | 2 | One document per strategy family, kept in step with the code it describes. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/connectors/__init__.py` | pkg | 2 | Exchange and data connectors. |
 | `polymarket_exec/connectors/chainlink_settlement.py` | WIRED | 2 | Settlement-aligned Chainlink BTC/USD feed via Polymarket endpoints (issue #21). |
@@ -58,6 +59,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/ops/__init__.py` | pkg | 3 | Operator controls and background recorders. |
 | `polymarket_exec/ops/dashboard/__init__.py` | pkg | 2 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
 | `polymarket_exec/ops/dashboard/app.py` | WIRED | 1 | FastAPI dashboard for the local Polymarket crypto trading lab. |
+| `polymarket_exec/ops/dashboard/docs_view.py` | WIRED | 1 | Strategy docs in the dashboard: ``/strategy-docs`` and ``/strategy-docs/<key>``. |
 | `polymarket_exec/ops/dashboard/execution_view.py` | WIRED | 1 | Execution view orchestrator (#37). |
 | `polymarket_exec/ops/dashboard/panels/__init__.py` | pkg | 2 | Dashboard panels. |
 | `polymarket_exec/ops/dashboard/panels/_data.py` | WIRED | 2 | Read-only SQLite loaders for dashboard panels. |
@@ -85,8 +87,12 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_exec/storage/repositories/__init__.py` | pkg | 1 | Repositories: the only place raw SQL against a given table should live. |
 | `polymarket_exec/storage/repositories/positions.py` | WIRED | 1 | The only place ``paper_positions`` is read or written — issue #266 step 2. |
 | `polymarket_exec/storage/venue_flow_store.py` | WIRED | 1 | SQLite read/write for venue flow hour bars and perp venue snapshots. |
+| `tools/fade_1h_momentum_15m/manual_trades_flip.py` | cli | 0 | What a wallet's recent manual trades made, against taking the other side of each. |
+| `tools/fade_1h_momentum_15m/threshold_scan.py` | cli | 0 | Does buying (or fading) the 1h-momentum side of a 15m market pay, by entry price? |
+| `tools/fade_1h_momentum_15m/validate_math.py` | cli | 0 | Monte Carlo check of every closed form in tasks/2026-09-21-fade-1h-momentum-on-15m.md. |
 | `tools/gen_docs.py` | cli | 0 | Generate the machine-derived sections of the agent docs. |
 | `tools/live_detect_wallet.py` | cli | 0 | Find your MetaMask Polymarket wallet and write it into .env (#34). |
 | `tools/live_preflight.py` | cli | 0 | Live-launch preflight: verify the .env wallet config end to end (issue #32). |
 | `tools/reconcile_live_ledger.py` | cli | 0 | Reconcile the live paper-ledger against the REAL Polymarket account (issue #102). |
+| `tools/strategy_docs.py` | cli | 0 | Keep each strategy's doc in step with its code. |
 | `tools/venue_recorder.py` | cli | 1 | Venue recorder — the research program's one blocking build item (C17). |

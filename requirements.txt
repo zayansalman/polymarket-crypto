@@ -19,6 +19,8 @@ websockets==16.0
 # zoneinfo's IANA database: python:3.11-slim ships no system tzdata, and the macro
 # calendar parsers convert naive US Eastern release times (DST-aware).
 tzdata==2025.3
+# Renders docs/strategies/*.md at /docs in the dashboard.
+markdown-it-py==4.0.0
 
 pytest==8.3.3
 pytest-asyncio==0.24.0

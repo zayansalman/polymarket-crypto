@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if body %}{{ title }} · {% endif %}Strategy docs</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+        integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+</head>
+<body>
+  <div class="app docs-app">
+    <header class="topbar">
+      <div class="brand">POLYMARKET CRYPTO <b>DOCS</b></div>
+      <nav class="docs-nav">
+        <a href="/strategy-docs">All strategies</a>
+        <a href="/">Dashboard</a>
+      </nav>
+    </header>
+
+    {% if groups is not none %}
+    <section class="card docs-index">
+      <div class="card-h">STRATEGY DOCS</div>
+      <p class="docs-lede">One document per strategy: what it does, how it was formed, the calculation,
+        its sources and a changelog. Each doc carries a fingerprint of its strategy's code; changing
+        the code fails the test suite until the doc is updated with a note saying what changed.</p>
+      {% for status, rows in groups %}
+      <div class="strategy-group">{{ status }} &middot; {{ rows|length }}</div>
+      {% for row in rows %}
+      <div class="docs-row">
+        <a href="/strategy-docs/{{ row.key }}">{{ row.label }}</a>
+        {% if not row.has_doc %}<span class="docs-badge stale">no doc</span>
+        {% elif not row.current %}<span class="docs-badge stale">out of date</span>{% endif %}
+        <div class="strategy-desc">{{ row.what }}</div>
+      </div>
+      {% endfor %}
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if body %}
+    {% if problems %}
+    <div class="docs-stale-banner">
+      <b>This doc is out of date with the code.</b>
+      <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    <article class="card doc-body">{{ body|safe }}</article>
+    {% endif %}
+  </div>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
+          integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+          integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous"
+          onload="renderMathInElement(document.body, {delimiters: [{left: '\\[', right: '\\]', display: true}, {left: '\\(', right: '\\)', display: false}], throwOnError: false})"></script>
+</body>
+</html>

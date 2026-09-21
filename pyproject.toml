@@ -22,6 +22,8 @@ dependencies = [
     "websockets>=12",
     # IANA zones for zoneinfo (US Eastern release times); slim images lack system tzdata.
     "tzdata>=2024.1",
+    # Renders docs/strategies/*.md at /docs in the dashboard.
+    "markdown-it-py>=3.0",
 ]
 
 [project.optional-dependencies]

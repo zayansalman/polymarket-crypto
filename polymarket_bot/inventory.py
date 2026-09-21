@@ -15,7 +15,8 @@ Statuses, narrowest to widest:
 
 ``RUNNING``       auto-runs whenever the dashboard is up.
 ``GATED``         has a loop, but only runs while the operator holds Start.
-``UNWIRED``       code is imported at runtime but cannot reach a market.
+``UNWIRED``       cannot reach a market: imported at runtime with nothing
+                  wired to it, or built but not wired in yet.
 ``DEAD``          nothing imports it outside tests; it cannot run at all.
                   No family holds this status today — chronos_signal.py and
                   the shadow roster's table were deleted on 2026-09-21.
@@ -122,6 +123,25 @@ FAMILIES: tuple[Family, ...] = (
             "builds the retired btc-updown-5m slug. It ticks and never "
             "enters. Either point it at the 15m family or delete it — the "
             "TRADE BLOTTER card is permanently empty because of this."
+        ),
+    ),
+    # ---- built, nothing wired to trade it -----------------------------
+    Family(
+        key="fade_1h_momentum_15m",
+        label="Fade 1h Momentum on 15m",
+        path="tools/fade_1h_momentum_15m/",
+        what=(
+            "Prices each 15m Up/Down window from a Brownian-motion model of "
+            "the hour — the 1h market price, the trailing spot return and a "
+            "mean reversion that decays through the hour — and computes the "
+            "entry price instead of using a threshold."
+        ),
+        status=UNWIRED,
+        record="Never traded · maths validated 2026-09-21, historical test pending",
+        verdict=(
+            "Not wired to trade until the pre-registered historical test says "
+            "whether a fee-free edge survives on the real 15m tape; paper only "
+            "after that."
         ),
     ),
 )

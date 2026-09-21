@@ -20,6 +20,11 @@
   live in **[docs/FILE_MAP.md](docs/FILE_MAP.md)** and in `<!-- GENERATED -->`
   blocks. They are kept fresh by `tools/gen_docs.py` (CI `docs-drift` job +
   `.claude` hooks) — **never hand-edit them.**
+- **Strategy docs:** every family in `polymarket_bot/inventory.py` has
+  `docs/strategies/<key>.md`, served in the dashboard at `/strategy-docs`. Changing a
+  strategy's code, name, status or switch fails `tests/unit/test_strategy_docs.py`
+  until you update its doc with `python tools/strategy_docs.py stamp <key> "what changed"`.
+  See [docs/strategies/README.md](docs/strategies/README.md).
 
 ## Active Scope
 
@@ -166,6 +171,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 931.
+- **Tests:** 952.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_exec/ops/dashboard/panels/_shared.py`.
 <!-- END GENERATED:summary -->
