@@ -150,7 +150,10 @@ FAMILIES: tuple[Family, ...] = (
             "entry price instead of using a threshold."
         ),
         status=RESEARCH,
-        record="Never traded · maths validated 2026-09-21, historical test pending",
+        record=(
+            "Never traded · tape test Sep 17–20, minute 2: taker +1.4c/share "
+            "(n 355, t 0.44), maker −2.7c/quote (n 521, t −1.08)"
+        ),
         verdict=(
             "Offline until the pre-registered historical test says whether a "
             "fee-free edge survives on the real 15m tape; paper only after that."

@@ -5,7 +5,7 @@
 | Name | chosen by Zayan (operator), 2026-09-21 |
 | Concept | Zayan, 2026-09-21 |
 | Maths | Claude, 2026-09-21 |
-| Status | maths validated against simulation and the literature (section 9); historical test pre-registered (section 8); **not yet fitted** |
+| Status | maths validated against simulation and the literature (section 9); historical test pre-registered (section 8), fitted and run 2026-09-21 after two adversarial reviews: results, deviations and open findings in section 11; never traded |
 | Checks | `tools/fade_1h_momentum_15m/validate_math.py` |
 | Living doc | `docs/strategies/fade_1h_momentum_15m.md` (in the dashboard at `/strategy-docs/fade_1h_momentum_15m`). This file is the dated research record: the full derivation and the pre-registration. |
 
@@ -194,8 +194,9 @@ The question step 2 answers: on spot the 15m reversion is too small to trade (1.
 crowd does not already price it, a ~1.5% sign edge is ~1.5c/share at 50c, and a maker pays no
 fee. If the crowd does price it, the edge is zero and this will show it.
 
-**Baselines on the same rows:** Zayan's rule (1h side, price ≥ 40c) and the 2026-09-21 finding
-(1h side, price ≥ 55c).
+**Comparisons:** the model is judged only against the market's own price and the no-edge (martingale) baseline, on the same rows.
+
+*Amendment, 2026-09-21 (Zayan): an earlier draft also scored price-threshold rules (1h side at ≥ 40c and ≥ 55c) as baselines. Removed: there are no rules or thresholds in this strategy, not even as comparisons. The maths decides.*
 
 ## 9. Validation (2026-09-21)
 
@@ -260,4 +261,296 @@ hour being the strongest boundary. $\lambda$ will say.
 
 ## 11. Results
 
-Pending.
+Run 2026-09-21, after two adversarial reviews of the code. Every number is from
+`data/fade_1h_momentum_15m/step0.json`, `step1.json` and `step2.json` (scripts in
+`tools/fade_1h_momentum_15m/`). The martingale taker and maker are a write-up check, not
+pre-registered: `data/fade_1h_momentum_15m/writeup_same_rows_vs_martingale.json`. t is clustered by
+15m window unless a line says otherwise. Score differences are a − b per row: negative means a
+scored better.
+
+**In short**
+
+- **Fade or follow.** The fitted $\theta$ is negative, so the model fades the momentum, but by
+  very little: −0.043 (z −2.00). Out of sample it adds nothing once reversion is in (+0.00001
+  log-loss per row, t 0.15). With a separate volatility scale per quarter of the hour it is
+  +0.007 (z 0.23). On the tape it moves $p$ by 0.3c on average and changes the side on 6 of
+  1,069 rows.
+- **Reversion through the hour.** Reversion is real and helps out of sample (−0.0020 log-loss
+  per row against the martingale, t −4.05, 332,160 rows). It does not decay through the hour. It
+  is weakest in the first quarter and strongest in the last: betting against the previous candle
+  has AUC 0.500 in quarter 1 and 0.540 in quarter 4. Fitted $\lambda$ = −1.62 (z −3.34), so
+  reversion grows. Part of that is volatility differing by quarter: with a per-quarter volatility
+  scale, $\lambda$ = −0.49 (z −1.31).
+- **Calibration.** At minute 2 on the tape (1,071 rows, 273 windows) the market's own price
+  scored better than the model (log-loss +0.0072 per row, t 0.87). The model scored level with
+  the martingale (+0.0004, t 0.11).
+- **Taker, minute 2.** +1.38c a share over the price paid (355 entries, t 0.44). The martingale
+  through the same rules on the same rows: −0.89c (253 entries, t −0.24). Per candidate row,
+  model minus martingale: +0.67c (n 1,071, t 1.19).
+- **Maker, minute 2.** −2.69c per quote (521 quotes, t −1.08), −3.27c per filled share (429
+  fills). The martingale through the same rules on the same rows: −2.30c per quote (495 quotes,
+  t −0.95). Per candidate row, model minus martingale: −0.24c (n 1,071, t −0.38).
+
+### Step 0: the 15m reversal on our Binance data
+
+Betting against the previous 15m candle's sign, Binance 2026-03-01 to 09-20, 19,584 bars per
+coin, block-bootstrap 95% interval:
+
+| coin | AUC | 95% CI | t (bootstrap SD) | pre-registration quoted |
+|---|---|---|---|---|
+| BTC | 0.518 | 0.514–0.524 | 6.49 | 0.533 |
+| ETH | 0.522 | 0.516–0.530 | 6.20 | 0.538 |
+| SOL | 0.519 | 0.512–0.527 | 5.38 | — |
+| XRP | 0.513 | 0.506–0.520 | 3.35 | 0.536 |
+
+The quoted numbers are the paper's 12-lag logit AUCs, not its one-lag sign score. The same score,
+walk-forward and out of sample (13,824 rows per coin; the paper's sample is 2025-01 to 2026-02,
+33,312 rows):
+
+| coin | ours, 12-lag logit | paper, 12-lag logit | our CI holds the paper's point | the paper's CI holds ours |
+|---|---|---|---|---|
+| BTC | 0.526 (0.517–0.535) | 0.533 (0.527–0.539) | yes | no |
+| ETH | 0.542 (0.531–0.551) | 0.538 (0.532–0.544) | yes | yes |
+| XRP | 0.527 (0.516–0.536) | 0.536 (0.530–0.542) | no | no |
+
+The intervals overlap for all three. The reversal grows with the size of the previous move: the
+four-coin flip rate runs from 49.5% in the smallest-move decile to 55.3% in the largest (paper:
+50.2% to 53.0%). Deciles 9 and 10 stay below 0.05 after Holm correction in all four coins (40
+cells, 16 with |t| ≥ 2 against 1.8 expected; t here treats rows as independent). Against 203
+whole-day label shifts, every coin's AUC is above every shifted one (p 0.005, the floor).
+
+### Step 1: spot only, walk-forward by month
+
+Six folds: train on every window before month M, test on M (April to September 20). 332,160
+test rows in 16,608 windows, four coins, one parameter set.
+
+| model | log-loss | vs martingale (t) | Brier vs martingale (t) |
+|---|---|---|---|
+| martingale $\Phi(y/\sigma\sqrt h)$ | 0.63199 | — | — |
+| momentum only ($\theta$) | 0.63117 | −0.00082 (−2.39) | −0.00035 (−2.21) |
+| reversion only ($\kappa_0, \lambda, \alpha, c$) | 0.63001 | −0.00198 (−4.05) | −0.00097 (−4.57) |
+| full | 0.63002 | −0.00197 (−3.89) | −0.00093 (−4.18) |
+
+Full minus reversion: +0.000013 (t 0.15). Against a martingale with its own volatility scale per
+quarter (a check added after review): reversion −0.00166 (t −3.53), full −0.00165 (t −3.35).
+$\lambda$ free against $\lambda \ge 0$: −0.00027 (t −1.40).
+
+Fitted values, full model:
+
+| fit | $\theta$ | $\kappa_0$ | $\lambda$ | $\alpha$ | $c$ | full − martingale in the test month (t) |
+|---|---|---|---|---|---|---|
+| test Apr | −0.120 | 0.49 | −1.37 | 1.02 | 0.0134 | −0.0040 (−2.79) |
+| test May | −0.063 | 0.41 | −1.77 | 1.10 | 0.0079 | −0.0008 (−0.59) |
+| test Jun | −0.044 | 0.30 | −2.00 | 1.07 | 0.0075 | −0.0025 (−2.18) |
+| test Jul | −0.046 | 0.22 | −2.31 | 1.14 | 0.0066 | −0.0019 (−1.74) |
+| test Aug | −0.047 | 0.27 | −2.08 | 1.03 | 0.0072 | −0.0016 (−1.56) |
+| test Sep | −0.049 | 0.29 | −1.88 | 1.00 | 0.0075 | −0.0007 (−0.51) |
+| frozen for step 2 (Mar 1 – Sep 16, 384,000 rows) | −0.043 (z −2.00) | 0.345 (z 2.52) | −1.62 (z −3.34) | 0.978 (z 6.89) | 0.0093 (z 2.72) | — |
+
+$\theta$ and $\lambda$ are negative in 6 of 6 folds. With a volatility scale per quarter,
+$\theta$ is +0.007 (z 0.23) on the frozen window and negative in 2 of 6 folds; $\lambda$ is −0.49
+(z −1.31) and still negative in 6 of 6.
+
+Does reversion decay through the hour? By quarter of the hour, decision at minute 0:
+
+| | Q1 (:00) | Q2 (:15) | Q3 (:30) | Q4 (:45) |
+|---|---|---|---|---|
+| share of the stretch pulled back, as fitted ($\lambda$ −1.62) | 0.10 | 0.15 | 0.21 | 0.30 |
+| same, with a volatility scale per quarter ($\lambda$ −0.49) | 0.24 | 0.27 | 0.30 | 0.33 |
+| AUC of betting against the previous candle (t), all windows Mar–Sep, n 19,584 each | 0.500 (0.05) | 0.518 (3.42) | 0.512 (2.35) | 0.540 (7.77) |
+| full − martingale log-loss out of sample (t), n 83,040 each, all minutes | −0.0005 (−0.91) | −0.0019 (−2.59) | −0.0007 (−0.63) | −0.0049 (−3.26) |
+
+The last two rows are exploratory, not pre-registered.
+
+### Step 2: Polymarket tape, Sep 17–20
+
+1,136 settled 15m markets (BTC/ETH/SOL/XRP) and 213 hourly markets. Frozen step 1 params. Of
+5,680 market-minutes, 5,096 had a 15m print in the last 60 s and are used. Binance's direction
+matched the real resolution on 94.7% of them.
+
+**Scores on the same rows** (log-loss, lower is better):
+
+| minute | n | windows | model | market | martingale | model − market (t) | model − martingale (t) | market − martingale (t) |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 877 | 274 | 0.6940 | 0.6870 | 0.6931 | +0.0070 (1.73) | +0.0009 (0.22) | −0.0062 (−1.58) |
+| 1 | 1,044 | 274 | 0.6656 | 0.6675 | 0.6654 | −0.0020 (−0.26) | +0.0002 (0.05) | +0.0021 (0.34) |
+| **2 (headline)** | **1,071** | **273** | **0.6402** | **0.6330** | **0.6398** | **+0.0072 (0.87)** | **+0.0004 (0.11)** | **−0.0068 (−1.03)** |
+| 3 | 1,052 | 272 | 0.6100 | 0.6070 | 0.6101 | +0.0030 (0.34) | −0.0001 (−0.03) | −0.0031 (−0.44) |
+| 5 | 1,052 | 272 | 0.5451 | 0.5397 | 0.5477 | +0.0054 (0.69) | −0.0025 (−0.86) | −0.0080 (−1.16) |
+| all | 5,096 | 274 | 0.6288 | 0.6247 | 0.6291 | +0.0041 (0.61) | −0.0003 (−0.08) | −0.0043 (−0.82) |
+
+Each minute has its own set of markets (a row needs a print in the last 60 s). Brier at minute
+2: model 0.2242, market 0.2216, martingale 0.2243.
+
+Calibration at minute 2 ($p$ = probability of Up; pairs of the 0.1-wide bins in step2.json):
+
+| $p$ bin | model n | model mean $p$ | Up rate | market n | market mean price | Up rate |
+|---|---|---|---|---|---|---|
+| 0.0–0.2 | 34 | 0.141 | 0.118 | 21 | 0.165 | 0.190 |
+| 0.2–0.4 | 247 | 0.320 | 0.360 | 259 | 0.319 | 0.332 |
+| 0.4–0.6 | 467 | 0.500 | 0.525 | 450 | 0.502 | 0.533 |
+| 0.6–0.8 | 274 | 0.680 | 0.734 | 277 | 0.680 | 0.686 |
+| 0.8–1.0 | 49 | 0.854 | 0.694 | 64 | 0.837 | 0.828 |
+
+**Taker, minute 2.** Decide on the last taker print before $t$; buy limited at $a^*(p)$; fill at
+the first taker print in the next 30 s if it is at or below $a^*$. A decided row with no such
+print fills at its pre-$t$ quote. One entry per market, side from $\mathrm{sign}(p - \tfrac12)$.
+
+| | model | martingale, same rows and rules |
+|---|---|---|
+| decided | 447 | 340 |
+| entered | 355 | 253 |
+| limit misses (print above $a^*$) | 92 | 87 |
+| c/share over the price paid, net of fee (t) | +1.38 (0.44) | −0.89 (−0.24) |
+| win rate / mean price paid | 0.620 / 0.590 | 0.581 / 0.574 |
+| mean fee | 1.57c | 1.60c |
+| its own expected c/share at those prices | +6.68 | +5.84 |
+| per candidate row, 0 where no entry (n 1,071) | +0.46 (0.44) | −0.21 (−0.24) |
+
+Model minus martingale per candidate row: +0.67c (t 1.19). They entered together on 229 rows,
+always on the same side (−3.09c each, t −0.81). Model only: 126 rows, +9.49c (t 2.31).
+Martingale only: 24 rows, +20.12c (t 2.29). These splits are exploratory.
+
+Where the model's taker price came from: 274 entries at a taker print after $t$ made −0.97c
+(t −0.29); 81 decided rows with no taker print in 30 s, filled at their pre-$t$ quote, made
++9.30c (t 1.74). The same 355 entries paying the pre-$t$ quote: +1.65c (t 0.52). Every decided
+row, a limit miss counted as 0: +1.09c (n 447, t 0.44). As a market order that pays whatever
+prints (447 entries): −0.26c (t −0.09).
+
+**Maker, minute 2.** Rest $b^*$; a fill needs a later print strictly below the bid.
+
+| | model | martingale, same rows and rules |
+|---|---|---|
+| quotes | 521 | 495 |
+| fills (rate) | 429 (82.3%) | 405 (81.8%) |
+| its own expected fill rate | 97.1% | 97.0% |
+| c per quote, 0 if unfilled (t) | −2.69 (−1.08) | −2.30 (−0.95) |
+| c per filled share (t) | −3.27 (−1.08) | −2.81 (−0.95) |
+| win rate on fills / mean bid on fills | 0.532 / 0.564 | 0.528 / 0.557 |
+| its own $p$ at the fill | 0.635 | 0.613 |
+| its own expected c per quote ($J$) | +6.94 | +5.51 |
+| per candidate row, 0 where no fill (n 1,071) | −1.31 (−1.08) | −1.06 (−0.95) |
+
+Model minus martingale per candidate row: −0.24c (t −0.38). On the 424 rows where both quoted:
+model −3.34c, martingale −2.85c, difference −0.49c (t −0.74).
+
+Every quote, model and martingale, sat at the top of its search range, 1c under the last print,
+where $J$ was still rising. Window-clustered 95% interval of the model's fill rate: 0.78–0.87; of its win rate
+on fills: 0.47–0.59.
+
+**Other minutes** (each minute its own market set):
+
+| minute | taker entries | taker c/share (t) | maker quotes | maker c/quote (t) |
+|---|---|---|---|---|
+| 0 | 176 | +3.60 (0.74) | 435 | +0.87 (0.29) |
+| 1 | 361 | +4.76 (1.50) | 546 | −2.50 (−1.04) |
+| 2 | 355 | +1.38 (0.44) | 521 | −2.69 (−1.08) |
+| 3 | 326 | +5.77 (1.94) | 527 | −1.53 (−0.69) |
+| 5 | 328 | +2.28 (0.84) | 471 | −0.18 (−0.08) |
+| earliest entry per market, all minutes | 747 | +2.95 (1.33) | 963 | −1.99 (−1.11) |
+
+**Does the crowd already price the reversal?** At minute 0 (n 871) the market leaned 1.25c
+against the previous candle (t 6.57) and the model 2.23c (t 13.56). The outcome went against the
+previous candle in 49.3% of those rows (t −0.33). Over these four days the reversal did not show,
+and the crowd already priced part of it.
+
+**$\theta$ on the tape** (diagnostic, not used): refitting $\theta$ alone gives −0.168 (z −1.14,
+5,096 rows).
+
+**Binance against Chainlink.** At minute 2, Binance's direction differs from the resolution on
+55 of 1,071 rows. Those rows carry +0.0051 of the +0.0072 model − market gap. On the other 1,016
+rows the gap is +0.0022 (t 0.26). Scored against Binance's own direction, model − market is
+−0.0050 (t −0.57). The split conditions on the outcome, so neither reading is the truth.
+
+**Many comparisons.** step2.json holds 2,648 t-statistics; 339 have |t| ≥ 2, against about 120
+expected if every cell were null and independent. The cells overlap heavily. Only the minute-2
+block is the pre-registered headline; quarter, asset and sensitivity tables are exploratory.
+
+### Deviations from section 8
+
+Step 0
+
+1. The pre-registration set the paper's 12-lag logit AUCs (0.533/0.538/0.536) as the target for
+   the one-lag sign score. Both readings are reported, with no single yes/no flag. The first run
+   had judged it by a rule of its own (sign-score CI above 0.5); that is kept as a labelled reading.
+2. The flip-rate decile t-statistics treat rows as independent; Holm and BH p-values sit beside them.
+
+Step 1
+
+3. $\lambda$ is left free in sign (section 7 says maximum likelihood; the first run bounded it at
+   $\lambda \ge 0$). The $\lambda \ge 0$ fits are a sensitivity.
+4. Diagnostics added: a martingale with one fitted volatility scale, one with a scale per
+   quarter, and the model-free reversal by quarter.
+5. Added after the second review: reversion and full models with a volatility scale per quarter,
+   to separate reversion from a volatility pattern in $\lambda$. The step 2 params are unchanged.
+6. Only the pooled out-of-sample comparisons against the martingale are the headline. Fold,
+   quarter, minute and coin tables are exploratory and not corrected for multiple comparisons.
+
+Step 2
+
+7. Blend moments are estimated leaving one tape day out, not walk-forward: there is one tape, so
+   earlier days use weights estimated partly on later days.
+8. Section 4 does not fix the forecast-error target. Chosen: the rest-of-hour drift on Binance,
+   errors scaled by $\sigma$ and weighted by $1 - t$, target noise removed.
+9. The maker's fill boundary moves with the crowd drift implied by the 15m price at $t$, not
+   $\hat\mu_H$ (which does not exist for SOL or rows without an hourly print).
+10. The maker quotes only $b^*$ (no ladder across 5–15c) and only where $J(b^*) > 0$. Fills use
+    prints on both tokens (one shared book), not only the token bid for; token-only prints and a
+    bid on the 1c tick are sensitivities.
+11. Maker sensitivities are run at minute 2 only; the headline maker at every minute.
+12. Taker quotes and fills include taker sells of the other token (the same book); direct buys
+    only is a sensitivity.
+13. The market price and $m_H$ use prints up to and including the decision second; the taker
+    quote uses prints strictly before $t$.
+14. Log-loss clips every probability to [0.001, 0.999].
+15. The $\theta$ refit on the tape is a diagnostic; the frozen $\theta$ is used everywhere.
+16. Diagnostics added: the model's side against the 1h move, and whether the crowd leans
+    against the previous candle.
+17. The taker decides on the last taker print in $[t-60, t)$ and fills at the first in
+    $[t, t+30]$. The first run decided and priced on prints after $t$; that rule is a sensitivity.
+18. Side from $\mathrm{sign}(p - \tfrac12)$, one entry per market (the first run tested both sides
+    and sometimes bought both).
+19. At a maker fill, $p$ is re-evaluated with the stretch reset at the fill state; holding it at
+    the quote is a sensitivity.
+20. The frozen params are the $\lambda$-free fit; $\lambda \ge 0$ is a sensitivity.
+21. One entry per market per minute; the pooled result keeps each market's earliest entry.
+22. Wilson intervals (pre-registered) treat rows as independent; window-clustered intervals sit
+    beside them.
+23. Quarter and asset tables are exploratory; every t is counted and Holm and BH are applied per table.
+24. The model reads Binance and the markets settle on Chainlink; scores and P&L are also given
+    against Binance's own direction.
+25. $b^*$ at the top of its range (last print − 1c) is reported apart from an interior $b^*$.
+26. Every decided taker row is kept; one with no taker print in 30 s fills at its pre-$t$ quote.
+    Other pricings, and dropping those rows, are sensitivities on the same decided rows.
+27. The taker is a buy limited at $a^*$, section 6's most it would ever pay. A market order is
+    a sensitivity.
+28. The maker's 1c-tick sensitivity bids the highest tick at or below $b^*$.
+29. The price-threshold baselines are removed by the amendment in section 8. Their numbers and
+    side definition (step2.json deviation 22) are not reported.
+30. Added in the write-up, not pre-registered: the martingale probability run through the same
+    taker and maker rules on the same minute-2 rows.
+
+### Open review findings
+
+From the second review, not fixed in the code:
+
+1. **High, checked but not resolved.** $\lambda < 0$ may mostly be volatility differing by quarter,
+   read through the variance term rather than the mean. With a volatility scale per quarter,
+   $\lambda$ goes from −1.62 to −0.49 (z −1.31) and $\theta$ from −0.043 to +0.007. Step 2 still
+   uses the as-coded params.
+2. Low. $\theta$ was fitted with the trailing spot return as the momentum but is applied in
+   step 2 to the blend of the 1h market and the spot return. step2.json's deviations do not say so.
+3. Low. Blend weights and $v$ are pooled across quarters of the hour. The error moments differ by
+   quarter, and in quarter 4 the spot estimate's error variance comes out negative (descriptive,
+   not used).
+4. Low. Leave-one-day-out blend weights use later days. Disclosed; equal weights change minute-2
+   log-loss by +0.0001 (t 0.61).
+5. Low. Minute-by-minute step 2 results cover different market sets, so they are not a
+   like-for-like comparison across minutes.
+6. Low. The maker sensitivity chain is read per quote over different quote sets, and its
+   one-sided / two-sided split conditions on the path after $t$.
+7. Low. 18 headline maker quotes would have crossed the ask but are booked as fee-free maker fills.
+8. Low. Step 0's "always-Down accuracy (same rows)" is over all 19,584 rows, not the decided rows
+   it sits beside, and flat labels inflate it.
+9. Low. The in-sample cost of $\lambda \ge 0$ is non-negative by construction (the models are
+   nested). Read the out-of-sample comparison instead: −0.00027 per row (t −1.40).

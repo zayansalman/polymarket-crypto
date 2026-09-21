@@ -7,8 +7,8 @@
 | Key | `fade_1h_momentum_15m` |
 | Status | offline only |
 | Switch | none — nothing to turn on |
-| Code | `tools/fade_1h_momentum_15m/` — 3 files |
-| Code fingerprint | `8e64a661d470` |
+| Code | `tools/fade_1h_momentum_15m/` — 10 files |
+| Code fingerprint | `a5c0e596af30` |
 <!-- END GENERATED:strategy -->
 
 ## What it does
@@ -129,9 +129,89 @@ continuous in the inputs.
 | $\alpha, c$ | lag-kernel decay and soft-clip scale | maximum likelihood |
 | $v_H, v_L, c_{HL}$ | blend weights | variances and covariance of each estimate's forecast errors |
 
-None is fitted yet. The fit and its test are pre-registered in the research write-up.
+**Fitted values** used by the historical test, from `data/fade_1h_momentum_15m/params_pre_sep17.json`
+(written by `step1_walkforward.py`). Fit window: Binance 1-minute spot, BTC/ETH/SOL/XRP, 15m
+windows opening 2026-03-01 00:00 to 2026-09-16 23:45 UTC (384,000 rows, 19,200 windows). One set
+for all four coins, maximum likelihood, $\lambda$ free in sign. z is clustered by window.
+
+| parameter | value | z | reading |
+|---|---|---|---|
+| $\theta$ | −0.043 | −2.00 | fades the momentum estimate, slightly |
+| $\kappa_0$ | 0.345 per hour | 2.52 | reversion speed at the top of the hour |
+| $\lambda$ | −1.62 | −3.34 | negative: reversion speeds up through the hour, to $\kappa$ = 1.74 per hour by :60 |
+| $\alpha$ | 0.978 | 6.89 | lag weights fall off roughly as $1/j$ |
+| $c$ | 0.0093 | 2.72 | soft-clip scale: a 0.93% 15m move |
+
+**Blend weights** (`data/fade_1h_momentum_15m/step2.json`, `blend`): estimated on the tape's four
+days, leaving each day out when scoring it. Weight on the 1h market's implied drift $w_H$ = 0.63,
+0.84, 0.51 and 0.69 for Sep 17, 18, 19 and 20; 0.66 over all four days (descriptive only).
+
+**Sensitivities, not used in the test** (same params file). With $\lambda \ge 0$: $\theta$ −0.040,
+$\kappa_0$ 0.948, $\lambda$ 0 (on the bound), $\alpha$ 0.899, $c$ 0.0131. With a separate volatility
+scale for each quarter of the hour: $\theta$ +0.007 (z 0.23), $\kappa_0$ 1.056, $\lambda$ −0.494 (z −1.31),
+$\alpha$ 0.862, $c$ 0.0094, scales 1.14, 1.07, 1.13, 0.96.
 
 ## Evidence so far
+
+### Historical test (2026-09-21)
+
+Pre-registered in the research write-up (section 8) and run after two adversarial reviews. Full
+tables, every deviation and the open review findings are in its section 11. Sources:
+`data/fade_1h_momentum_15m/step0.json`, `step1.json`, `step2.json`; the martingale taker and maker
+are a write-up check in `writeup_same_rows_vs_martingale.json`. t is clustered by 15m window. The
+model is judged only against the market's own price and the martingale $\Phi(y/\sigma\sqrt h)$, on
+the same rows.
+
+**Step 0, the 15m reversal on our Binance data** (2026-03-01 to 09-20, 19,584 bars per coin).
+Betting against the previous candle's sign: AUC 0.518 BTC, 0.522 ETH, 0.519 SOL, 0.513 XRP
+(t 3.35 to 6.49). The paper's own score, a 12-lag logit, out of sample: 0.526, 0.542, 0.527 for
+BTC, ETH, XRP against its 0.533, 0.538, 0.536.
+
+**Step 1, spot only, walk-forward by month** (April to Sep 20, 332,160 out-of-sample rows):
+
+| model | log-loss vs martingale | t |
+|---|---|---|
+| momentum only | −0.00082 | −2.39 |
+| reversion only | −0.00198 | −4.05 |
+| full | −0.00197 | −3.89 |
+
+- $\theta$ is negative in 6 of 6 folds, −0.043 (z −2.00) on the frozen fit. Adding it to
+  reversion changes log-loss by +0.00001 (t 0.15).
+- Reversion does not decay through the hour. By quarter, at minute 0:
+
+| | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| share of the stretch pulled back, as fitted ($\lambda$ −1.62, z −3.34) | 0.10 | 0.15 | 0.21 | 0.30 |
+| same, volatility scaled per quarter ($\lambda$ −0.49, z −1.31) | 0.24 | 0.27 | 0.30 | 0.33 |
+| AUC of betting against the previous candle, n 19,584 each | 0.500 | 0.518 | 0.512 | 0.540 |
+
+**Step 2, Polymarket tape** (Sep 17–20, 1,136 markets). Headline minute 2: 1,071 rows in 273
+windows.
+
+| same 1,071 rows | log-loss | Brier |
+|---|---|---|
+| model | 0.6402 | 0.2242 |
+| market price | 0.6330 | 0.2216 |
+| martingale | 0.6398 | 0.2243 |
+
+Model − market +0.0072 (t 0.87); model − martingale +0.0004 (t 0.11).
+
+| minute 2 | model | martingale, same rows and rules |
+|---|---|---|
+| taker entries | 355 | 253 |
+| taker c/share over the price paid, net of fee (t) | +1.38 (0.44) | −0.89 (−0.24) |
+| taker c per candidate row, n 1,071 (t) | +0.46 (0.44) | −0.21 (−0.24) |
+| maker quotes / fills | 521 / 429 | 495 / 405 |
+| maker c per quote, 0 if unfilled (t) | −2.69 (−1.08) | −2.30 (−0.95) |
+| maker c per candidate row, n 1,071 (t) | −1.31 (−1.08) | −1.06 (−0.95) |
+
+- Model minus martingale per candidate row: taker +0.67c (t 1.19), maker −0.24c (t −0.38).
+- The model expected +6.7c a share on its taker entries and made +1.4c. Its maker expected 97%
+  fills and a 63.5% win rate on them; it got 82% and 53%, at a mean bid of 0.564.
+- At minute 0 the market already leaned 1.25c against the previous candle (n 871, t 6.57) and
+  the model 2.23c. The outcome went against the previous candle in 49.3% of those rows.
+
+### Before the test
 
 **Zayan's trades** (`manual_trades_flip.py`, settled 2026-09-21): 18 trades, 4 right, −$9.61
 actual vs +$12.07 on the opposite side. On 15m only: 8 trades, −$2.34 vs +$7.41.
@@ -162,14 +242,30 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Known weaknesses
 
-- One 3.5-day window of Polymarket data. The t-statistics are near 2, not proof.
+- One 3.5-day window of Polymarket data: 1,071 rows in 273 windows at the headline minute. No
+  headline t in step 2 reaches 2.
 - Gaussian increments; crypto minutes are fat-tailed.
 - The 1h market is assumed efficiently priced when read. Thin books go stale.
-- Binance stands in for Chainlink, which settles the 15m markets.
-- That reversion decays through the hour is Zayan's hypothesis. The lag-kernel reversal is
-  documented in the literature; its decay by hour position is not.
-- On spot, the 15m reversal is too small to trade (1.3bp gross vs 5bp cost). It can only pay
-  here if a binary, which pays on the sign, is priced without it — the historical test decides.
+- Binance stands in for Chainlink, which settles the 15m markets. On the tape, 55 of the 1,071
+  minute-2 rows resolved against Binance's direction, and they carry most of the model's
+  log-loss gap to the market (+0.0051 of +0.0072).
+- Reversion does not decay through the hour. On 2026 Binance data it is weakest in the first
+  quarter and strongest in the last, so the fitted $\lambda$ is negative. How much of that is
+  reversion and how much is volatility differing by quarter is not settled: $\lambda$ is −1.62 as
+  fitted and −0.49 (z −1.31) with a volatility scale per quarter.
+- The fade is small and fragile. $\theta$ is −0.043 (z −2.00), adds nothing out of sample once
+  reversion is in, and turns +0.007 with a volatility scale per quarter. On the tape it changed
+  the side on 6 of 1,069 rows.
+- $\theta$ was fitted with the trailing spot return as the momentum, then applied on the tape to
+  the blend of the 1h market and the spot return.
+- The model is overconfident. Its taker entries expected +6.7c a share and made +1.4c. Its
+  rows at $p \ge 0.8$ (n 49) won 69% against a mean $p$ of 0.85.
+- The maker's fill model understates adverse selection: 82% of bids filled against 97%
+  modelled, and fills won 53% against the 63.5% the model expected at the fill.
+- On spot, the 15m reversal is too small to trade (1.3bp gross vs 5bp cost). On the tape the
+  crowd already prices part of it: at minute 0 the market leaned 1.25c against the previous
+  candle (n 871, t 6.57). Over Sep 17–20 the reversal did not show: 49.3% of those windows
+  went against the previous candle.
 
 ## Sources
 
@@ -202,4 +298,5 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-22 · `a5c0e596af30` · Historical test results added (Step 0-2 evidence, fitted parameters, updated weaknesses): at minute 2 the market's price scored better than the model (log-loss +0.0072, t 0.87), the taker made +1.4c/share (n 355, t 0.44) and the maker -2.7c/quote (n 521, t -1.08); the martingale on the same rows made -0.9c and -2.3c.
 - 2026-09-21 · `8e64a661d470` · Doc created: Zayan's concept, the maths as validated against simulation and the literature, and the two analyses that started it. Historical test pending.
