@@ -140,6 +140,23 @@ FAMILIES: tuple[Family, ...] = (
     ),
     # ---- offline only -------------------------------------------------
     Family(
+        key="fade_1h_momentum_15m",
+        label="Fade 1h Momentum on 15m",
+        path="tools/fade_1h_momentum_15m/",
+        what=(
+            "Prices each 15m Up/Down window from a Brownian-motion model of "
+            "the hour — the 1h market price, the trailing spot return and a "
+            "mean reversion that decays through the hour — and computes the "
+            "entry price instead of using a threshold."
+        ),
+        status=RESEARCH,
+        record="Never traded · maths validated 2026-09-21, historical test pending",
+        verdict=(
+            "Offline until the pre-registered historical test says whether a "
+            "fee-free edge survives on the real 15m tape; paper only after that."
+        ),
+    ),
+    Family(
         key="btc5m_backtest",
         label="BTC 5m offline backtest / replay",
         path="polymarket_bot/backtest.py",

@@ -20,6 +20,11 @@
   live in **[docs/FILE_MAP.md](docs/FILE_MAP.md)** and in `<!-- GENERATED -->`
   blocks. They are kept fresh by `tools/gen_docs.py` (CI `docs-drift` job +
   `.claude` hooks) — **never hand-edit them.**
+- **Strategy docs:** every family in `polymarket_bot/inventory.py` has
+  `docs/strategies/<key>.md`, served in the dashboard at `/strategy-docs`. Changing a
+  strategy's code, name, status or switch fails `tests/unit/test_strategy_docs.py`
+  until you update its doc with `python tools/strategy_docs.py stamp <key> "what changed"`.
+  See [docs/strategies/README.md](docs/strategies/README.md).
 
 ## Active Scope
 

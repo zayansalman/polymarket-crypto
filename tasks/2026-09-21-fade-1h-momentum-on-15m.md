@@ -7,6 +7,7 @@
 | Maths | Claude, 2026-09-21 |
 | Status | maths validated against simulation and the literature (section 9); historical test pre-registered (section 8); **not yet fitted** |
 | Checks | `tools/fade_1h_momentum_15m/validate_math.py` |
+| Living doc | `docs/strategies/fade_1h_momentum_15m.md` (in the dashboard at `/strategy-docs/fade_1h_momentum_15m`). This file is the dated research record: the full derivation and the pre-registration. |
 
 ## What Zayan described
 

@@ -36,6 +36,13 @@ def test_each_row_explains_what_the_family_does_and_where_it_lives() -> None:
         assert family.path in html
 
 
+def test_every_row_links_to_its_strategy_doc_and_the_header_to_all_docs() -> None:
+    html = panel.render(enabled=ALL_ON)
+    for family in _inv.in_group(_strategies.MINE):
+        assert f"href='/strategy-docs/{family.key}'" in html
+    assert "href='/strategy-docs'" in html
+
+
 def test_copy_switches_are_not_in_this_card() -> None:
     # They belong beside the wallet they act on. A switch listed away from the
     # thing it controls cannot be judged.

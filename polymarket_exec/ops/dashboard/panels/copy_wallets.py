@@ -222,7 +222,9 @@ def render(
 
     return (
         "<section class='card copy-wallets-card'>"
-        f"<div class='card-h'>COPY TRADE WALLETS{status}</div>"
+        f"<div class='card-h'>COPY TRADE WALLETS{status}"
+        "<a class='strategy-doc-link' href='/strategy-docs/copytrade' "
+        "target='_blank' rel='noopener'>docs</a></div>"
         f"{switches}"
         f"{err}"
         f"{body}"
