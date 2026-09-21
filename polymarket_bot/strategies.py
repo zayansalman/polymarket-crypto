@@ -26,18 +26,12 @@ from dataclasses import dataclass
 from db import get_config, set_config  # type: ignore[import-untyped]
 
 
-MINE = "mine"
-"""Strategies this repo runs on its own signals."""
-
 @dataclass(frozen=True)
 class Strategy:
     name: str
     label: str
     description: str
     default: bool = True
-    group: str = MINE
-    """Which card owns the switch. ``MINE`` is a strategy this repo decides
-    for itself."""
 
     @property
     def key(self) -> str:
@@ -56,7 +50,6 @@ STRATEGIES: dict[str, Strategy] = {
             "switch gates a loop that cannot enter. Leave it off until a "
             "market is pointed at the loop."
         ),
-        group=MINE,
     ),
     "daily_altcoin": Strategy(
         name="daily_altcoin",
@@ -67,7 +60,6 @@ STRATEGIES: dict[str, Strategy] = {
             "versus a realized-volatility model. Paper only — it has no live "
             "path."
         ),
-        group=MINE,
     ),
     "maker": Strategy(
         name="maker",
@@ -78,18 +70,12 @@ STRATEGIES: dict[str, Strategy] = {
             "spread, and holds to resolution. One fixed clip per market, "
             "never a second bite. Paper only."
         ),
-        group=MINE,
     ),
 }
 
 """Registry order is render order. Keys are permanent: the switch is stored at
 ``runtime.strategy.<name>.enabled``, so renaming a ``name`` silently resets an
 operator's choice."""
-
-
-def in_group(group: str) -> dict[str, Strategy]:
-    """The strategies one card owns, in registry order."""
-    return {n: s for n, s in STRATEGIES.items() if s.group == group}
 
 
 def _strategy(name: str) -> Strategy:
