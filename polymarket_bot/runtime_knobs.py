@@ -91,6 +91,66 @@ KNOBS: dict[str, Knob] = {
         "runtime.maker.poll_interval_seconds", 45.0, "float",
         "Quote/fill poll interval", 10.0, 600.0, unit="s", group="Maker",
     ),
+    # --- Fade 1h Momentum on 15m (polymarket_bot/fade_1h_momentum_15m/) ----
+    # Paper only. Side, price and size come out of the maths; these are the
+    # operator's preferences and caps around it, read fresh every pass. The
+    # Kelly multiplier is the one preference inside the sizing (spec section 2).
+    "fade1h_poll_interval_seconds": Knob(
+        "runtime.fade_1h.poll_interval_seconds", 60.0, "float",
+        "Pass interval", 10.0, 600.0, unit="s", group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_bankroll_usd": Knob(
+        "runtime.fade_1h.bankroll_usd", 100.0, "float",
+        "Starting paper bankroll", 1.0, 1_000_000.0, unit="USD",
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_kelly_multiplier": Knob(
+        "runtime.fade_1h.kelly_multiplier", 0.5, "float",
+        "Kelly multiplier (1 = full Kelly)", 0.0, 1.0, group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_max_order_usd": Knob(
+        "runtime.fade_1h.max_order_usd", 25.0, "float",
+        "Largest single bid", 1.0, 100_000.0, unit="USD", group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_ladder_lo_cents": Knob(
+        "runtime.fade_1h.ladder_lo_cents", 1.0, "float",
+        "Ladder: nearest rung under the ask", 0.0, 50.0, unit="c",
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_ladder_hi_cents": Knob(
+        "runtime.fade_1h.ladder_hi_cents", 15.0, "float",
+        "Ladder: deepest rung under the ask", 1.0, 50.0, unit="c",
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_hedge_enabled": Knob(
+        "runtime.fade_1h.hedge_enabled", True, "bool",
+        "Hedge held positions (resting bid on the other side)",
+        group="Fade 1h Momentum on 15m",
+    ),
+    # The 15m market settles on the Chainlink TWAP-60s stream; the other two
+    # are there to compare what the model makes of each feed.
+    "fade1h_spot_feed": Knob(
+        "runtime.fade_1h.spot_feed", "chainlink_twap60", "enum",
+        "Spot feed for the model's inputs",
+        choices=("chainlink_twap60", "chainlink", "binance"),
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_trade_btc": Knob(
+        "runtime.fade_1h.trade_btc", True, "bool", "Trade BTC",
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_trade_eth": Knob(
+        "runtime.fade_1h.trade_eth", True, "bool", "Trade ETH",
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_trade_sol": Knob(
+        "runtime.fade_1h.trade_sol", True, "bool", "Trade SOL",
+        group="Fade 1h Momentum on 15m",
+    ),
+    "fade1h_trade_xrp": Knob(
+        "runtime.fade_1h.trade_xrp", True, "bool", "Trade XRP",
+        group="Fade 1h Momentum on 15m",
+    ),
     # --- Paper strategy (polymarket_bot/paper.py) -------------------------
     "paper_min_trade_usd": Knob(
         "runtime.paper.min_trade_usd", 1.0, "float", "Min trade size",

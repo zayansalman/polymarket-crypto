@@ -232,6 +232,117 @@ CREATE TABLE IF NOT EXISTS macro_consensus (
 );
 CREATE INDEX IF NOT EXISTS idx_macro_consensus_key
   ON macro_consensus(source, title, scheduled_at_ms, taken_at_ms);
+
+-- Fade 1h Momentum on 15m: a paper-only strategy (polymarket_bot/fade_1h_momentum_15m/,
+-- read and written only through its ledger.py). Its own tables, never paper_positions:
+-- Stop and the PAPER/LIVE toggle force-close every open paper_positions row at the BTC 5m
+-- price. Timestamps are integer epoch seconds, like the window bounds they are compared with.
+
+-- One row per coin per 15m window the strategy saw, traded or not: the learner needs the
+-- outcome of every window, not only the traded ones.
+CREATE TABLE IF NOT EXISTS fade_windows (
+  window_slug        TEXT PRIMARY KEY,
+  asset              TEXT NOT NULL,
+  window_start       INTEGER NOT NULL,
+  window_end         INTEGER NOT NULL,
+  hour_start         INTEGER NOT NULL,
+  condition_id       TEXT,
+  up_token           TEXT,
+  down_token         TEXT,
+  -- The settlement stream's value at the window start. A 15m window settles Up iff the
+  -- Chainlink TWAP-60s stream's time-weighted average over the window is >= this value.
+  start_ref_price    REAL,
+  start_ref_source   TEXT,
+  -- The 1h market this window sits in (settles on the Binance 1h candle, close >= open).
+  hour_slug          TEXT,
+  hour_condition_id  TEXT,
+  outcome            TEXT CHECK (outcome IN ('Up', 'Down')),
+  settled_ts         INTEGER,
+  -- Sum of this window's order P&L: a hedged pair is one bet.
+  net_pnl            REAL,
+  created_ts         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fade_windows_due
+  ON fade_windows(outcome, window_end);
+CREATE INDEX IF NOT EXISTS idx_fade_windows_asset
+  ON fade_windows(asset, window_start);
+
+-- One row per coin per pass: every input the maths saw (so p can be recomputed under new
+-- dials), what it said, and why nothing was placed when nothing was.
+CREATE TABLE IF NOT EXISTS fade_decisions (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             INTEGER NOT NULL,
+  asset          TEXT NOT NULL,
+  window_slug    TEXT,
+  mode           TEXT,
+  dials_version  INTEGER,
+  inputs_json    TEXT NOT NULL,
+  p_model        REAL,
+  p              REAL,
+  side           TEXT CHECK (side IN ('Up', 'Down')),
+  kelly_f        REAL,
+  stake_usd      REAL,
+  ladder_json    TEXT,
+  hedge_json     TEXT,
+  factors_json   TEXT,
+  action         TEXT NOT NULL,
+  reason         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_fade_decisions_asset
+  ON fade_decisions(asset, id);
+CREATE INDEX IF NOT EXISTS idx_fade_decisions_window
+  ON fade_decisions(window_slug);
+
+-- One row per placement of a paper resting bid (a requote is a cancel plus a new row).
+-- Life: resting -> partial -> filled, or it stops resting as cancelled / expired with
+-- whatever it filled. Settlement is separate: won, pnl and settled_ts are set when the
+-- window resolves. Every fill is a resting fill, so there is no fee.
+CREATE TABLE IF NOT EXISTS fade_orders (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  window_slug     TEXT NOT NULL REFERENCES fade_windows(window_slug),
+  token_id        TEXT NOT NULL,
+  side            TEXT NOT NULL CHECK (side IN ('Up', 'Down')),
+  kind            TEXT NOT NULL CHECK (kind IN ('entry', 'hedge')),
+  rung            INTEGER NOT NULL DEFAULT 0,
+  price           REAL NOT NULL,
+  shares          REAL NOT NULL,
+  -- Real shares resting at our price or better when we placed: the tape must trade
+  -- through this queue before any of it is ours.
+  depth_ahead     REAL NOT NULL DEFAULT 0,
+  crossed         REAL NOT NULL DEFAULT 0,
+  state           TEXT NOT NULL DEFAULT 'resting'
+                  CHECK (state IN ('resting', 'partial', 'filled', 'cancelled', 'expired')),
+  placed_ts       INTEGER NOT NULL,
+  cancelled_ts    INTEGER,
+  cancel_reason   TEXT,
+  filled_ts       INTEGER,
+  filled_shares   REAL NOT NULL DEFAULT 0,
+  fill_price      REAL,
+  -- The tape has been read for this order up to here (exclusive).
+  flow_cursor_ts  INTEGER,
+  decision_id     INTEGER,
+  mode            TEXT NOT NULL DEFAULT 'paper',
+  won             INTEGER,
+  pnl             REAL,
+  settled_ts      INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fade_orders_key
+  ON fade_orders(window_slug, token_id, kind, rung, placed_ts);
+CREATE INDEX IF NOT EXISTS idx_fade_orders_state
+  ON fade_orders(state);
+CREATE INDEX IF NOT EXISTS idx_fade_orders_window
+  ON fade_orders(window_slug);
+
+-- Versioned parameter sets: version 0 is the prior, each learner step adds one.
+CREATE TABLE IF NOT EXISTS fade_dials (
+  version      INTEGER PRIMARY KEY,
+  ts           INTEGER NOT NULL,
+  source       TEXT NOT NULL,
+  params_json  TEXT NOT NULL,
+  n_windows    INTEGER NOT NULL DEFAULT 0,
+  loglik       REAL,
+  note         TEXT
+);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {
@@ -282,6 +393,59 @@ TICK_COLUMN_MIGRATIONS = {
     "down_ask_size": "REAL",
     "quote_source": "TEXT",
     "gamma_up_price": "REAL",
+}
+
+# Fade 1h Momentum on 15m tables. Each dict lists every column an older copy of the table
+# can gain (nullable, or NOT NULL with a default). A new column goes in the CREATE above AND
+# here; test_fade1h_ledger checks the two agree. A column an index in SCHEMA uses cannot be
+# added this way (SCHEMA's CREATE INDEX runs before the migrations), so those stay in the
+# CREATE only.
+FADE_WINDOW_COLUMN_MIGRATIONS = {
+    "condition_id": "TEXT",
+    "up_token": "TEXT",
+    "down_token": "TEXT",
+    "start_ref_price": "REAL",
+    "start_ref_source": "TEXT",
+    "hour_slug": "TEXT",
+    "hour_condition_id": "TEXT",
+    "settled_ts": "INTEGER",
+    "net_pnl": "REAL",
+}
+
+FADE_DECISION_COLUMN_MIGRATIONS = {
+    "mode": "TEXT",
+    "dials_version": "INTEGER",
+    "p_model": "REAL",
+    "p": "REAL",
+    "side": "TEXT",
+    "kelly_f": "REAL",
+    "stake_usd": "REAL",
+    "ladder_json": "TEXT",
+    "hedge_json": "TEXT",
+    "factors_json": "TEXT",
+    "reason": "TEXT",
+}
+
+FADE_ORDER_COLUMN_MIGRATIONS = {
+    "depth_ahead": "REAL NOT NULL DEFAULT 0",
+    "crossed": "REAL NOT NULL DEFAULT 0",
+    "cancelled_ts": "INTEGER",
+    "cancel_reason": "TEXT",
+    "filled_ts": "INTEGER",
+    "filled_shares": "REAL NOT NULL DEFAULT 0",
+    "fill_price": "REAL",
+    "flow_cursor_ts": "INTEGER",
+    "decision_id": "INTEGER",
+    "mode": "TEXT NOT NULL DEFAULT 'paper'",
+    "won": "INTEGER",
+    "pnl": "REAL",
+    "settled_ts": "INTEGER",
+}
+
+FADE_DIALS_COLUMN_MIGRATIONS = {
+    "n_windows": "INTEGER NOT NULL DEFAULT 0",
+    "loglik": "REAL",
+    "note": "TEXT",
 }
 
 
@@ -363,6 +527,10 @@ async def init_db() -> None:
         await _migrate_columns(db, "paper_positions", POSITION_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "paper_ticks", TICK_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "live_orders", LIVE_ORDERS_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "fade_windows", FADE_WINDOW_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "fade_decisions", FADE_DECISION_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "fade_orders", FADE_ORDER_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "fade_dials", FADE_DIALS_COLUMN_MIGRATIONS)
         await _backfill_position_mode(db)
         await _backfill_live_order_mode(db)
         await _backfill_placement_status(db)

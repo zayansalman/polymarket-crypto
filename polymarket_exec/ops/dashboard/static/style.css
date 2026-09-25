@@ -598,3 +598,41 @@ body {
 .sc-md a { color: var(--text); }
 .sc-md .math-display { margin: 6px 0 8px; overflow-x: auto; overflow-y: hidden; }
 .strategy-status.st-running { color: var(--pos); background: rgba(27, 122, 67, .08); }
+
+/* ── FADE 1H MOMENTUM ON 15M: profit first, then one block per coin ── */
+.execution-grid .fade-card.fold { margin-bottom: 0; }
+.fade-pills { display: inline-flex; align-items: center; gap: 6px; }
+.fade-strip { display: flex; flex-wrap: wrap; gap: 12px 24px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.fade-state { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.fade-state .warn { color: var(--warn); }
+.fade-coin { border-top: 1px solid var(--border-strong); padding: 10px 0 6px; }
+.fade-coin-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.fade-coin-h b { color: var(--text); font-size: 12.5px; letter-spacing: .6px; }
+.fade-left { color: var(--text); }
+.fade-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 6px; }
+.fade-kv { display: flex; flex-direction: column; gap: 6px; }
+.fade-kv > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.fade-kv > div > span { color: var(--label); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.fade-kv b { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; color: var(--text); }
+.fade-sub { display: block; margin-top: 1px; font-family: var(--font-ui); font-size: 10.5px; font-weight: 400; color: var(--muted); }
+.fade-wf { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; font-family: var(--font-mono); font-size: 10.5px; }
+.fade-wf-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) 40px 44px; align-items: center; gap: 6px; }
+.fade-wf-head { color: var(--label); font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; }
+.fade-wf-l { color: var(--label); }
+.fade-wf-track { position: relative; height: 10px; background: var(--bg); border: 1px solid var(--border); }
+.fade-wf-mid { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+.fade-wf-bar { position: absolute; top: 1px; bottom: 1px; background: var(--muted); }
+.fade-wf-bar.up { background: var(--pos); }
+.fade-wf-bar.down { background: var(--neg); }
+.fade-wf-v, .fade-wf-c, .fade-wf-head span:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+.fade-wf-total { border-top: 1px solid var(--border); padding-top: 3px; }
+.fade-rungs { margin-bottom: 6px; }
+.fade-rungs td, .fade-rungs th { padding: 3px 6px; }
+.fade-story { padding: 4px 0; font-size: 12px; line-height: 1.5; color: var(--text); }
+.fade-reason { padding: 2px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.fade-reason.warn { color: var(--warn); }
+.fade-reason.down { color: var(--neg); }
+.fade-foot { border-top: 1px solid var(--border-strong); padding-top: 8px; font-size: 11px; color: var(--muted); }
+@media (max-width: 1100px) {
+  .fade-grid { grid-template-columns: 1fr; }
+}

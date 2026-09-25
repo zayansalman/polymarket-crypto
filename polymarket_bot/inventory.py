@@ -104,6 +104,33 @@ FAMILIES: tuple[Family, ...] = (
         record="19 positions · 18 settled −$67.08 · 1 open",
         switch="daily_altcoin",
     ),
+    Family(
+        key="fade_1h_momentum_15m",
+        label="Fade 1h Momentum on 15m",
+        path="polymarket_bot/fade_1h_momentum_15m/",
+        what=(
+            "Every minute, prices each of BTC, ETH, SOL and XRP's 15m Up/Down "
+            "window with the model (the chance it settles Up on the TWAP-60s "
+            "print at the close), follows the market as far as the settled "
+            "windows say, and rests a ladder of paper bids under the ask where "
+            "that pays, sized by Kelly across the four coins together. It "
+            "hedges a held position with a resting bid on the other side and "
+            "never crosses the spread. After each settled window the dials "
+            "move one step toward the result."
+        ),
+        status=RUNNING,
+        record=(
+            "Bids on paper since 2026-09-22 · starting dials fitted on the "
+            "Sep 17-20 tape, learning from every settled window"
+        ),
+        switch="fade_1h_momentum_15m",
+        verdict=(
+            "Paper only. Wired before the historical test at the operator's "
+            "call (paper-trade and learn): the paper record, not a backtest, "
+            "shows whether the maths pays. The starting anchor weights and "
+            "coin correlation come from 3.5 days of tape."
+        ),
+    ),
     # ---- wired, but cannot trade --------------------------------------
     Family(
         key="btc_updown",
@@ -121,25 +148,6 @@ FAMILIES: tuple[Family, ...] = (
             "builds the retired btc-updown-5m slug. It ticks and never "
             "enters. Either point it at the 15m family or delete it — the "
             "TRADE BLOTTER card is permanently empty because of this."
-        ),
-    ),
-    # ---- built, nothing wired to trade it -----------------------------
-    Family(
-        key="fade_1h_momentum_15m",
-        label="Fade 1h Momentum on 15m",
-        path="tools/fade_1h_momentum_15m/",
-        what=(
-            "Prices each 15m Up/Down window from a Brownian-motion model of "
-            "the hour — the 1h market price, the trailing spot return and a "
-            "mean reversion that decays through the hour — and computes the "
-            "entry price instead of using a threshold."
-        ),
-        status=UNWIRED,
-        record="Never traded · maths validated 2026-09-21, historical test pending",
-        verdict=(
-            "Not wired to trade until the pre-registered historical test says "
-            "whether a fee-free edge survives on the real 15m tape; paper only "
-            "after that."
         ),
     ),
 )

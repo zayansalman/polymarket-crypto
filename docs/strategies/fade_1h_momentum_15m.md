@@ -5,10 +5,10 @@
 |---|---|
 | Name | Fade 1h Momentum on 15m |
 | Key | `fade_1h_momentum_15m` |
-| Status | cannot trade |
-| Switch | none — nothing to turn on |
-| Code | `tools/fade_1h_momentum_15m/` — 3 files |
-| Code fingerprint | `91319a8794bc` |
+| Status | running now |
+| Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
+| Code | `polymarket_bot/fade_1h_momentum_15m/` — 9 files |
+| Code fingerprint | `32a1484ce579` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -19,7 +19,7 @@ Zayan's idea: take the 15-minute position from the 1-hour momentum at a computed
 
 ### Main assumption
 
-The log price is Brownian motion with a drift, plus an Ornstein–Uhlenbeck pull whose strength decays through the hour. The 1-hour market is priced efficiently when read, so its price can be inverted for the drift. Increments are Gaussian, and Binance stands in for Chainlink, which settles these markets.
+The log price is Brownian motion with a drift, plus an Ornstein–Uhlenbeck pull whose strength decays through the hour. The 1-hour market is priced efficiently when read, so its price can be inverted for the drift. Increments are Gaussian. A 15m window settles Up when the Chainlink TWAP-60s print at its close (the average of the last 60 s) is at least the print at its open, and the model prices exactly that.
 
 ### The maths
 
@@ -35,26 +35,28 @@ The drift the 1h price implies, given the hour's move so far $x_t$:
 
 $$\hat\mu_H=\frac{\sigma\sqrt{1-t}\;\Phi^{-1}(m_H)-x_t}{1-t}$$
 
-The chance the window closes Up, with $y_\tau$ the window's move so far:
+The chance the window settles Up: $d$ is the price now against the opening print, $\bar a$ the part of the closing minute's average already printed ($\epsilon$ of it gone, $\ell$ to come):
 
-$$p=\Phi\!\left(\frac{y_\tau-(1-e^{-K})\,M_t+\theta\hat\mu\,G}{\sqrt{V+\theta^2\hat v\,G^2}}\right)$$
+$$p_{\text{model}}=\Phi\!\left(\frac{\epsilon\,\bar a+\ell\,d-B\,M_t+\theta\hat\mu\,\bar G}{\sqrt{\sigma^2\Psi+\theta^2\hat v\,\bar G^2}}\right)$$
 
-The taker break-even price, with fee rate $f=0.07$:
+The chance traded on follows the market $m$ as much as the settled windows say it should:
 
-$$a^*=\frac{(1+f)-\sqrt{(1+f)^2-4fp}}{2f}$$
+$$p=\Phi\big(w_M\,\Phi^{-1}(m)+w_S\,\Phi^{-1}(p_{\text{model}})\big)$$
 
-$K$, $G$ and $V$ are the exact integrals of the decaying pull over the time left. The full doc derives them.
+$B$, $\bar G$ and $\Psi$ are exact integrals of the decaying pull over the closing minute. The full doc derives them.
 
 ### How it works
 
 At a decision time inside one of the hour's four windows:
 
-1. Read the hour's move $x_t$, the window's move $y_\tau$, the last twelve 15m returns, and $\sigma$ from the last 60 one-minute returns.
+1. Read the hour's move $x_t$, the price now against the window's opening print, the closing minute's average so far, the last twelve 15m returns, and $\sigma$ from the last 60 one-minute returns.
 2. Invert the 1h market's price for the drift, and blend it with the trailing spot return using minimum-variance weights.
-3. Compute $p$ for the window.
-4. As taker, buy below $a^*$. As maker, rest the bid that maximises fill probability times edge. Size by Kelly.
+3. Compute $p_{\text{model}}$ for the window, and blend it with the 15m market's own price (the market anchor) to get $p$. The side is where $p$ leans.
+4. Simulate 2,000 paths of the fitted process to the window's end. A rung of the ladder fills when the market's price comes down to it; the chance of winning is re-read at that moment, so a fill that comes from the price moving against us counts against the rung.
+5. Rest bids only, never crossing: a ladder under the ask, each rung sized by Kelly, with the four coins sized together because they move together. Hedge a position that has turned against us with a resting bid on the other side.
+6. After every settled window, move the dials one step toward what the result says (recursive maximum likelihood, about two days of memory).
 
-Research only: nothing is wired to trade it, and none of $\theta$, $\kappa_0$, $\lambda$, $\alpha$ or $c$ is fitted yet.
+In the app now (paper only): every minute it does all of the above for BTC, ETH, SOL and XRP and rests paper bids where the maths says they pay. It starts from dials fitted on the Sep 17–20 tape: the market and the model each carry about half the weight ($w_M = 0.45$, $w_S = 0.57$) and the four coins move together ($\rho = 0.75$).
 
 ### How it was derived
 
@@ -66,6 +68,8 @@ Research only: nothing is wired to trade it, and none of $\theta$, $\kappa_0$, $
 ### References
 
 - Full derivation and the pre-registered historical test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`
+- Sizing, ladder, hedge and market anchor: `tasks/2026-09-22-fade-1h-sizing-hedging.md`
+- Code in the app: `polymarket_bot/fade_1h_momentum_15m/` (the model hook is `decide.py`)
 - Scripts: `tools/fade_1h_momentum_15m/manual_trades_flip.py`, `threshold_scan.py`, `validate_math.py`
 - Binaries as options on Brownian motion: Taleb, *Quantitative Finance* 2019, [arXiv 1703.06351](https://arxiv.org/abs/1703.06351)
 - 15m reversal in crypto: Kitron & Wengrowicz 2026, [arXiv 2608.21888](https://arxiv.org/abs/2608.21888)
@@ -82,7 +86,30 @@ a mean reversion that is strongest at the top of the hour and fades as the hour 
 output is a probability for the window, and from it the price to rest a bid at and how much to
 put there. Nothing in it is a threshold or a gate.
 
-It is research only: nothing is wired to trade it yet.
+It runs in the app as a paper strategy (switch `fade_1h_momentum_15m` on the MY STRATEGIES
+card). Every minute it:
+
+- reads each of BTC, ETH, SOL and XRP's current 15m window: both books with their depth, the
+  1h market's price, the Chainlink TWAP-60s, Chainlink and Binance prices, the window's price
+  to beat (the TWAP-60s print at the open, which the window settles against), the known part
+  of the closing minute's average, and Binance candles for $\sigma$ and the 15m returns;
+- prices the window with the model (the chance it settles Up on the TWAP-60s print at the
+  close), follows the market as far as the dials say, and picks the side;
+- simulates 2,000 paths of the price to the window's end to get each rung's chance of filling
+  and of winning once filled, and a hedge quote at the other side's best bid;
+- rests a ladder of paper bids 1–15c under the ask (Settings), sized by Kelly across the four
+  coins together (half Kelly by default, on a 100 USD starting paper bankroll), and hedges a
+  held position with a resting bid on the other side when the odds have turned;
+- writes one sentence per coin for the card, for example: "BTC's 15m leg is up 0.25% with
+  13 min left; the snap-back from the last candles barely moves it; the hour's momentum adds
+  little; the market has Up at 41c against the model's 83%, so the chance traded on is 67%;
+  the maths rests an Up bid at 41c.";
+- keeps checking fills, settles every window from the venue, traded or not, and after each
+  settled window moves the dials one step toward the result (a new dials version each time).
+
+It never crosses the spread and pays no fee. A paper bid fills only when the real trade tape
+reaches it through the queue in front of it. There is no live order path: with LIVE selected
+it places nothing and says so on the card.
 
 ## How it was formed
 
@@ -158,11 +185,27 @@ with weights that minimise the variance of the blended error, allowing for their
 
 $$w_H = \frac{v_L - c_{HL}}{v_H + v_L - 2c_{HL}}, \qquad \hat\mu = w_H\hat\mu_H + (1 - w_H)\hat\mu_L .$$
 
-**Probability the window closes Up:**
+**Probability the window closes Up** (the research's first version, settling on the close):
 
 $$p = \Phi\!\left(\frac{y_\tau - (1 - e^{-K})\,M_t + \theta\hat\mu\,G}{\sqrt{V + \theta^2\hat v\,G^2}}\right).$$
 
-What that does in the cases Zayan described (momentum part only):
+**What the app prices: the TWAP-60s settlement** (verified 2026-09-22 on the live markets and
+1,136 settled ones). A window settles Up iff the TWAP-60s print at its close, the average of the
+last 60 s, is at least the print at its open (Gamma's priceToBeat). With $d$ the price now
+against that opening print, $\bar a$ the closing minute's average so far, $\epsilon$ of the
+minute gone and $\ell$ to come:
+
+$$p_{\text{model}} = \Phi\!\left(\frac{\epsilon\,\bar a + \ell\,d - B\,M_t + \theta\hat\mu\,\bar G}{\sqrt{\sigma^2\Psi + \theta^2\hat v\,\bar G^2}}\right),$$
+
+where $B$, $\bar G$ and $\Psi$ are the pull, momentum and noise of the section 1 process integrated
+over the closing minute (section 1b of the research write-up). The app's code
+(`model.py`) is a standard-library port of the research code, checked against it to 1e-9 on
+about 200 cases.
+
+**Following the market.** $p = \Phi\big(w_M\,\Phi^{-1}(m) + w_S\,\Phi^{-1}(p_{\text{model}})\big)$, with
+$m$ the 15m market's Up mid. If the model adds nothing, $w_S \to 0$ and nothing trades.
+
+What the close version does in the cases Zayan described (momentum part only):
 
 | situation | result |
 |---|---|
@@ -175,12 +218,17 @@ What that does in the cases Zayan described (momentum part only):
 
 $$a^* = \frac{(1+f) - \sqrt{(1+f)^2 - 4fp}}{2f}.$$
 
-Resting bid (Zayan's standing rule: rest under the price, never cross): the bid $b$ maximises
-$J(b) = P_{fill}(b)\,(p_{fill}(b) - b)$, where $P_{fill}$ is the probability the path crosses the
-moving boundary $B(h') = \sigma\sqrt{h'}\,\Phi^{-1}(b) - \hat\mu_H h'$ before expiry (Wang–Pötzelberger)
-and $p_{fill}$ is our probability re-evaluated at the fill. Size by Kelly: $f^* = (p - a - c)/(1 - a - c)$
-as taker with fee $c$ per share, $(p_{fill} - b)/(1 - b)$ as maker. Side, price and size are all
-continuous in the inputs.
+Resting bids (Zayan's standing rule: rest under the price, never cross). The rungs are every
+cent from 1c to 15c under the side's ask. For each, 2,000 simulated paths of the fitted process
+give $P_{fill}$, the chance the market's price for that side comes down to the rung before the
+window ends (the market's price along a path is a drift plus Brownian noise under the same
+settlement, set to equal today's mid), and $q_{fill}$, our $p$ re-evaluated at the fill. The
+ladder's stakes maximise the expected log of the bankroll over "exactly the first $k$ rungs
+filled, then won or lost"; a rung whose $q_{fill}$ does not beat its price gets nothing. The
+four coins are sized together through a one-factor Gaussian copula with correlation $\rho$,
+and a held position is hedged with $h^* = \max\big(0, \frac{(1-p')(1-b_o)(W+n) - p' b_o W}{b_o(1-b_o)}\big)$
+shares of the other side at its best bid, $p'$ the held side's chance given the hedge fills.
+Side, price and size are all continuous in the inputs.
 
 ## Parameters
 
@@ -191,8 +239,21 @@ continuous in the inputs.
 | $\kappa_0, \lambda$ | size of mean reversion, and its decay through the hour | maximum likelihood |
 | $\alpha, c$ | lag-kernel decay and soft-clip scale | maximum likelihood |
 | $v_H, v_L, c_{HL}$ | blend weights | variances and covariance of each estimate's forecast errors |
+| $w_M, w_S$ | how far to follow the market, and the model | maximum likelihood on settled windows |
+| $\rho$ | how the four coins move together | maximum likelihood of a one-factor Gaussian copula |
 
-None is fitted yet. The fit and its test are pre-registered in the research write-up.
+Starting values (dials version 1, source `fit_sep17_20`): $\theta = -0.043$, $\kappa_0 = 0.345$,
+$\lambda = -1.62$, $\alpha = 0.98$, $c = 0.0093$ from the research's fit on Binance minutes,
+Mar 1 – Sep 16 (they describe how the price moves, so they carry over to the TWAP-60s
+settlement); $w_M = 0.45$ and $w_S = 0.57$ (standard errors 0.25 and 0.24; 1,071 windows in 273
+slots) and $\rho = 0.75$ (0.03; 273 slots) fitted on the Sep 17–20 tape with the TWAP-60s
+settlement at minute 2. On that tape the fitted blend's log-likelihood is −675.2 against −678.0
+for the market alone and −676.8 for the model alone. A quick fit for starting values, not the
+historical re-test. The blend's error moments are the tape's all-four-days values.
+
+Every settled window then moves all eight dials one bounded step (recursive maximum likelihood
+with forgetting; about two days of windows carry half the weight). Version 0, the prior, follows
+the market exactly and is never updated.
 
 ## Evidence so far
 
@@ -228,7 +289,14 @@ describes. The six errors the check found in the first draft, all fixed:
 - One 3.5-day window of Polymarket data. The t-statistics are near 2, not proof.
 - Gaussian increments; crypto minutes are fat-tailed.
 - The 1h market is assumed efficiently priced when read. Thin books go stale.
-- Binance stands in for Chainlink, which settles the 15m markets.
+- The starting anchor and $\rho$ come from 3.5 days of tape, with the Binance minute before the
+  open standing in for the opening TWAP-60s print. The live learner corrects them as windows
+  settle, but its first days lean on that fit.
+- The market's price along a simulated path is a drift and Brownian noise calibrated to today's
+  mid; a real book can gap past a rung. Paper fills come from the real tape, so the record shows
+  the difference.
+- The four coins are sized as if every bet wins together; when one coin's bid is Up and
+  another's is Down, that overstates how they move together and sizes them smaller than needed.
 - That reversion decays through the hour is Zayan's hypothesis. The lag-kernel reversal is
   documented in the literature; its decay by hour position is not.
 - On spot, the 15m reversal is too small to trade (1.3bp gross vs 5bp cost). It can only pay
@@ -265,6 +333,8 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-22 · `32a1484ce579` · The model is plugged in, so it now bids on paper. decide.py prices each window with model.py, a standard-library port of the research model for the TWAP-60s settlement (checked against the research code to 1e-9 on 197 cases), follows the market with fitted anchor weights, and gets each ladder rung's fill and win chances and the hedge quotes from 2,000 simulated paths. Starting dials (version 1) fitted on the Sep 17-20 tape: w_M 0.45, w_S 0.57, rho 0.75. learner.py moves every dial one bounded step after each settled window (recursive maximum likelihood, about two days of memory).
+- 2026-09-22 · `47989d06aa7c` · Wired into the app as a running paper strategy (switch fade_1h_momentum_15m; Settings group Fade 1h Momentum on 15m): each minute it records every coin's inputs, checks fills and settles every window; the model hook returns nothing yet, so no bids are placed. Code moved to polymarket_bot/fade_1h_momentum_15m/. Start reference is now the window's priceToBeat (TWAP-60s print at the open), per the verified settlement rule.
 - 2026-09-21 · `91319a8794bc` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `91319a8794bc` · Status moved from offline only to cannot trade: the offline-only status was removed (#273). Nothing is wired to trade it yet.
 - 2026-09-21 · `a3ca60e9bd16` · Lint only: removed an unused import from threshold_scan.py. No change to the analysis.

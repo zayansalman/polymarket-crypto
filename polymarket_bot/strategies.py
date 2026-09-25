@@ -71,6 +71,17 @@ STRATEGIES: dict[str, Strategy] = {
             "never a second bite. Paper only."
         ),
     ),
+    "fade_1h_momentum_15m": Strategy(
+        name="fade_1h_momentum_15m",
+        label="Fade 1h Momentum on 15m",
+        description=(
+            "Rests laddered paper bids on BTC/ETH/SOL/XRP 15m Up/Down windows, "
+            "sized by joint Kelly across the four coins, and hedges with a "
+            "resting bid on the other side; never crosses. Records every "
+            "coin's inputs each minute, and places no bids until the model is "
+            "plugged in. Paper only — it has no live path."
+        ),
+    ),
 }
 
 """Registry order is render order. Keys are permanent: the switch is stored at
