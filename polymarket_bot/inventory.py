@@ -131,15 +131,18 @@ FAMILIES: tuple[Family, ...] = (
         what=(
             "Prices each 15m Up/Down window from a Brownian-motion model of "
             "the hour — the 1h market price, the trailing spot return and a "
-            "mean reversion that decays through the hour — and computes the "
-            "entry price instead of using a threshold."
+            "snap-back that grows through the hour — and computes the entry "
+            "price instead of using a threshold."
         ),
         status=UNWIRED,
-        record="Never traded · maths validated 2026-09-21, historical test pending",
+        record=(
+            "Never traded · tape test Sep 17–20, minute 2: taker +1.4c/share "
+            "(n 355, t 0.44), maker −2.7c/quote (n 521, t −1.08)"
+        ),
         verdict=(
-            "Not wired to trade until the pre-registered historical test says "
-            "whether a fee-free edge survives on the real 15m tape; paper only "
-            "after that."
+            "Historical test done: no clear edge on four days of real 15m "
+            "markets (both t under 1.1). Next: paper trading in the app, with "
+            "its settings re-learned live."
         ),
     ),
 )

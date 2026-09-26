@@ -176,8 +176,16 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/storage/repositories/__init__.py` | pkg | 1 | Repositories: the only place raw SQL against a given table should live. |
 | `polymarket_exec/storage/repositories/positions.py` | WIRED | 1 | The only place ``paper_positions`` is read or written — issue #266 step 2. |
 | `polymarket_exec/storage/venue_flow_store.py` | WIRED | 1 | SQLite read/write for venue flow hour bars and perp venue snapshots. |
+| `tools/fade_1h_momentum_15m/data.py` | cli | 1 | Data layer for the Fade 1h Momentum on 15m historical test. |
+| `tools/fade_1h_momentum_15m/examples.py` | cli | 0 | Fade 1h Momentum on 15m: real worked examples from the step-2 tape, explained factor by factor. |
+| `tools/fade_1h_momentum_15m/explain.py` | cli | 0 | Fade 1h Momentum on 15m: one decision explained factor by factor, in a trader's words. |
 | `tools/fade_1h_momentum_15m/manual_trades_flip.py` | cli | 0 | What a wallet's recent manual trades made, against taking the other side of each. |
+| `tools/fade_1h_momentum_15m/model.py` | cli | 0 | Fade 1h Momentum on 15m: the model of tasks/2026-09-21-fade-1h-momentum-on-15m.md, sections 1-6 and 1b. |
+| `tools/fade_1h_momentum_15m/step0_reversal_auc.py` | cli | 0 | Step 0 of the pre-registered test: reproduce the published 15-minute reversal on our Binance data. |
+| `tools/fade_1h_momentum_15m/step1_walkforward.py` | cli | 0 | Step 1 of the pre-registered test: walk-forward maximum likelihood on Binance spot only. |
+| `tools/fade_1h_momentum_15m/step2_polymarket.py` | cli | 0 | Step 2 of the pre-registered test: the frozen model on the real Polymarket 15m tape. |
 | `tools/fade_1h_momentum_15m/threshold_scan.py` | cli | 0 | Does buying (or fading) the 1h-momentum side of a 15m market pay, by entry price? |
+| `tools/fade_1h_momentum_15m/twap_proxy_agreement.py` | cli | 0 | Which Binance proxy of the 15m settlement agrees with the real resolutions? (section 1b) |
 | `tools/fade_1h_momentum_15m/validate_math.py` | cli | 0 | Monte Carlo check of every closed form in tasks/2026-09-21-fade-1h-momentum-on-15m.md. |
 | `tools/gen_docs.py` | cli | 0 | Generate the machine-derived sections of the agent docs. |
 | `tools/live_detect_wallet.py` | cli | 0 | Find your MetaMask Polymarket wallet and write it into .env (#34). |
