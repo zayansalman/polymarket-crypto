@@ -743,3 +743,26 @@ async def test_a_paper_order_counts_trades_from_when_it_is_sent(kelly_db, venue,
     await make_runner(venue, make_hub(), clock).pass_once()
     (paper,) = await rows("paper_resting_orders")
     assert paper["placed_ts"] == NOW + 5 + 1
+
+
+async def test_a_failed_commit_is_tried_again_next_pass(kelly_db, venue, monkeypatch) -> None:
+    hub, clock = make_hub(), {"now": NOW}
+    runner = make_runner(venue, hub, clock)
+    real_commit = rn.RiskGate.commit
+    failures = [OSError("database is locked")]
+
+    async def commit_once_failing(self, **kw):
+        if failures:
+            raise failures.pop()
+        return await real_commit(self, **kw)
+
+    monkeypatch.setattr(rn.RiskGate, "commit", commit_once_failing)
+    report = await runner.pass_once()
+    assert any("toward its cap" in e for e in report.errors)
+    assert not [e for e in await rows("risk_events") if e["kind"] == "commit"]
+    (order,) = await rows("kelly_horse_race_orders")
+    assert order["state"] == "resting"
+    clock["now"] = NOW + 5
+    await runner.pass_once()
+    (commit,) = [e for e in await rows("risk_events") if e["kind"] == "commit"]
+    assert commit["amount_usd"] == pytest.approx(order["notional_usd"])

@@ -193,6 +193,7 @@ class Runner:
         self._waiting: dict[str, _inputs.NotReady] = {}
         self._settle_retry_at: dict[int, float] = {}
         self._to_realize: dict[str, tuple[str, float, float]] = {}  # ref -> mode, P&L, when
+        self._to_commit: dict[str, tuple[str, float, float]] = {}  # ref -> mode, notional, when
         self._setup_done = False
         self._hub: Any = None
 
@@ -232,6 +233,11 @@ class Runner:
             now = self._now()
             for window in await _ledger.recent(limit=200):
                 for order in window["orders"].values():
+                    if order.get("venue_order_id") and order.get("placed_ts"):
+                        await self.gates[order["mode"]].commit(
+                            strategy=STRATEGY, order_ref=order_ref(order["id"]),
+                            notional_usd=float(order["notional_usd"]),
+                            now=float(order["placed_ts"]))
                     if order.get("pnl_usd") is not None and order.get("settled_ts"):
                         await self.gates[order["mode"]].realize(
                             strategy=STRATEGY, order_ref=order_ref(order["id"]),
@@ -242,7 +248,8 @@ class Runner:
             report.fail("Setup", exc)
 
     async def _bookkeeping(self, report: PassReport) -> None:
-        for step, fn in (("Looking for orders sent with no reply", self._resolve_unknown),
+        for step, fn in (("Counting placed notional toward the daily cap", self._commit),
+                         ("Looking for orders sent with no reply", self._resolve_unknown),
                          ("Checking fills", self._sync_fills),
                          ("Giving unfilled notional back to the gate", self._credit),
                          ("Cancelling at the window end", self._cancel_ending),
@@ -286,9 +293,8 @@ class Runner:
                 continue
             if await _ledger.adopt(int(row["id"]), venue_order_id=found,
                                    placed_ts=int(math.floor(now))):
-                await self.gates[mode].commit(
-                    strategy=STRATEGY, order_ref=order_ref(row["id"]),
-                    notional_usd=float(row["notional_usd"]), now=now)
+                await self._queue_commit(mode, int(row["id"]), float(row["notional_usd"]), now,
+                                         report)
                 report.errors.append(f"{mode}: the order for {slug} sent with no reply was "
                                      f"found resting on the exchange ({found}).")
                 log.warning("kelly.unknown_found", mode=mode, window=slug, order=found)
@@ -382,6 +388,22 @@ class Runner:
                 f"Kelly horse-race: {settled.window_slug} settled {outcome}"
                 + "".join(f"; {m} P&L ${v:+.2f}" for m, v in sorted(pnl.items()))),
                 {"window_slug": settled.window_slug, "outcome": outcome, "pnl": pnl})
+
+    async def _commit(self, report: PassReport) -> None:
+        """Count placed notional toward each leg's daily cap. One that fails stays queued and
+        is tried again next pass, before anything new is checked (counted once per order)."""
+        for ref, (mode, notional, ts) in list(self._to_commit.items()):
+            await self.gates[mode].commit(strategy=STRATEGY, order_ref=ref,
+                                          notional_usd=notional, now=ts)
+            del self._to_commit[ref]
+
+    async def _queue_commit(self, mode: str, row_id: int, notional: float, now: float,
+                            report: PassReport) -> None:
+        self._to_commit[order_ref(row_id)] = (mode, notional, now)
+        try:
+            await self._commit(report)
+        except Exception as exc:  # noqa: BLE001 - stays queued, tried again next pass
+            report.fail(f"Counting the {mode} order toward its cap", exc)
 
     async def _realize(self, report: PassReport) -> None:
         """Count settled P&L toward each leg's loss halt. One that fails stays queued and is
@@ -601,8 +623,7 @@ class Runner:
             report.fail(f"Recording the {point.mode} order", exc)
             await self._cancel_unrecorded(point, placed.order_id, report)
             return
-        await point.gate.commit(strategy=STRATEGY, order_ref=order_ref(row_id),
-                                notional_usd=request.notional_usd, now=now)
+        await self._queue_commit(point.mode, row_id, request.notional_usd, now, report)
 
     async def _cancel_unrecorded(self, point: _endpoints.Endpoint, order_id: str,
                                  report: PassReport) -> None:
