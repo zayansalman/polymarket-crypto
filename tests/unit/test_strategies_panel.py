@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from html import escape
 
-from polymarket_bot import inventory as _inv
-from polymarket_bot import strategies as _strategies
-from polymarket_exec.ops.dashboard.panels import strategies as panel
+from ems import inventory as _inv
+from ems import strategies as _strategies
+from ems.dashboard.panels import strategies as panel
 
 ALL_ON = {name: True for name in _strategies.STRATEGIES}
 FAMILIES = sorted(_inv.FAMILIES, key=lambda f: _inv.STATUS_ORDER.index(f.status))

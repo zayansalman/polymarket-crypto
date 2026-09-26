@@ -38,22 +38,19 @@ dev = ["ruff>=0.4", "mypy>=1.9"]
 setup = ["polymarket-client"]
 
 [tool.setuptools]
-packages = ["polymarket_exec", "polymarket_bot"]
-# "dashboard" dropped 2026-09-21: the top-level Gradio dashboard.py was a dead
-# fallback branch (HAS_NEW_DASHBOARD was always true) and has been removed.
-py-modules = ["db", "config", "logging_setup", "main"]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["ems*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
-# E402 (module-import-not-at-top): these modules insert the project root into
-# sys.path before importing top-level modules (config, db, logging_setup) or
-# the package itself, so those imports intentionally follow the sys.path
-# bootstrap and cannot be hoisted to the top of the file.
-"polymarket_exec/execution/live.py" = ["E402"]
-"polymarket_exec/ops/dashboard/app.py" = ["E402"]
+# E402 (module-import-not-at-top): these tests insert the project root into
+# sys.path before importing the package, so those imports intentionally follow
+# the sys.path bootstrap and cannot be hoisted to the top of the file.
 "tests/e2e/test_dashboard_flow.py" = ["E402"]
 "tests/unit/test_dashboard.py" = ["E402"]
 

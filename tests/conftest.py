@@ -11,7 +11,7 @@ def _no_marketdata_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
     The hub's streams and lookups are unit-tested with fakes in test_marketdata_*.py.
     """
-    from polymarket_exec.marketdata.hub import MarketDataHub
+    from ems.marketdata.hub import MarketDataHub
 
     async def _idle_run(self, stop_event):  # noqa: ANN001
         await stop_event.wait()
@@ -30,7 +30,7 @@ def _no_fade_1h_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     leaves an error in the module-level status never shows up on a later
     test's page.
     """
-    from polymarket_bot.fade_1h_momentum_15m import runner as _fade_runner
+    from ems.fade_1h_momentum_15m import runner as _fade_runner
 
     async def _idle(stop_event=None) -> None:  # type: ignore[no-untyped-def]
         if stop_event is not None:

@@ -6,8 +6,8 @@ import asyncio
 import httpx
 import pytest
 
-from polymarket_exec.marketdata import rest_poll as rp
-from polymarket_exec.marketdata.order_book import REST, STREAM, TopOfBook
+from ems.marketdata import rest_poll as rp
+from ems.marketdata.order_book import REST, STREAM, TopOfBook
 
 TOKEN = "tok-up"
 OTHER = "tok-down"

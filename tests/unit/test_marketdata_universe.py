@@ -9,9 +9,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-import config as _config
-from polymarket_exec.marketdata import clob_messages as cm
-from polymarket_exec.marketdata import universe as uv
+from ems import config as _config
+from ems.marketdata import clob_messages as cm
+from ems.marketdata import universe as uv
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
 HOUR = 3600.0

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import db as _db
-from polymarket_bot import runtime_knobs as _knobs
+from ems import db as _db
+from ems import runtime_knobs as _knobs
 
 
 @pytest_asyncio.fixture(autouse=True)

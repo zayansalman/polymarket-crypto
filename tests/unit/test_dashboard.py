@@ -16,7 +16,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient
 
-from polymarket_exec.ops.dashboard.app import app
+from ems.dashboard.app import app
 
 
 @pytest.fixture

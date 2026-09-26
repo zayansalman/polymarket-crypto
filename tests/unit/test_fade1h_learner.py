@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import db as _db
-from polymarket_bot.fade_1h_momentum_15m import decide as D
-from polymarket_bot.fade_1h_momentum_15m import ledger
-from polymarket_bot.fade_1h_momentum_15m import learner as L
+from ems import db as _db
+from ems.fade_1h_momentum_15m import decide as D
+from ems.fade_1h_momentum_15m import ledger
+from ems.fade_1h_momentum_15m import learner as L
 from tests.unit.test_fade1h_decide import END, START, make
 
 STATE_ARGS = dict(spot=100.2, up_bid=0.39, up_ask=0.41)  # the leg is up, the market says Down

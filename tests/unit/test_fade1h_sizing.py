@@ -1,4 +1,4 @@
-"""Sizing maths for Fade 1h Momentum on 15m (polymarket_bot/fade_1h_momentum_15m/sizing.py).
+"""Sizing maths for Fade 1h Momentum on 15m (ems/fade_1h_momentum_15m/sizing.py).
 
 Reproduces every number in the check table of tasks/2026-09-22-fade-1h-sizing.md and
 pins the properties the spec relies on: the market anchor's limits, Kelly for one bet and for
@@ -15,7 +15,7 @@ from statistics import NormalDist
 
 import pytest
 
-from polymarket_bot.fade_1h_momentum_15m import sizing as s
+from ems.fade_1h_momentum_15m import sizing as s
 
 N = NormalDist()
 

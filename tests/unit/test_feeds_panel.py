@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import dataclasses
 
-from polymarket_exec.marketdata import clob_shard as sh
-from polymarket_exec.marketdata import clob_stream as cs
-from polymarket_exec.marketdata import hub as md_hub
-from polymarket_exec.marketdata import rest_poll as rp
-from polymarket_exec.marketdata import rtds_stream as rs
-from polymarket_exec.ops.dashboard.panels import feeds
+from ems.marketdata import clob_shard as sh
+from ems.marketdata import clob_stream as cs
+from ems.marketdata import hub as md_hub
+from ems.marketdata import rest_poll as rp
+from ems.marketdata import rtds_stream as rs
+from ems.dashboard.panels import feeds
 
 
 

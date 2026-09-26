@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from polymarket_bot import inventory as _inv
-from polymarket_exec.ops.dashboard import docs_view
+from ems import inventory as _inv
+from ems.dashboard import docs_view
 
 
 def _client() -> TestClient:
@@ -84,7 +84,7 @@ def test_unknown_or_traversing_keys_are_404() -> None:
 def test_the_dashboard_serves_the_docs_pages() -> None:
     # Outside a `with` block TestClient does not run the lifespan, so no
     # background loops start.
-    from polymarket_exec.ops.dashboard.app import app
+    from ems.dashboard.app import app
 
     client = TestClient(app)
     assert client.get("/strategy-docs").status_code == 200

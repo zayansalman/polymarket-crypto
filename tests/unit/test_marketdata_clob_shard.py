@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from polymarket_exec.marketdata import clob_messages as cm
-from polymarket_exec.marketdata import clob_shard as sh
-from polymarket_exec.marketdata.clob_stream import MAX_LAG_S
+from ems.marketdata import clob_messages as cm
+from ems.marketdata import clob_shard as sh
+from ems.marketdata.clob_stream import MAX_LAG_S
 
 UP, DOWN = "up-token", "down-token"
 

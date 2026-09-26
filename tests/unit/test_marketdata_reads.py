@@ -9,9 +9,9 @@ import httpx
 import pytest
 from websockets.exceptions import ConnectionClosedError
 
-from polymarket_exec.marketdata import hub as hub_mod
-from polymarket_exec.marketdata import rest_poll
-from polymarket_exec.marketdata.order_book import REST
+from ems.marketdata import hub as hub_mod
+from ems.marketdata import rest_poll
+from ems.marketdata.order_book import REST
 
 # Captured before the autouse conftest fixture swaps ``run`` for an offline stub.
 _REAL_RUN = hub_mod.MarketDataHub.run

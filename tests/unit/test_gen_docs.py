@@ -183,7 +183,7 @@ def test_collect_env_knobs_canonical_and_sorted(tmp_path):
         'lowercase = "btc_not_upper"\n'
     )
     (tmp_path / "config.py").write_text(cfg)
-    knobs = gd.collect_env_knobs(tmp_path)
+    knobs = gd.collect_env_knobs(tmp_path, config_rel="config.py")
     assert "TRADE_MAX_USD" in knobs
     assert "LIVE_MAX_USD" in knobs
     assert "PATH" not in knobs
@@ -206,9 +206,9 @@ def test_real_tree_wiring_truth():
     gd.annotate_importers(gd.REPO, mods)
     by = {m.path: m for m in mods}
     # The one strategy and the hub it reads are WIRED.
-    assert by["polymarket_bot/fade_1h_momentum_15m/runner.py"].status == "WIRED"
-    assert by["polymarket_exec/marketdata/hub.py"].status == "WIRED"
-    assert by["polymarket_exec/ops/dashboard/app.py"].status == "WIRED"
+    assert by["ems/fade_1h_momentum_15m/runner.py"].status == "WIRED"
+    assert by["ems/marketdata/hub.py"].status == "WIRED"
+    assert by["ems/dashboard/app.py"].status == "WIRED"
 
 
 def test_test_count_is_positive_int():
@@ -217,7 +217,7 @@ def test_test_count_is_positive_int():
 
 
 def test_entrypoint_importable():
-    assert gd.entrypoint_ok(gd.REPO) is True  # polymarket_exec.ops.dashboard.app imports
+    assert gd.entrypoint_ok(gd.REPO) is True  # ems.dashboard.app imports
 
 
 def test_replace_block_is_idempotent():

@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import db as _db
-from polymarket_bot import strategies as _strategies
+from ems import db as _db
+from ems import strategies as _strategies
 
 FADE = "fade_1h_momentum_15m"
 
@@ -66,7 +66,7 @@ async def test_enabled_map_reports_one_entry_per_strategy() -> None:
 def test_only_fade_is_registered() -> None:
     # Every other family (the BTC Up/Down loop, the maker, the daily altcoin
     # scanner) was deleted on 2026-09-26. No switch or knob outlives its code.
-    from polymarket_bot import runtime_knobs
+    from ems import runtime_knobs
 
     assert list(_strategies.STRATEGIES) == [FADE]
     assert all(n.startswith("fade1h_") for n in runtime_knobs.KNOBS)

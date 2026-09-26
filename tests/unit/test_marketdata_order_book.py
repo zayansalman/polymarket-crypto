@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from polymarket_exec.marketdata.order_book import LastTrade, OrderBook, TopOfBook
+from ems.marketdata.order_book import LastTrade, OrderBook, TopOfBook
 
 WIRE_BIDS = ((0.01, 2655.36), (0.02, 884.92), (0.79, 1631.88), (0.8, 282.0))  # ascending
 WIRE_ASKS = ((0.99, 1487.9), (0.98, 3561.3), (0.83, 100.0), (0.82, 20.0))  # descending

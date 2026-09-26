@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from polymarket_exec.marketdata import clob_messages as cm
+from ems.marketdata import clob_messages as cm
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
 UP = "48347891018346333616777312811599713638650075692149435329595052184345334860240"

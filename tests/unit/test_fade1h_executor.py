@@ -14,11 +14,11 @@ import httpx
 import pytest
 import pytest_asyncio
 
-import config as _config
-import db as _db
-from polymarket_bot.fade_1h_momentum_15m import executor as ex
-from polymarket_bot.fade_1h_momentum_15m import ledger
-from polymarket_bot.fade_1h_momentum_15m.ledger import NewOrder
+from ems import config as _config
+from ems import db as _db
+from ems.fade_1h_momentum_15m import executor as ex
+from ems.fade_1h_momentum_15m import ledger
+from ems.fade_1h_momentum_15m.ledger import NewOrder
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 START = HOUR + 900  # the hour's second quarter

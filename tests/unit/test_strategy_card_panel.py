@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import re
 
-from polymarket_bot import inventory as _inv
-from polymarket_bot import strategy_docs as sd
-from polymarket_exec.ops.dashboard.panels import strategy_card as panel
+from ems import inventory as _inv
+from ems import strategy_docs as sd
+from ems.dashboard.panels import strategy_card as panel
 
 PARTS = {name: f"About {name.lower()}." for name in sd.GLANCE_PARTS}
 
 
 def _fam(key: str, status: str = _inv.RUNNING) -> _inv.Family:
     return _inv.Family(
-        key=key, label=f"Strategy {key}", path=f"polymarket_bot/{key}/",
+        key=key, label=f"Strategy {key}", path=f"ems/{key}/",
         what="Does one thing.", status=status, record="never traded",
     )
 

@@ -13,9 +13,9 @@ import time
 
 import pytest
 
-from polymarket_bot.fade_1h_momentum_15m import decide as D
-from polymarket_bot.fade_1h_momentum_15m import ledger, learner, sizing
-from polymarket_bot.fade_1h_momentum_15m.inputs import Book, Inputs, PriceNow, WindowAverage
+from ems.fade_1h_momentum_15m import decide as D
+from ems.fade_1h_momentum_15m import ledger, learner, sizing
+from ems.fade_1h_momentum_15m.inputs import Book, Inputs, PriceNow, WindowAverage
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 START = HOUR + 900  # the hour's second quarter

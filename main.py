@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import asyncio
 
-from config import DASHBOARD_SERVER_PORT, DB_PATH
-from db import init_db, notify
-from logging_setup import get_logger, setup_logging
+from ems.config import DASHBOARD_SERVER_PORT, DB_PATH
+from ems.db import init_db, notify
+from ems.logging_setup import get_logger, setup_logging
 
 log = get_logger("main")
 
@@ -79,7 +79,7 @@ def main() -> None:
     import uvicorn
     log.info("dashboard.start_fastapi", port=DASHBOARD_SERVER_PORT)
     uvicorn.run(
-        "polymarket_exec.ops.dashboard.app:app", **dashboard_server_options()
+        "ems.dashboard.app:app", **dashboard_server_options()
     )
 
 
