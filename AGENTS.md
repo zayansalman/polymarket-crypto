@@ -1,169 +1,107 @@
 # Agent Instructions — Polymarket Crypto
 
-> This file is the agent constitution for **both Codex and Claude Code** (and any
-> other coding agent). It is the single source of scope and rules for this repo.
+> The agent constitution for Codex, Claude Code and any other coding agent. It is
+> the single source of scope and rules for this repo.
 
 ## START HERE
 
-- **Where to make what change:** read **[docs/CODE_MAP.md](docs/CODE_MAP.md)** first.
-  It is the routing doc — "I want to change X → edit Y" — and it explains the
-  two-tree structure below.
-- **Two coupled code trees, both LIVE:**
-  - **`polymarket_bot/`** — the live trading loop + signal math (`paper.py:run_paper_loop`
-    is *the* loop; `strategy.py` is the live signal math).
-  - **`polymarket_exec/`** — execution gates, live CLOB executor, connectors, FastAPI
-    dashboard, recorder.
-  - They are **bidirectionally coupled**: the dashboard imports `polymarket_bot.*`;
-    `polymarket_bot` imports back into `polymarket_exec.{execution,connectors}`. Top-level
-    `config.py` / `db.py` / `logging_setup.py` are the shared foundation.
-- **Machine-generated facts** (module inventory, wired-vs-dead status, test count)
-  live in **[docs/FILE_MAP.md](docs/FILE_MAP.md)** and in `<!-- GENERATED -->`
-  blocks. They are kept fresh by `tools/gen_docs.py` (CI `docs-drift` job +
-  `.claude` hooks) — **never hand-edit them.**
-- **Strategy docs:** every family in `polymarket_bot/inventory.py` has
-  `docs/strategies/<key>.md`, served in the dashboard at `/strategy-docs`. Changing a
-  strategy's code, name, status or switch fails `tests/unit/test_strategy_docs.py`
-  until you update its doc with `python tools/strategy_docs.py stamp <key> "what changed"`.
-  See [docs/strategies/README.md](docs/strategies/README.md).
+- **Where to make what change:** read **[docs/CODE_MAP.md](docs/CODE_MAP.md)**
+  first. It is the routing doc: "I want to change X → edit Y".
+- **One package, `ems/`.** One paper strategy (`ems/fade_1h_momentum_15m/`),
+  the WebSocket market-data hub it reads (`ems/marketdata/`), the FastAPI
+  operator dashboard (`ems/dashboard/`) and the foundation (`ems/config.py`,
+  `ems/db.py`, `ems/logging_setup.py`). `main.py` is the only entry point.
+- **Machine-generated facts** (module inventory, wired-vs-dead status, test
+  count) live in **[docs/FILE_MAP.md](docs/FILE_MAP.md)** and in
+  `<!-- GENERATED -->` blocks, kept fresh by `tools/gen_docs.py` (CI
+  `docs-drift` job + `.claude` hooks). **Never hand-edit them.**
+- **Strategy docs:** every family in `ems/inventory.py` has
+  `docs/strategies/<key>.md`, served in the dashboard at `/strategy-docs`.
+  Changing a strategy's code, name, status or switch fails
+  `tests/unit/test_strategy_docs.py` until you run
+  `python tools/strategy_docs.py stamp <key> "what changed"` and update the
+  prose. See [docs/strategies/README.md](docs/strategies/README.md).
 
-## Active Scope
+## What this is
 
-This repository is a local Polymarket crypto binary-markets research and
-paper-trading lab. Two strategies are wired and run simultaneously:
+A small local execution management system (EMS) for trying trading ideas on
+Polymarket's crypto Up/Down markets with real market data and paper fills.
+One strategy is wired today: **Fade 1h Momentum on 15m**, which prices the
+15-minute BTC, ETH, SOL and XRP windows every minute and rests paper orders
+that fill only against the real trade tape. Everything else that used to live
+here (the BTC 5-minute loop, the maker, the daily altcoin scanner, the live
+CLOB executor and its risk gate) was removed on 2026-09-26; `git log` before
+`ea93457` has it.
 
-1. **BTC 5-minute Up/Down** (`polymarket_bot/paper.py:run_paper_loop`) — the
-   original line; its active *development* closed 2026-08-29 (#182), but the
-   loop itself is still the default paper-trading path, started/stopped by
-   the dashboard's ▶ Start / Stop controls (see below). **No strategy is
-   loaded:** the v0 strategy (entry gates, auto-pause, param tuner,
-   calibration, model picker) was archived 2026-09-13 —
-   [docs/archive/v0-strategy.md](docs/archive/v0-strategy.md). The loop runs
-   and journals market data but takes no entries until a new strategy is
-   plugged into `paper.py:_build_snapshot`.
-2. **Daily altcoin Up/Down scanner** (`polymarket_bot/daily/scanner.py`,
-   issue #185) — scans Polymarket's daily (24h-window) Up/Down family across
-   a tracked set of thinner altcoin markets (doge/sol/xrp/bnb/eth by
-   default, `config.DAILY_ASSETS`) and shadow-trades a flat $10 paper
-   position on whichever asset shows the strongest signal. **Paper-only, no
-   live gate exists for it at all** — unlike the BTC loop, it has no
-   Start/Stop control: it auto-runs as soon as the dashboard process boots
-   (`polymarket_exec/ops/dashboard/app.py`'s lifespan) and keeps running
-   for the process's lifetime. Its own dashboard panel
-   (`panels/daily_altcoin.py`) shows current position(s), settled PnL, and a
-   plain-language explanation of the mechanism.
+How it runs:
 
-The primary active product behavior for the BTC loop specifically is:
+1. `python main.py` boots the dashboard. Its lifespan starts the market-data
+   hub, then the strategy loop. There is no Start button.
+2. The strategy opens new positions only while its switch on the MY
+   STRATEGIES card is on. Off stops new entries; open paper positions still
+   settle.
+3. The kill switch file (`data/KILL` by default) stops new orders and cancels
+   resting paper orders on the next pass. Delete it to re-arm.
 
-1. Operator opens the local dashboard.
-2. Operator presses **▶ Start**.
-3. The loop runs on BTC 5-minute Up/Down markets (paper by default) and
-   enters only once a strategy is loaded (none is today).
-4. Operator presses **Stop** to halt new entries and close open simulated
-   positions.
-
-Live trading is also built and multi-gated (see the live rule below); it stays
-off unless the operator explicitly arms every gate **and** this file names an
-authorized live-trading market (none is currently authorized — see Absolute
-Rules). This includes the daily altcoin scanner: it has no live path built at
-all, so there is nothing to arm for it.
-
-## Scope Fence (in scope / out of scope)
+## Scope
 
 In scope:
 
-- Discover current BTC 5-minute Up/Down Polymarket markets.
-- **Research/shadow-only exploration is open by default** — any market, any
-  timeframe, any venue instrument may be investigated, backtested, or shadow-run
-  as long as it places no real orders. No fresh operator carve-out is needed to
-  start a new research direction; the market/timeframe restriction below binds
-  the **live trading path** only. Example: two-sided maker quoting across the
-  venue's 5-minute Up/Down crypto family (btc/eth/sol/xrp/doge/bnb) —
-  `polymarket_bot/pairarb/`, shadow only, placed no orders (#182, widened
-  2026-08-14, closed 2026-08-29).
-- Daily (24h-window) Up/Down markets across doge/sol/xrp/bnb/eth —
-  `polymarket_bot/daily/`, shadow only, no live path exists, always-on
-  (#185, started 2026-08-30).
-- Use a settlement-aligned BTC reference feed for signal and paper fills.
-- Show the Chainlink Data Streams reference in the dashboard.
-- Compute a fair Up probability and edge versus market price.
-- Size trades between $1 and $5 by confidence.
-- Persist every tick, position, exit, and dashboard event in SQLite.
-- Provide dashboard Start, Stop, Refresh, activity feed, and summary metrics.
-- Present a concise systems scorecard covering scope, risk, feed discipline,
-  auditability, and failure visibility.
-- Maintain a public engineering roadmap focused on market-data recording,
-  replay, order lifecycle, risk/PnL, telemetry, and deterministic tests.
-- **Live order execution** on the Polymarket CLOB — built, multi-gated, and
-  off by default. The operator (never an agent) arms and launches it.
+- Paper strategies on Polymarket crypto Up/Down markets, any timeframe, any
+  coin, driven by the market-data hub.
+- Adding a strategy: a package under `ems/`, a `Strategy` in
+  `ems/strategies.py`, a `Family` in `ems/inventory.py`, a doc under
+  `docs/strategies/`, a card under `ems/dashboard/panels/`, and a start in the
+  dashboard lifespan.
+- Dashboard cards, runtime knobs (`ems/runtime_knobs.py`) and research tools
+  under `tools/`.
 
 Out of scope:
 
-- Flipping the live gate or placing live orders on behalf of the operator.
-- **Any market, on the live trading path (real capital).** No market/timeframe
-  is currently authorized for live trading: 5-minute BTC work closed 2026-08-29
-  (#182) and no replacement category has been chosen or built. Research/shadow
-  work on any market/timeframe remains in scope — see the research/shadow-only
-  line above. Live trading resumes only once this file is explicitly updated
-  naming a newly authorized market.
-- Remote deployment / exposing the dashboard beyond localhost by default.
+- **Live trading.** No live order path exists and none is authorised for any
+  market. `BOT_MODE=live` makes the strategy place nothing and say so on its
+  card. Building a live path is an operator decision recorded in this file
+  first, never an agent's.
+- Exposing the dashboard beyond localhost.
 
-## Absolute Rules
+## Absolute rules
 
-- **Live trading (real capital) is not currently authorized for any market.**
-  5-minute BTC work closed 2026-08-29 (#182); no replacement category is chosen
-  or built. Research and shadow-only work on any market/timeframe remains in
-  scope by default — see Scope Fence above.
-- One open BTC paper position at a time.
-- **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
-  It runs only when the operator **clicks LIVE in the dashboard**
-  **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
-  presses Start. There is no env confirm phrase; an env `BOT_MODE=live` default alone
-  never trades. **Agents NEVER flip the gate or place live orders; the operator
-  launches.** Default is paper.
-- Do not read, print, log, commit, echo, or expose private keys.
-- The dashboard must stay local by default at `127.0.0.1:7860`.
-- Start means trade (paper unless every live gate is armed); Stop means stop.
-- No strategy is loaded in the trading loop (v0 archived 2026-09-13). Whatever
-  strategy is plugged in next, its entries still pass the live-path safety gates
-  (`RiskGate`: loss halt, caps, slippage, kill switch) — those stay hard.
-- No silent failures. Feed, market, state, or execution-loop errors must appear
-  in structured logs or dashboard state.
-- Keep modules small and boundaries clear.
-- Keep public docs vendor-neutral and focused on trading-system quality:
-  observability, risk control, feed discipline, persistence, and operator
-  control.
+- Agents never place live orders, never build a live path unasked, and never
+  flip a mode or switch on the operator's behalf.
+- Do not read, print, log, commit, echo or expose private keys.
+- The dashboard stays local at `127.0.0.1:7860`.
+- No silent failures: hub, strategy and dashboard errors appear in the
+  structured logs, the activity feed or the strategy's card.
+- Keep modules small and boundaries clear. Panels are pure `render(...) -> str`
+  functions; the strategy's maths has no I/O.
+- Keep public docs vendor-neutral and focused on trading-system quality.
 
-## Code Conventions
+## Code conventions
 
-- Python 3.11.
-- Async I/O with `httpx` and `aiosqlite`.
-- The live dashboard is a **FastAPI (uvicorn) app** at
-  `polymarket_exec/ops/dashboard/app.py`. The top-level Gradio `dashboard.py` is a
-  **dead, never-taken fallback** (`HAS_NEW_DASHBOARD` is always true) — do not
-  treat it as the live UI.
-- `structlog` JSON logs.
-- SQLite for local paper ledger and dashboard state.
-- Prefer explicit, boring safety over cleverness.
+- Python 3.11, async I/O with `httpx` and `aiosqlite`, `structlog` JSON logs,
+  SQLite for the ledger and dashboard state.
+- Absolute imports from `ems` (`from ems.db import ...`). No `sys.path`
+  bootstraps.
+- Runtime settings the operator may change live are knobs in
+  `ems/runtime_knobs.py` (dashboard SETTINGS card, applied on the next pass);
+  process settings are env vars in `ems/config.py`, documented in
+  `.env.example`.
+- SQLite config keys keep their historical `polymarket_bot.*` and `runtime.*`
+  names so existing databases still read.
+- Tests are network-free and DB-isolated (`tests/conftest.py`). Before pushing:
+  `python -m pytest tests/ -q`, `ruff check ems/ tests/ tools/ main.py`,
+  `python tools/gen_docs.py --check`.
 
-## Running Locally
+## Running locally
 
 ```bash
 ./.venv/bin/python main.py
 ```
 
-This boots the **FastAPI dashboard** (uvicorn serving
-`polymarket_exec/ops/dashboard/app.py`), not Gradio.
-
 Dashboard:
 
 ```text
 http://127.0.0.1:7860
-```
-
-Optional snapshot:
-
-```bash
-./.venv/bin/python tools/demo_snapshot.py
 ```
 
 ## Live module status (generated)

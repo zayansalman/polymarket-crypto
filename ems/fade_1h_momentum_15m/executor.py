@@ -24,7 +24,7 @@ true``): one record per taker order. Checked live on 2026-09-22:
 - The venue's book for one outcome already contains the mirror of the other (an Up bid at 0.14
   is also shown as a Down ask at 0.86). A taker BUYING the other outcome at q is therefore a
   sale into our outcome's bids at 1 - q, and a taker SELLING our outcome at p is a sale at p
-  (the rule of ``ems.maker.filler.crossed_volume``). Every record is a sale into the
+  (the crossed-volume rule). Every record is a sale into the
   bids of exactly one outcome. By the same mirror, our resting SELL of a token at s is a bid
   for the other outcome at 1 - s: it fills when a taker buys our token at s or more, or sells
   the other token at 1 - s or less.

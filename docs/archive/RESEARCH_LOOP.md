@@ -1,3 +1,5 @@
+> **Archived 2026-09-26.** This describes the BTC 5-minute loop and modules removed on 2026-09-26 (see CHANGELOG). Kept as history; nothing here is current.
+
 # AI Research Loop (design — build once live fills accumulate)
 
 The defensible way to "leverage AI" on this strategy. NOT a price predictor

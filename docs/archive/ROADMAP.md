@@ -1,3 +1,5 @@
+> **Archived 2026-09-26.** This describes the BTC 5-minute loop and modules removed on 2026-09-26 (see CHANGELOG). Kept as history; nothing here is current.
+
 # Engineering Roadmap
 
 This roadmap keeps the project useful as a local Polymarket crypto paper-trading

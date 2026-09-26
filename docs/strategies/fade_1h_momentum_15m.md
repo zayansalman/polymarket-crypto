@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
 | Code | `ems/fade_1h_momentum_15m/` — 9 files |
-| Code fingerprint | `07696b37f565` |
+| Code fingerprint | `5b51c3681fa1` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -1004,6 +1004,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-26 · `5b51c3681fa1` · executor docstring: dropped the citation of the deleted maker filler; the crossed-volume rule is stated inline
 - 2026-09-26 · `07696b37f565` · Moved into the single ems/ package (ems/fade_1h_momentum_15m/); imports only, behaviour unchanged.
 - 2026-09-26 · `0bc09fea343c` · Every other strategy family was deleted (BTC Up/Down loop and its live executor, maker, daily altcoin scanner). The browser headers the executor borrowed from the maker now live in executor.py; behaviour unchanged.
 - 2026-09-26 · `a0649b0d0711` · Merged the historical test, worked examples and TWAP settlement research from develop; the doc now describes the paper strategy running in the app.

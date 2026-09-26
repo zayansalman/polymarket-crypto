@@ -11,6 +11,11 @@
   card, SETTINGS) is a collapsible fold. Click the header to collapse or
   expand it; the browser remembers each card's state across refreshes and
   reloads.
+- Docs: AGENTS.md, README.md, docs/CODE_MAP.md, docs/ARCHITECTURE.md and
+  docs/OPERATIONS_RUNBOOK.md describe the one-package, one-strategy app.
+  docs/ROADMAP.md, docs/RESEARCH_LOOP.md and docs/CHRONOS_INTEGRATION.md moved
+  to docs/archive/ (they describe removed lines). The `.claude` doc-gen hooks,
+  paused for the rebuild, are back on.
 
 ## Unreleased — Fade 1h Momentum on 15m is the only strategy (2026-09-26)
 

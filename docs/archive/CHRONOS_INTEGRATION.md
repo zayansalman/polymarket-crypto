@@ -1,3 +1,5 @@
+> **Archived 2026-09-26.** This describes the BTC 5-minute loop and modules removed on 2026-09-26 (see CHANGELOG). Kept as history; nothing here is current.
+
 # Layer 3 — Chronos Time-Series Ensemble (design)
 
 **Status:** sketch only. Module stub at `polymarket_bot/chronos_signal.py`. No Hugging

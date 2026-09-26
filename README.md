@@ -1,63 +1,19 @@
-# Polymarket Crypto — a binary-markets trading lab
+# Polymarket Crypto — a small EMS for paper-trading ideas
 
-A local research and execution stack for Polymarket crypto binary markets: a pricing
-model and a paper/live execution stack. Every strategy it runs is visible in the
-dashboard. Originally built around BTC 5-minute Up/Down
-markets; that line closed 2026-08-29 (#182) after a shadow copy-trade/maker-quoting
-research phase came back net negative. Next chapter (daily/hourly/longer-horizon
-markets) is not yet chosen or built — see Status below.
+A local execution management system for trying trading ideas on Polymarket's
+crypto Up/Down markets: live market data over WebSockets, paper orders that fill
+only against the real trade tape, a ledger in SQLite and a dashboard that shows
+every strategy, its numbers and its reasoning.
 
-Agent instructions and scope live in **[AGENTS.md](AGENTS.md)**; the routing map is
-**[docs/CODE_MAP.md](docs/CODE_MAP.md)**. Read those first for "where do I make what
-change."
+One strategy runs today: **Fade 1h Momentum on 15m**. Every minute it prices the
+15-minute BTC, ETH, SOL and XRP windows with its own model, sizes with Kelly and
+rests scaled passive limit orders on paper. Its doc, with the maths and worked
+examples, is [docs/strategies/fade_1h_momentum_15m.md](docs/strategies/fade_1h_momentum_15m.md).
 
-## Status (current)
-
-5-minute-market work is closed (2026-08-29, #182 branch close-out). Two research
-phases ran on it:
-
-- A 30-day BTC-only signal-race (June–July 2026) found no exploitable directional edge
-  at retail latency net of the venue's taker fee — archived 2026-07-10, see
-  **[docs/archive/](docs/archive/)** for the full record (findings, timeline, pivot
-  memo, postmortem).
-- A shadow-only copy-trade / maker-quoting line (#182, reopened 2026-08-04) tested
-  whether a top Polymarket account's two-sided quoting strategy was reproducible
-  natively or copy-tradeable. A second independent read confirmed net-negative results
-  (doge -$307.68/n=1980, min -$174.47/n=1756) and zero accumulated fills on the pairarb
-  side — closed 2026-08-29, never armed for live. That code has since been deleted.
-
-Copy-trade was removed from the app on 2026-09-21: no wallets are followed.
-
-Next chapter: daily/hourly/longer-horizon crypto markets. Category not yet chosen,
-nothing built for it yet — see `tasks/todo.md` for current status and open items.
-
-## Architecture
-
-Two coupled trees plus a small shared foundation:
-
-```
-polymarket_bot/           # the live loop + signal math
-├── paper.py              #   tick loop, snapshots, settle-style position lifecycle
-├── controller.py         #   start/stop, watchdog, silent-stop detector
-├── strategy.py           #   pricing-model math + executable-edge signal (pure)
-├── params.py             #   operator-tunable runtime params
-├── fees.py               #   canonical Polymarket taker-fee math (live + paper)
-├── daily/                #   daily altcoin Up/Down scanner (paper only)
-└── pairarb/              #   market_index.py only (used by daily/); the rest of #182 is deleted
-
-polymarket_exec/          # execution / connectors / ops
-├── core/                 #   domain types, interfaces, exceptions
-├── strategy/  connectors/  storage/
-├── execution/            #   paper lifecycle + LIVE executor (multi-gated) + RiskGate
-└── ops/dashboard/         #   FastAPI operator dashboard (SSE), panels, runtime controls
-
-config.py  db.py  logging_setup.py   # foundation: env parsing, SQLite + migrations, structlog
-tools/                    # research instruments and CLI runners
-tests/                    # DB-isolated, network-free (see docs/FILE_MAP.md for current count)
-```
-
-See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full engineering tour
-(patterns, ops defense-in-depth, data layer, testing/CI).
+Paper only. There is no live order path; `BOT_MODE=live` makes the strategy
+place nothing and say so on its card. Agent rules and scope are in
+**[AGENTS.md](AGENTS.md)**; "where do I change what" is
+**[docs/CODE_MAP.md](docs/CODE_MAP.md)**.
 
 ## Running it
 
@@ -66,25 +22,68 @@ python3 -m venv .venv
 ./.venv/bin/pip install -e ".[test]"
 cp .env.example .env
 ./.venv/bin/python main.py          # dashboard at http://127.0.0.1:7860
-DB_PATH=/tmp/t.db ./.venv/bin/python -m pytest tests/ -q   # DB-isolated
 ```
 
-Dashboard defaults to paper trading. Operator presses ▶ Start / Stop. Live trading is
-built, multi-gated (operator clicks LIVE in the dashboard + key + coherent wallet), and off by
-default — the operator, never an agent, arms and launches it. See
+Tests, lint and the docs-drift check:
+
+```bash
+DB_PATH=/tmp/t.db ./.venv/bin/python -m pytest tests/ -q
+./.venv/bin/ruff check ems/ tests/ tools/ main.py
+./.venv/bin/python tools/gen_docs.py --check
+```
+
+The strategy starts with the process. Its switch on the MY STRATEGIES card
+starts and stops new entries; `touch data/KILL` stops new orders and cancels
+resting paper orders until the file is deleted. See
 **[docs/OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md)**.
+
+## The dashboard
+
+Every card collapses on a click of its header and remembers its state.
+
+- **FEEDS** — the market-data hub's connections: Polymarket books and trades,
+  Chainlink, Chainlink TWAP and Binance prices.
+- **MY STRATEGIES** — every strategy family, its switch and what it has settled.
+- **STRATEGY** — the picked strategy's concept, assumption, maths and derivation,
+  from its doc.
+- **FADE 1H MOMENTUM ON 15M** — net P&L, drawdown, open exposure, then per coin:
+  the inputs, the model's chance against the market, the order it chose and why.
+- **SETTINGS** — the runtime knobs (bankroll, Kelly multiplier, price levels,
+  which coins), applied on the next pass without a restart.
+- **Activity** — fills, settlements, switch and knob changes.
+
+## Architecture
+
+```
+main.py                   # singleton lock, init_db, uvicorn
+ems/
+├── config.py  db.py  logging_setup.py   # env, SQLite schema + migrations, structlog
+├── strategies.py  inventory.py  runtime_knobs.py  strategy_docs.py
+├── fade_1h_momentum_15m/  # inputs → model → sizing → decide → executor → ledger; runner loop
+├── marketdata/            # WebSocket hub: CLOB books/trades, RTDS prices, REST poll, universe
+├── connectors/            # updown_quote: top-of-book REST read used by the hub
+└── dashboard/             # FastAPI app, execution view, panels/, static/, templates/
+tools/                     # gen_docs, strategy_docs, fade_1h_momentum_15m research scripts
+tests/                     # network-free, DB-isolated
+```
+
+See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the patterns behind it.
+
+## Adding a strategy
+
+1. A package under `ems/` with pure maths and a runner that reads the hub.
+2. A `Strategy` in `ems/strategies.py` (the switch) and a `Family` in
+   `ems/inventory.py` (what MY STRATEGIES says).
+3. `python tools/strategy_docs.py new <key>` and fill the doc.
+4. A card under `ems/dashboard/panels/`, wired in `execution_view.py`, and a
+   start in the lifespan of `ems/dashboard/app.py`.
 
 ## Reading the record
 
-- **`AGENTS.md`** — agent rules and scope fence (source of truth).
-- **`docs/CODE_MAP.md`** / **`docs/FILE_MAP.md`** — generated routing map and module status.
-- **`docs/ARCHITECTURE.md`** — the engineering tour.
-- **`docs/archive/`** — the June–July 2026 BTC-only research phase: findings, timeline,
-  pivot memo, postmortem. Historical, not current status.
-- **`tasks/todo.md`** — current status and open items.
-- **`tasks/lessons.md`** — accumulated reasoning-error lessons, kept live.
-- **`tasks/archive/todo_history.md`** — closed historical build log (issues #20–#144).
-- **`CHANGELOG.md`** — release history.
+- **`CHANGELOG.md`** — what changed and when.
+- **`docs/archive/`** — the earlier research lines (BTC 5-minute, copy-trade,
+  maker) and their findings. History, not current status.
+- **`tasks/`** — design notes and the working log.
 
 ## License
 
