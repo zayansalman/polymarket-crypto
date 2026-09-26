@@ -5,7 +5,7 @@ book depth, the trade tape, and the reference price paired with the book at
 receipt. Every test here guards a specific way this project has already been
 burned.
 
-  - ``classify`` must never silently assert a rung. C7 killed an entire thesis
+  - ``classify`` must never silently assert a window length. C7 killed an entire thesis
     because market structure was asserted from memory instead of queried, so the
     classifier is required to carry the evidence that produced its guess.
   - ``_levels`` must keep every level and read best-price from the LAST element.
@@ -38,11 +38,11 @@ from tools.venue_recorder import (
 # --------------------------------------------------------------------------- #
 
 
-def test_classify_reads_the_rung_off_a_structured_slug():
-    asset, family, rung, evidence = classify({"slug": "btc-updown-5m-1766162100"})
+def test_classify_reads_the_window_off_a_structured_slug():
+    asset, family, window, evidence = classify({"slug": "btc-updown-5m-1766162100"})
     assert asset == "btc"
     assert family == "btc-updown-5m"
-    assert rung == "5m"
+    assert window == "5m"
     assert "btc-updown-5m-1766162100" in evidence
 
 
@@ -50,10 +50,10 @@ def test_classify_derives_named_date_window_length_from_venue_dates():
     """Named-date markets do not state their window length; it is derived.
 
     The live venue's "Up or Down" family runs ~49h windows, not the 24h the
-    design's "daily rung" assumes — so the derived number must come from the
+    design's "daily window" assumes — so the derived number must come from the
     venue's own dates, never from the word "daily".
     """
-    _, _, rung, evidence = classify(
+    _, _, window, evidence = classify(
         {
             "slug": "bitcoin-up-or-down-may-20-2026-6am-et",
             "question": "Bitcoin Up or Down - May 20, 6AM ET",
@@ -61,21 +61,21 @@ def test_classify_derives_named_date_window_length_from_venue_dates():
             "endDate": "2026-05-20T11:00:00",
         }
     )
-    assert rung == "~49h"
+    assert window == "~49h"
     assert "endDate-startDate" in evidence
 
 
 def test_classify_never_guesses_without_recording_evidence():
-    """An unrecognised slug is 'unknown' plus its evidence — never a rung."""
-    _, _, rung, evidence = classify({"slug": "some-unrelated-market"})
-    assert rung == "unknown"
+    """An unrecognised slug is 'unknown' plus its evidence — never a window guess."""
+    _, _, window, evidence = classify({"slug": "some-unrelated-market"})
+    assert window == "unknown"
     assert "some-unrelated-market" in evidence
 
 
 def test_classify_marks_a_1h_family_if_one_ever_appears():
     """No 1h family existed at the 2026-08-13 probe. If one is listed, catch it."""
-    _, family, rung, _ = classify({"slug": "btc-updown-1h-1766163600"})
-    assert rung == "1h"
+    _, family, window, _ = classify({"slug": "btc-updown-1h-1766163600"})
+    assert window == "1h"
     assert family == "btc-updown-1h"
 
 
@@ -187,7 +187,7 @@ def test_persist_writes_targets_tape_and_a_census_row(tmp_path: Path):
 
             # The census is a measurement in its own right.
             rows = await (await db.execute(
-                "SELECT family, rung_guess, n_markets, med_liquidity FROM rec_discovery"
+                "SELECT family, window_guess, n_markets, med_liquidity FROM rec_discovery"
             )).fetchall()
             assert len(rows) == 1
             assert rows[0][1] == "~49h", "the census records the derived window, not 'daily'"
@@ -195,7 +195,7 @@ def test_persist_writes_targets_tape_and_a_census_row(tmp_path: Path):
 
             # Evidence is stored next to the guess so it can be re-derived offline.
             ev = await (await db.execute(
-                "SELECT rung_evidence, condition_id FROM rec_markets"
+                "SELECT window_evidence, condition_id FROM rec_markets"
             )).fetchall()
             assert "endDate-startDate" in ev[0][0]
             assert ev[0][1] == "0xabc"

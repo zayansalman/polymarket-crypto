@@ -465,11 +465,16 @@ inside it, not a haircut. The resting price maximises
 
 $$J(b) = P_{fill}(b)\,\big(p_{fill}(b) - b\big), \qquad J'(b^*) = 0 \text{ (solved by Brent's method)},$$
 
-and maker Kelly is $f^* = (p_{fill} - b)/(1-b)$ with no fee. Ladder rungs sit across the 5–15c band
-under the price, each sized by Kelly at its own $p_{fill}$.
+and maker Kelly is $f^* = (p_{fill} - b)/(1-b)$ with no fee. The order is a scaled passive limit
+order: a parent order split into child orders resting at price levels from the best bid down to
+15c under it (the Settings range), each sized by Kelly at its own $p_{fill}$ (the sizing maths is in
+`tasks/2026-09-22-fade-1h-sizing.md`).
 
-No gate anywhere: side from $\mathrm{sign}(p - \tfrac12)$, price $a^*$ or $b^*$, size Kelly. All are
-continuous in the state.
+No gate anywhere. The side is not where $p$ leans: the maths prices a buy of each side and takes
+the one that adds the most expected log growth, or nothing when neither adds any
+(`tasks/2026-09-22-fade-1h-sizing.md`, section 3b). Price $a^*$ or $b^*$, size Kelly. Nothing is
+compared with a fixed number. *(Amended 2026-09-26: the first draft took the side from
+$\mathrm{sign}(p - \tfrac12)$, which is a 50% cut. The side where $p$ leans can be the dear side.)*
 
 ## 7. Parameters
 
@@ -816,7 +821,7 @@ Step 2
    errors scaled by $\sigma$ and weighted by $1 - t$, target noise removed.
 9. The maker's fill boundary moves with the crowd drift implied by the 15m price at $t$, not
    $\hat\mu_H$ (which does not exist for SOL or rows without an hourly print).
-10. The maker quotes only $b^*$ (no ladder across 5–15c) and only where $J(b^*) > 0$. Fills use
+10. The maker quotes only $b^*$ (no scaled child orders across 5–15c) and only where $J(b^*) > 0$. Fills use
     prints on both tokens (one shared book), not only the token bid for; token-only prints and a
     bid on the 1c tick are sensitivities.
 11. Maker sensitivities are run at minute 2 only; the headline maker at every minute.

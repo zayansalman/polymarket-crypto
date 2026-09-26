@@ -295,7 +295,7 @@ def test_intro_reads_from_the_parameters():
     assert "cannot dominate" not in text and "added up" not in text
     assert "against the momentum by 4.3% of what the momentum alone would carry" in text
     assert "55 of 1,071 rows" in text and "Chainlink" in text
-    assert "one bid per window, with no ladder" in text
+    assert "one bid per window, with no scaled child orders" in text
     assert "Every resting bid in these cards sits there" in text and "all 521 of step 2's 521" in text
     assert "1 of the 2 resting bids in these cards sit there" in examples.intro(PARAMS, stats, 2, 1)
     assert "go with the momentum" in examples.intro({**PARAMS, "theta": 0.05}, stats, 0, 0)

@@ -219,7 +219,7 @@ class RiskGate:
         live_peak_raw = await get_config(_RISK_LIVE_PEAK_KEY)
         paper_peak_raw = await get_config(_RISK_PAPER_PEAK_KEY)
         notional_raw = await get_config(_RISK_NOTIONAL_KEY)
-        # Migration ladder: split keys → combined #64 key → legacy #20 keys.
+        # Migration order: split keys → combined #64 key → legacy #20 keys.
         if live_pnl_raw is None and paper_pnl_raw is None:
             combined_raw = await get_config(_RISK_COMBINED_PNL_KEY)
             if combined_raw is not None:

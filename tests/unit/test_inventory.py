@@ -83,6 +83,7 @@ def test_the_running_families_are_the_ones_the_dashboard_starts() -> None:
     for key, module in (
         ("maker", "polymarket_bot.maker.runner"),
         ("daily_altcoin", "polymarket_bot.daily.scanner"),
+        ("fade_1h_momentum_15m", "polymarket_bot.fade_1h_momentum_15m.runner"),
     ):
         family = next(f for f in _inv.FAMILIES if f.key == key)
         assert family.status == _inv.RUNNING, key

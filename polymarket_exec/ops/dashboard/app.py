@@ -3,9 +3,10 @@
 Replaces the 150MB+ Gradio dashboard with a lightweight FastAPI + Jinja2
 implementation. All visual design is preserved via extracted CSS. Also
 starts the daily altcoin scanner (#185), the feed monitor (FEEDS card), the
-venue flow and macro calendar recorders, and the WebSocket market-data hub as
-background tasks for its lifetime — see ``_lifespan`` — all independent of the
-BTC 5m loop the rest of this module's endpoints control.
+venue flow and macro calendar recorders, the WebSocket market-data hub, and the
+maker and Fade 1h Momentum on 15m paper strategies as background tasks for its
+lifetime — see ``_lifespan`` — all independent of the BTC 5m loop the rest of
+this module's endpoints control.
 
 Endpoints:
     GET  /              — Main dashboard page (HTML)
@@ -159,6 +160,17 @@ async def _lifespan(app: FastAPI):
     marketdata_task = asyncio.create_task(market_data.run(marketdata_stop_event))
     _marketdata_hub.set_current(market_data)
 
+    # Fade 1h Momentum on 15m: scaled passive limit orders on paper on the
+    # BTC/ETH/SOL/XRP 15m Up/Down windows, read from the hub above — so it
+    # starts after the hub is current. Paper only: it has no live order path.
+    # It settles and checks fills every pass whatever its switch says, records
+    # every coin's inputs, and rests child orders only where the maths says
+    # they pay.
+    from polymarket_bot.fade_1h_momentum_15m.runner import run_forever as _run_fade
+
+    fade_stop_event = asyncio.Event()
+    fade_task = asyncio.create_task(_run_fade(fade_stop_event))
+
     yield
 
     _paper.set_shared_chainlink_feed(None)
@@ -172,6 +184,7 @@ async def _lifespan(app: FastAPI):
         (feeds_stop_event, feeds_task),
         (flow_stop_event, flow_task),
         (macro_stop_event, macro_task),
+        (fade_stop_event, fade_task),
         (marketdata_stop_event, marketdata_task),
         (maker_stop_event, maker_task),
     ):
@@ -307,6 +320,8 @@ _FEED_KIND = {
     "live_entry": "trade",
     "paper_exit": "trade",
     "live_exit": "trade",
+    "fade1h_fill": "trade",
+    "fade1h_settled": "trade",
     "runtime_config": "config",
     "loss_halt_bypass": "config",
     "loss_halt_reset": "config",

@@ -19,8 +19,9 @@ Field names carry their own units (``price_usd``, ``size_shares``,
 of ambiguity that let ``BookTop``/``TopOfBook``/``MarketQuote``/``Book`` drift
 into five different shapes for the same idea.
 
-This module imports nothing but the stdlib. Per the layering issue #266 asks
-for eventually, ``core`` depends on nothing else in the tree.
+This module imports nothing but the stdlib. As issue #266 asks for
+eventually (each layer depends only on the ones below it), ``core`` depends on
+nothing else in the tree.
 """
 
 from __future__ import annotations

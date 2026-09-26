@@ -10,7 +10,7 @@ investigation the answer is **no — and the premise doesn't hold yet**: the 5m 
 **no statistically demonstrated live edge** to amplify, and every lever that might add one is
 exhausted. This is a clean negative result. **Recommendation: build nothing here.**
 
-## The investigation ladder (each rung independently verified)
+## The investigation steps (each independently verified)
 
 | Layer | Verdict | Deciding evidence |
 |---|---|---|

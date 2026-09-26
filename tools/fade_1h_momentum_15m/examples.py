@@ -580,7 +580,7 @@ def intro(prm: dict, stats: dict, cards_quoted: int, cards_on_bound: int) -> str
         "- **Resting bid and fill chance** (b*): the maths looks for the bid with the most expected profit per share "
         "bid (fill chance × edge), from 1c up to 1c under the last trade. The paper book keeps a bid at least 1c "
         "under the last trade so that it rests rather than buys at once, and it rests one bid per window, with no "
-        "ladder. When expected profit is still rising at the top of that range, the bid sits 1c under the last "
+        "scaled child orders. When expected profit is still rising at the top of that range, the bid sits 1c under the last "
         f"trade: the book sets that level, not a peak in the maths.{cards_bid}{tape_bid} The fill chance is the "
         "maths' own estimate that the price trades down to the bid before the close. A fill only happens when the "
         "price falls to the bid, so the maths marks its side lower for a filled bid.",

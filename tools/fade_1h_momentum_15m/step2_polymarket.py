@@ -1403,7 +1403,7 @@ DEVIATIONS = [
     "Maker fill boundary: section 6 moves the crowd's price with mu_hat_H. Here the crowd drift is the one "
     "that reproduces the observed 15m price at t (implied_drift of the 15m price), so the bid range below "
     "the current price is coherent with the fill model; mu_hat_H does not exist for SOL or missing prints.",
-    "Maker: only b* is quoted (no ladder across 5-15c), and only where J(b*) > 0 (maker Kelly > 0); the fill "
+    "Maker: only b* is quoted (no scaled child orders across 5-15c), and only where J(b*) > 0 (maker Kelly > 0); the fill "
     "test uses Up-equivalent prints on both tokens (the book is shared), with prints on token j only and a "
     "bid on the 1c tick (the highest tick at or below b*) as sensitivities.",
     "Maker sensitivities (equal weights, both sides, lam >= 0, anchor held, the first run's rule) are computed at "

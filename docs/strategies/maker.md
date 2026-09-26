@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `maker` on the MY STRATEGIES card |
 | Code | `polymarket_bot/maker/` — 5 files |
-| Code fingerprint | `1b7011906a67` |
+| Code fingerprint | `cef40afe6bd9` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -195,6 +195,7 @@ PR #264 puts the per-trade standard deviation at about 48c. To see a 4c edge at 
 
 ## Changelog
 
+- 2026-09-26 · `cef40afe6bd9` · Wording only: the book reader's local helper that sorts price levels is named for price levels (standard terms). No behaviour change.
 - 2026-09-21 · `1b7011906a67` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `1b7011906a67` · Docstring-only change in ledger.py from the copy-trade removal (#272); behaviour unchanged.
 - 2026-09-21 · `ed4856e27df9` · Doc created.

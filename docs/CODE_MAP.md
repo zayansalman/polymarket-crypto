@@ -87,18 +87,18 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 966.
+- **Tests:** 1580.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_exec/ops/dashboard/panels/_shared.py`.
 <!-- END GENERATED:summary -->
 
 <!-- BEGIN GENERATED:inventory -->
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `config.py` | WIRED | 21 | Configuration for the local Polymarket crypto trading lab. |
-| `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 19 | Structured JSON logging with structlog. Module + trade_id context. |
+| `config.py` | WIRED | 23 | Configuration for the local Polymarket crypto trading lab. |
+| `db.py` | WIRED | 19 | SQLite storage for the local Polymarket crypto trading lab. |
+| `logging_setup.py` | WIRED | 22 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
-| `polymarket_bot/__init__.py` | pkg | 16 | BTC 5-minute paper-trading package. |
+| `polymarket_bot/__init__.py` | pkg | 17 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/controller.py` | WIRED | 1 | Start/stop controller for the BTC 5-minute trader (paper default, live opt-in). |
 | `polymarket_bot/daily/__init__.py` | pkg | 1 | Daily (24h-window) altcoin Up/Down shadow strategy (issue #185). |
 | `polymarket_bot/daily/ledger.py` | WIRED | 1 | Persistence for the daily altcoin scanner's paper positions. |
@@ -106,19 +106,28 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_bot/daily/scanner.py` | WIRED | 1 | The daily altcoin scanner's tick loop (issue #185). |
 | `polymarket_bot/daily/signal.py` | WIRED | 1 | Fair-value scoring for the daily altcoin scanner. |
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
-| `polymarket_bot/fees.py` | WIRED | 2 | Canonical Polymarket taker-fee math. |
+| `polymarket_bot/fade_1h_momentum_15m/__init__.py` | pkg | 6 | Fade 1h Momentum on 15m: a paper-only strategy on the 15-minute crypto Up/Down markets. |
+| `polymarket_bot/fade_1h_momentum_15m/decide.py` | WIRED | 2 | The model hook for Fade 1h Momentum on 15m: one coin's inputs in, a :class:`Decision` out. |
+| `polymarket_bot/fade_1h_momentum_15m/executor.py` | WIRED | 1 | Order execution for Fade 1h Momentum on 15m: paper child orders, their fills, settlement. |
+| `polymarket_bot/fade_1h_momentum_15m/inputs.py` | WIRED | 2 | Live inputs for Fade 1h Momentum on 15m: one read of everything the maths needs, per coin. |
+| `polymarket_bot/fade_1h_momentum_15m/learner.py` | WIRED | 1 | Live learning for Fade 1h Momentum on 15m: the dials move with every settled window. |
+| `polymarket_bot/fade_1h_momentum_15m/ledger.py` | WIRED | 5 | Paper ledger for Fade 1h Momentum on 15m. |
+| `polymarket_bot/fade_1h_momentum_15m/model.py` | WIRED | 2 | The Fade 1h Momentum on 15m model, standard library only: the chance a 15m window settles Up. |
+| `polymarket_bot/fade_1h_momentum_15m/runner.py` | WIRED | 2 | The Fade 1h Momentum on 15m loop: bookkeeping, inputs, the model hook, sizing and orders. |
+| `polymarket_bot/fade_1h_momentum_15m/sizing.py` | WIRED | 3 | Sizing maths for Fade 1h Momentum on 15m: market anchor, Kelly stakes, scaled passive limit |
+| `polymarket_bot/fees.py` | WIRED | 3 | Canonical Polymarket taker-fee math. |
 | `polymarket_bot/inventory.py` | WIRED | 5 | Every strategy family in this repo, including the ones that do nothing. |
 | `polymarket_bot/maker/__init__.py` | pkg | 3 | (needs docstring) |
 | `polymarket_bot/maker/filler.py` | WIRED | 1 | Decide whether a resting quote would really have filled, and settle it. |
 | `polymarket_bot/maker/ledger.py` | WIRED | 3 | Paper ledger for resting maker quotes. |
-| `polymarket_bot/maker/quoter.py` | WIRED | 1 | Decide what to rest, and where in the queue it lands. |
+| `polymarket_bot/maker/quoter.py` | WIRED | 2 | Decide what to rest, and where in the queue it lands. |
 | `polymarket_bot/maker/runner.py` | WIRED | 1 | The maker loop: quote the favourite, watch the queue, settle on resolution. |
 | `polymarket_bot/market_selection.py` | WIRED | 5 | Operator market selection: which crypto asset + window timeframe to trade. |
 | `polymarket_bot/pairarb/__init__.py` | pkg | 0 | Leftovers of the two-sided 5m maker-quoting shadow line (#182, closed 2026-08-29). |
 | `polymarket_bot/pairarb/market_index.py` | WIRED | 1 | Outcome-token -> market metadata resolver for the daily altcoin scanner. |
 | `polymarket_bot/paper.py` | WIRED | 3 | BTC 5-minute trading engine (paper by default, live opt-in). |
-| `polymarket_bot/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
-| `polymarket_bot/strategies.py` | WIRED | 7 | Operator strategy switches: which strategies may open new positions. |
+| `polymarket_bot/runtime_knobs.py` | WIRED | 8 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
+| `polymarket_bot/strategies.py` | WIRED | 8 | Operator strategy switches: which strategies may open new positions. |
 | `polymarket_bot/strategy.py` | WIRED | 3 | Shared BTC 5-minute binary strategy math. |
 | `polymarket_bot/strategy_docs.py` | WIRED | 4 | One document per strategy family, kept in step with the code it describes. |
 | `polymarket_exec/__init__.py` | pkg | 0 | BTC 5m Binary Pricing Model trading system. |
@@ -135,11 +144,11 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/execution/__init__.py` | pkg | 0 | Execution: the live CLOB executor and pre-trade risk gate. |
 | `polymarket_exec/execution/gate.py` | WIRED | 5 | Venue-independent pre-trade risk gate (issue #64). |
 | `polymarket_exec/execution/live.py` | WIRED | 5 | Live execution on the Polymarket CLOB via py-clob-client. |
-| `polymarket_exec/marketdata/__init__.py` | pkg | 5 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
+| `polymarket_exec/marketdata/__init__.py` | pkg | 6 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
 | `polymarket_exec/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
 | `polymarket_exec/marketdata/clob_shard.py` | WIRED | 1 | One asset x timeframe's market-channel connections: N redundant sockets, the freshest served. |
 | `polymarket_exec/marketdata/clob_stream.py` | WIRED | 4 | Reconnecting connection to the Polymarket CLOB market channel (books, trades, lifecycle). |
-| `polymarket_exec/marketdata/hub.py` | WIRED | 5 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
+| `polymarket_exec/marketdata/hub.py` | WIRED | 6 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
 | `polymarket_exec/marketdata/order_book.py` | WIRED | 3 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
 | `polymarket_exec/marketdata/rest_poll.py` | WIRED | 1 | A light REST /book poll running alongside the sockets on the markets in use. |
 | `polymarket_exec/marketdata/rtds_stream.py` | WIRED | 2 | Chainlink, Chainlink 60 s TWAP and Binance prices from Polymarket's RTDS WebSocket. |
@@ -157,6 +166,7 @@ Env knobs: `BTC_TRADE_*` are canonical; `BTC_LIVE_*` are deprecated read-aliases
 | `polymarket_exec/ops/dashboard/panels/controls.py` | WIRED | 1 | Order-size ticket (#50, #89): the operator's share count, priced live. |
 | `polymarket_exec/ops/dashboard/panels/daily_altcoin.py` | WIRED | 1 | Daily altcoin Up/Down scanner panel (issue #185). |
 | `polymarket_exec/ops/dashboard/panels/decision_engine.py` | WIRED | 1 | Decision engine panel: inputs → computation → final banner + tail. |
+| `polymarket_exec/ops/dashboard/panels/fade_1h.py` | WIRED | 1 | FADE 1H MOMENTUM ON 15M card: what the strategy has made, then what it is doing now. |
 | `polymarket_exec/ops/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
 | `polymarket_exec/ops/dashboard/panels/maker.py` | WIRED | 1 | MAKER card: every quote we rested, including the ones that never filled. |
 | `polymarket_exec/ops/dashboard/panels/market.py` | WIRED | 1 | Live market panel: probability gauge, UP/DOWN book, basis. |
