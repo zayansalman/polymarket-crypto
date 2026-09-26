@@ -29,6 +29,9 @@ dependencies = [
 # (numpy dropped 2026-09-21: it backed tools/regime_attribution.py, #128, which
 # no longer exists in the tree — only stale .pyc files remained.)
 test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+# The live venue (ems/execution/clob.py): the CLOB client, imported only when LIVE
+# is armed. Paper needs none of it.
+live = ["py-clob-client-v2>=1.0"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
 
 [tool.setuptools]

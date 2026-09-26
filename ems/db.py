@@ -222,6 +222,34 @@ CREATE TABLE IF NOT EXISTS risk_events (
 CREATE INDEX IF NOT EXISTS idx_risk_events_day
   ON risk_events(mode, kind, ts);
 
+-- The live venue's journal (ems/execution/journal.py): every live placement and cancel,
+-- including the refused and failed ones, with the strategy in details_json. The columns are
+-- those of the deleted live executor's table, so an existing database keeps its rows.
+CREATE TABLE IF NOT EXISTS live_orders (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at        TEXT NOT NULL,
+  window_slug       TEXT,
+  token_id          TEXT,
+  intent            TEXT NOT NULL,
+  side              TEXT NOT NULL,
+  price             REAL,
+  size              REAL,
+  notional_usd      REAL,
+  order_type        TEXT,
+  status            TEXT NOT NULL,
+  clob_order_id     TEXT,
+  error             TEXT,
+  details_json      TEXT,
+  mode              TEXT,
+  placement_status  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_orders_created
+  ON live_orders(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_live_orders_status
+  ON live_orders(status);
+
 -- Kelly horse-race (ems/kelly_horse_race/, read and written only through its ledger.py).
 
 -- One row per BTC 15m window decided: every input, both draws, the book, the order sent to
@@ -356,6 +384,11 @@ PAPER_RESTING_ORDER_COLUMN_MIGRATIONS = {
     "completed_ts": "INTEGER",
 }
 
+LIVE_ORDER_COLUMN_MIGRATIONS = {
+    "mode": "TEXT",
+    "placement_status": "TEXT",
+}
+
 FADE_DIALS_COLUMN_MIGRATIONS = {
     "n_windows": "INTEGER NOT NULL DEFAULT 0",
     "loglik": "REAL",
@@ -395,6 +428,7 @@ async def init_db() -> None:
         await _migrate_columns(db, "fade_orders", FADE_ORDER_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "fade_dials", FADE_DIALS_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "paper_resting_orders", PAPER_RESTING_ORDER_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "live_orders", LIVE_ORDER_COLUMN_MIGRATIONS)
         await db.commit()
 
 

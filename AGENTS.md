@@ -62,16 +62,38 @@ In scope:
 
 Out of scope:
 
-- **Live trading.** No live order path exists and none is authorised for any
-  market. `BOT_MODE=live` makes the strategy place nothing and say so on its
-  card. Building a live path is an operator decision recorded in this file
-  first, never an agent's.
+- **Live trading, except the one path recorded under "Live trading" below.**
+  Any other live path, market or strategy is an operator decision recorded in
+  this file first, never an agent's.
 - Exposing the dashboard beyond localhost.
+
+## Live trading
+
+Operator decision, Zayan, 2026-09-26 (answered in the Claude session that
+built it, choosing "As spec, with live leg" for
+`docs/superpowers/specs/2026-09-26-kelly-horse-race-design.md`): build the
+live leg of Kelly horse-race. What that authorises, and nothing more:
+
+- **Market:** Polymarket BTC 15m Up/Down only.
+- **Strategy:** Kelly horse-race only (`ems/kelly_horse_race/`), through the
+  shared live venue (`ems/execution/clob.py`). Fade 1h Momentum on 15m has no
+  live path and places nothing while LIVE is selected.
+- **Orders:** passive limit BUYs only: good-till-date, post-only (the venue
+  refuses any that would cross), expiring at the window end, cancelled by id
+  (never "cancel all"), every placement and cancel journaled to `live_orders`.
+- **Armed only by the operator:** LIVE selected, and LIVE clicked in the
+  dashboard in this process (an env `BOT_MODE=live` or a LIVE choice saved by
+  an earlier process is never consent), and a wallet config that passes, and
+  the strategy's switch on. Off by default. The kill switch and the live risk
+  gate leg (per-trade cap, daily cap, loss halt) apply to every order.
+
+Agents still never place live orders, never arm LIVE and never change these
+conditions.
 
 ## Absolute rules
 
 - Agents never place live orders, never build a live path unasked, and never
-  flip a mode or switch on the operator's behalf.
+  flip a mode or switch on the operator's behalf (LIVE included).
 - Do not read, print, log, commit, echo or expose private keys.
 - The dashboard stays local at `127.0.0.1:7860`.
 - No silent failures: hub, strategy and dashboard errors appear in the
@@ -113,6 +135,6 @@ http://127.0.0.1:7860
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1087.
-- **Built-but-dead (do not edit expecting runtime effect):** none.
+- **Tests:** 1101.
+- **Built-but-dead (do not edit expecting runtime effect):** `ems/execution/clob.py`.
 <!-- END GENERATED:summary -->
