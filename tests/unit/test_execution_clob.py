@@ -234,3 +234,21 @@ async def test_derived_secrets_are_scrubbed() -> None:
     secret = "s3cr3t-api-passphrase-value"
     _logging.register_secret(secret)
     assert _logging.redact_secrets(f"auth {secret} failed") == "auth <redacted:secret> failed"
+
+
+async def test_an_order_still_open_long_past_its_stop_is_closed_forced(live_db) -> None:
+    fake = FakeClob()
+    v = venue(fake)
+    fake.orders["0xA"] = {"status": "SOMETHING_NEW", "original_size": "5", "size_matched": "2",
+                          "expiration": str(END)}
+    assert not (await v.fills(["0xA"], now=END))["0xA"].final
+    view = (await v.fills(["0xA"], now=END - 60 + clob.STUCK_AFTER_STOP_S))["0xA"]
+    assert view.final and view.forced and view.state == "expired" and view.filled_size == 2.0
+
+
+@pytest.mark.parametrize("status, state", [("EXPIRED", "expired"), ("INVALID", "cancelled")])
+async def test_other_closed_statuses_are_final(live_db, status, state) -> None:
+    fake = FakeClob()
+    fake.orders["0xA"] = {"status": status, "original_size": "5", "size_matched": "0"}
+    view = (await venue(fake).fills(["0xA"], now=NOW))["0xA"]
+    assert view.final and view.state == state

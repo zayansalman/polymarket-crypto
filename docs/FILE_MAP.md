@@ -6,8 +6,8 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `ems/__init__.py` | pkg | 19 | Polymarket crypto EMS: the strategies, their shared execution layer, the market-data hub |
-| `ems/config.py` | WIRED | 10 | Configuration for the local Polymarket crypto trading lab. |
+| `ems/__init__.py` | pkg | 20 | Polymarket crypto EMS: the strategies, their shared execution layer, the market-data hub |
+| `ems/config.py` | WIRED | 11 | Configuration for the local Polymarket crypto trading lab. |
 | `ems/connectors/__init__.py` | pkg | 0 | Data connectors: ``updown_quote`` (live top-of-book of a crypto Up/Down window), used by the market-data hub. |
 | `ems/connectors/updown_quote.py` | WIRED | 1 | Live top-of-book quote for the current window of any crypto Up/Down market. |
 | `ems/dashboard/__init__.py` | pkg | 1 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
@@ -23,8 +23,8 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `ems/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
 | `ems/db.py` | WIRED | 14 | SQLite storage for the local Polymarket crypto trading lab. |
-| `ems/execution/__init__.py` | pkg | 8 | The execution layer every strategy shares: how a resting order meets the venue. |
-| `ems/execution/clob.py` | WIRED | 1 | The live resting-order venue: post-only good-till-date limit BUYs on the Polymarket CLOB. |
+| `ems/execution/__init__.py` | pkg | 9 | The execution layer every strategy shares: how a resting order meets the venue. |
+| `ems/execution/clob.py` | WIRED | 2 | The live resting-order venue: post-only good-till-date limit BUYs on the Polymarket CLOB. |
 | `ems/execution/controls.py` | WIRED | 8 | What every placement checks first: the operator's mode, the kill switch and the spread. |
 | `ems/execution/endpoints.py` | WIRED | 1 | Which venues may take new orders this pass: one endpoint per mode, each with its gate leg. |
 | `ems/execution/gate.py` | WIRED | 2 | The pre-trade risk gate every strategy's orders pass: one leg per mode, paper and live. |
@@ -78,4 +78,5 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `tools/kelly_horse_race/checks.py` | cli | 0 | Numerical checks behind tasks/2026-09-22-kelly-horse-race-research.md. |
 | `tools/kelly_horse_race/examples.py` | cli | 0 | Worked examples of Kelly horse-race from real BTC 15m windows, through the real maths. |
 | `tools/kelly_horse_race/price_to_beat_chain.py` | cli | 0 | Check how Polymarket's BTC 15m Up/Down markets settle (research, 2026-09-22). |
+| `tools/live_preflight.py` | cli | 0 | Live preflight: check the wallet config end to end before clicking LIVE. Places no orders. |
 | `tools/strategy_docs.py` | cli | 0 | Keep each strategy's doc in step with its code. |

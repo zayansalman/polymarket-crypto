@@ -59,7 +59,12 @@ log = structlog.get_logger(__name__)
 LIBRARY = "py_clob_client_v2"
 SAFE_SIGNATURE_TYPE = 2  # the Polymarket Safe (MetaMask) setup, the only one accepted
 ORDER_TYPE = "GTD"
-TERMINAL = {"matched": FILLED, "canceled": CANCELLED, "cancelled": CANCELLED}
+# get_order statuses after which an order can never trade again.
+TERMINAL = {"matched": FILLED, "canceled": CANCELLED, "cancelled": CANCELLED,
+            "expired": EXPIRED, "invalid": CANCELLED}
+# An order the exchange still reports open this long after its GTD stop is taken as closed
+# (flagged forced), so its window can settle; the log says so.
+STUCK_AFTER_STOP_S = 120
 
 Clock = Callable[[], float]
 
@@ -290,6 +295,9 @@ class ClobRestingVenue:
             closed = self._cancelled.get(order_id) if state == CANCELLED else (
                 stop if state == EXPIRED else None)
             return OrderView(order_id, state, size, matched, int(closed or t), True)
+        if stop is not None and t >= stop + STUCK_AFTER_STOP_S:
+            log.warning("clob_venue.open_past_its_stop", order=order_id, status=status)
+            return OrderView(order_id, EXPIRED, size, matched, int(stop), True, forced=True)
         return OrderView(order_id, RESTING, size, matched, None, False)
 
 

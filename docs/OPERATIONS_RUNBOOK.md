@@ -44,6 +44,9 @@ sets the choice before one is made, and `BOT_MODE=live` is never consent to trad
   and its switch on. Its card says which condition is missing. Fade places
   nothing while LIVE is selected, and its paper orders already filled keep
   settling.
+- **Before the first LIVE click:** `python tools/live_preflight.py` checks the
+  wallet config, signs in and shows the USDC balance the exchange sees. It places
+  no order.
 - **Back to PAPER:** Kelly's resting live orders are cancelled on the next pass;
   their fills and settlement are still followed.
 - Live risk limits are the "Risk" knobs in SETTINGS (per-trade cap $3, loss halt
