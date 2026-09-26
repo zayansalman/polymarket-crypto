@@ -1,13 +1,23 @@
 """Live learning for Fade 1h Momentum on 15m: the dials move with every settled window.
 
-Section 5 of ``tasks/2026-09-22-fade-1h-sizing-hedging.md``: after each settled window, one step
-of recursive maximum likelihood with forgetting,
+Section 5 of ``tasks/2026-09-22-fade-1h-sizing.md``: after each settled window, one step
+of recursive maximum likelihood with forgetting, around a fixed prior,
 
-    beta_t = beta_{t-1} + I_t^-1 score_t(beta_{t-1}),      I_t = gamma I_{t-1} + Fisher_t,
+    I_t = gamma I_{t-1} + Fisher_t
+    beta_t = beta_{t-1} + (I_t + P)^-1 [score_t(beta_{t-1}) - (1 - gamma) P (beta_{t-1} - beta_0)],
 
 on the model's dials (theta, kappa0, lam, alpha, c), the market anchor's weights (w_M, w_S) and
 the four-coin correlation (rho). ``gamma`` gives about two days of windows half the weight, so
-one window barely moves the dials and a day of consistent disagreement moves them a lot.
+one window barely moves the dials and a day of consistent disagreement moves the anchor a lot.
+
+The fixed prior (``P``, ``beta_0``): the process fit's own information, 1 / SE^2 of each of
+theta, kappa0, lam, alpha and c at their fitted values (76,800 windows' worth of Binance
+minutes), is never forgotten. Settled 15m results say little about how the price moves, so
+without it those five dials would wander across their bounds on noise alone; with it they stay
+within a fraction of the fit's standard error unless the results really disagree with it. The
+step above is the Newton step on "the forgotten evidence plus the fixed prior": the prior's
+pull, (1 - gamma) P (beta - beta_0), is the part of it the forgetting takes away each window.
+The anchor weights and rho have no fixed prior: they are what the live results are for.
 
 What one window contributes
 ---------------------------
@@ -21,12 +31,14 @@ What one window contributes
 - rho: once every coin of a 15-minute slot has settled, the one-factor Gaussian copula's
   likelihood of the slot's pattern of results (``sizing.outcome_probabilities``, marginals =
   each coin's anchored p at the row nearest minute 2), with its own score and information.
-- Bounded steps: no dial moves more than ``MAX_STEP`` in one update, and each stays inside
-  ``BOUNDS``. A step that would leave the bounds stops at them.
+- Bounded steps: no dial moves more than ``MAX_STEP`` in one window's step, and each stays
+  inside ``BOUNDS``. A step that would leave the bounds stops at them.
+- The evidence: each window's rows are read by its slug (``ledger.decisions_for_window``), so
+  the cost is that window's rows and no other window's rows can leak in.
 
 Every update is stored as a new ``fade_dials`` version with source ``"live"``; the version
-carries the learner's information matrix (``params["learner"]``) so the next update continues
-from it, across restarts. The starting dials are version 1 (``STARTING_DIALS``, source
+carries the learner's information matrix and its fixed prior (``params["learner"]``) so the
+next update continues from them, across restarts. The starting dials are version 1 (``STARTING_DIALS``, source
 ``"fit_sep17_20"``); version 0 is the prior, which the learner never updates.
 
 ``learn_from_settled`` never raises: failures come back in the report for the card.
@@ -130,22 +142,34 @@ _PROCESS_SE: Mapping[str, float] = MappingProxyType({
 })
 STARTING_NOTE = (
     "Starting dials. How the price moves (theta, kappa0, lam, alpha, c): the research fit on "
-    "Binance minutes from Mar 1 to Sep 16. The market anchor and the coin correlation: fitted "
-    "on the Sep 17-20 Polymarket tape with the TWAP-60s settlement at minute 2: w_M 0.45, w_S "
+    "Binance minutes from Mar 1 to Sep 16, kept as a fixed prior, so settled windows only "
+    "nudge them. The market anchor and the coin correlation: fitted on the Sep 17-20 "
+    "Polymarket tape with the TWAP-60s settlement, at minute 2 of each window: w_M 0.45, w_S "
     "0.57 (1,071 windows; the model and the market each carry about half the weight), rho "
-    "0.75 (273 slots). A quick fit for starting values, not the historical re-test."
+    "0.75 (273 slots). That fit read the market from the last Up trade before minute 2 and the "
+    "price move from Binance; the app reads the book's mid and the live Chainlink price at "
+    "every minute. So these are starting values for the learner to correct, not the "
+    "historical re-test."
 )
 
 
+def starting_prior() -> dict[str, list[float]]:
+    """The fixed prior: the process fit's values and its full information (1 / SE^2) for
+    theta, kappa0, lam, alpha and c, never forgotten; nothing for the anchor weights."""
+    return {
+        "mean": [float(STARTING_DIALS[name]) for name in LEARNED],
+        "info": [1.0 / _PROCESS_SE[name] ** 2 if name in _PROCESS_SE else 0.0
+                 for name in LEARNED],
+    }
+
+
 def starting_learner_state() -> dict[str, Any]:
-    """The learner's information at the start: each fit's information, scaled down to what
-    the learner remembers (about two days of windows) so live evidence can move it."""
+    """The learner's state at the start. The forgotten part of the information holds the
+    anchor fit (its 1,071 windows fit in the learner's memory of about two days of windows),
+    so live evidence can move the anchor weights. The process fit is the fixed prior
+    (``starting_prior``), so it is not also counted here."""
     n = len(LEARNED)
     info = [[0.0] * n for _ in range(n)]
-    process_windows = 4.0 * STARTING_FIT["process_slots"]
-    scale = min(1.0, MEMORY_WINDOWS / process_windows)
-    for i, name in enumerate(LEARNED[:5]):
-        info[i][i] = scale / (_PROCESS_SE[name] ** 2)
     anchor_scale = min(1.0, MEMORY_WINDOWS / STARTING_FIT["anchor_windows"])
     for a in range(2):
         for b in range(2):
@@ -154,11 +178,26 @@ def starting_learner_state() -> dict[str, Any]:
     return {
         "names": list(LEARNED),
         "info": info,
+        "prior": starting_prior(),
         "rho_info": rho_scale / STARTING_FIT["rho_se"] ** 2,
         "windows": 0,
         "slots": 0,
         "rho_slots": [],
     }
+
+
+def _prior_of(state: Mapping[str, Any]) -> tuple[list[float], list[float]]:
+    """(mean, diagonal information) of a learner state's fixed prior. A state saved before
+    the prior was kept gets the starting one."""
+    prior = state.get("prior")
+    if isinstance(prior, Mapping):
+        mean = [float(x) for x in prior.get("mean") or ()]
+        info = [float(x) for x in prior.get("info") or ()]
+        if len(mean) == len(LEARNED) == len(info) and all(
+                math.isfinite(x) for x in (*mean, *info)) and min(info) >= 0.0:
+            return mean, info
+    prior = starting_prior()
+    return prior["mean"], prior["info"]
 
 
 def starting_params() -> dict[str, Any]:
@@ -351,7 +390,9 @@ def learn(params: Mapping[str, Any], windows: Sequence[WindowEvidence],
         raise ValueError("these dials carry no learner state (the prior is never updated)")
     new = {k: v for k, v in params.items() if k != STATE_KEY}
     dials = _dials_floats(new)
+    n = len(LEARNED)
     info = [[float(x) for x in row] for row in state["info"]]
+    prior_mean, prior_info = _prior_of(state)
     rho_info = float(state.get("rho_info") or 0.0)
     before = dict(dials)
     result = LearnResult(params={})
@@ -361,9 +402,13 @@ def learn(params: Mapping[str, Any], windows: Sequence[WindowEvidence],
         if not used:
             result.skipped.append(f"{ev.window_slug}: no row the model could price")
             continue
-        info = [[GAMMA * info[i][j] + fisher[i][j] for j in range(len(LEARNED))]
-                for i in range(len(LEARNED))]
-        step = _solve(info, score)
+        info = [[GAMMA * info[i][j] + fisher[i][j] for j in range(n)] for i in range(n)]
+        # The Newton step on the forgotten evidence plus the fixed prior (module docstring).
+        pull = [score[i] - (1.0 - GAMMA) * prior_info[i] * (dials[name] - prior_mean[i])
+                for i, name in enumerate(LEARNED)]
+        total = [[info[i][j] + (prior_info[i] if i == j else 0.0) for j in range(n)]
+                 for i in range(n)]
+        step = _solve(total, pull)
         for name, s in zip(LEARNED, step):
             dials[name] = _bounded(name, dials[name], s)
         result.windows += 1
@@ -383,7 +428,8 @@ def learn(params: Mapping[str, Any], windows: Sequence[WindowEvidence],
         if dials[key] != before[key]:
             result.moved[key] = dials[key] - before[key]
     new[STATE_KEY] = {
-        "names": list(LEARNED), "info": info, "rho_info": rho_info,
+        "names": list(LEARNED), "info": info,
+        "prior": {"mean": prior_mean, "info": prior_info}, "rho_info": rho_info,
         "windows": int(state.get("windows") or 0) + result.windows,
         "slots": int(state.get("slots") or 0) + result.slots,
         "rho_slots": used_slots[-MAX_SLOTS_KEPT:],
@@ -455,13 +501,13 @@ async def learn_from_settled(settled: Sequence[Any], *, ts: float) -> LearnRepor
         if not isinstance(params.get(STATE_KEY), Mapping):
             report.note = "The current dials are the prior, which does not learn."
             return report
-        rows_by_asset: dict[str, list[dict]] = {}
+        rows_by_window: dict[str, list[dict]] = {}
 
-        async def rows_of(asset: str) -> list[dict]:
-            if asset not in rows_by_asset:
-                rows_by_asset[asset] = await _ledger.recent_decisions(
-                    _ledger.RECENT_DECISIONS_MAX, asset=asset)
-            return rows_by_asset[asset]
+        async def rows_of(slug: str) -> list[dict]:
+            """One window's rows, by its slug (indexed), read once per step."""
+            if slug not in rows_by_window:
+                rows_by_window[slug] = await _ledger.decisions_for_window(slug)
+            return rows_by_window[slug]
 
         windows: list[WindowEvidence] = []
         slot_starts: dict[float, str] = {}
@@ -470,7 +516,7 @@ async def learn_from_settled(settled: Sequence[Any], *, ts: float) -> LearnRepor
             if outcome not in ("Up", "Down"):
                 continue
             asset = _asset_of(slug)
-            states = _states([r for r in await rows_of(asset) if r.get("window_slug") == slug])
+            states = _states([r for r in await rows_of(slug) if r.get("window_slug") == slug])
             window = await _ledger.get_window(slug)
             start = float(window["window_start"]) if window else (
                 states[0].window_start if states else math.nan)
@@ -491,7 +537,7 @@ async def learn_from_settled(settled: Sequence[Any], *, ts: float) -> LearnRepor
                 if window.get("outcome") not in ("Up", "Down"):
                     complete = False  # a coin still to settle: learn rho when it does
                     break
-                p = _marginal(_states([r for r in await rows_of(asset)
+                p = _marginal(_states([r for r in await rows_of(sib)
                                        if r.get("window_slug") == sib]), dials)
                 if p is not None:
                     results.append((p, window["outcome"] == "Up"))

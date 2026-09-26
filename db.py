@@ -249,8 +249,9 @@ CREATE TABLE IF NOT EXISTS fade_windows (
   condition_id       TEXT,
   up_token           TEXT,
   down_token         TEXT,
-  -- The settlement stream's value at the window start. A 15m window settles Up iff the
-  -- Chainlink TWAP-60s stream's time-weighted average over the window is >= this value.
+  -- The Chainlink TWAP-60s print at the window start (Gamma's priceToBeat). A 15m window
+  -- settles Up iff the TWAP-60s print at the window's close (the average of its last 60 s)
+  -- is >= this opening print.
   start_ref_price    REAL,
   start_ref_source   TEXT,
   -- The 1h market this window sits in (settles on the Binance 1h candle, close >= open).
@@ -282,7 +283,8 @@ CREATE TABLE IF NOT EXISTS fade_decisions (
   side           TEXT CHECK (side IN ('Up', 'Down')),
   kelly_f        REAL,
   stake_usd      REAL,
-  ladder_json    TEXT,
+  -- The parent order's child orders: one per price level, as planned this pass.
+  child_orders_json TEXT,
   hedge_json     TEXT,
   factors_json   TEXT,
   action         TEXT NOT NULL,
@@ -293,25 +295,38 @@ CREATE INDEX IF NOT EXISTS idx_fade_decisions_asset
 CREATE INDEX IF NOT EXISTS idx_fade_decisions_window
   ON fade_decisions(window_slug);
 
--- One row per placement of a paper resting bid (a requote is a cancel plus a new row).
+-- One row per paper child order: a passive limit order resting at one price level. A BUY
+-- (kind 'entry') buys the token; a SELL (kind 'hedge') sells shares of it already held, never
+-- more, so the strategy never holds both outcomes. Size changes cancel or add whole child
+-- orders, so each row keeps its own place in the queue and its own stretch of the tape.
 -- Life: resting -> partial -> filled, or it stops resting as cancelled / expired with
 -- whatever it filled. Settlement is separate: won, pnl and settled_ts are set when the
--- window resolves. Every fill is a resting fill, so there is no fee.
+-- window resolves. Every fill is a passive fill at our own price, so there is no fee.
 CREATE TABLE IF NOT EXISTS fade_orders (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   window_slug     TEXT NOT NULL REFERENCES fade_windows(window_slug),
   token_id        TEXT NOT NULL,
+  -- The outcome the token pays on.
   side            TEXT NOT NULL CHECK (side IN ('Up', 'Down')),
   kind            TEXT NOT NULL CHECK (kind IN ('entry', 'hedge')),
-  rung            INTEGER NOT NULL DEFAULT 0,
+  -- The price level's place in its parent order: 0 is the level nearest the touch.
+  level           INTEGER NOT NULL DEFAULT 0,
   price           REAL NOT NULL,
   shares          REAL NOT NULL,
-  -- Real shares resting at our price or better when we placed: the tape must trade
-  -- through this queue before any of it is ours.
+  -- BUY for an entry, SELL for a hedge (a sale of shares held).
+  order_side      TEXT NOT NULL DEFAULT 'BUY' CHECK (order_side IN ('BUY', 'SELL')),
+  -- Displayed shares at our price or better when placed (bids for a BUY, asks for a SELL):
+  -- the depth ahead of us.
   depth_ahead     REAL NOT NULL DEFAULT 0,
+  -- The same depth price level by price level, best first, as [price, shares] pairs; each
+  -- level is used up as the tape trades through it, so this holds what is still ahead.
+  levels_ahead_json TEXT,
+  -- Tape volume that has reached our price level since placement.
   crossed         REAL NOT NULL DEFAULT 0,
   state           TEXT NOT NULL DEFAULT 'resting'
                   CHECK (state IN ('resting', 'partial', 'filled', 'cancelled', 'expired')),
+  -- Rests from here (inclusive): the second after the write, so no trade already on the
+  -- tape can fill it. It stops resting at cancelled_ts (exclusive).
   placed_ts       INTEGER NOT NULL,
   cancelled_ts    INTEGER,
   cancel_reason   TEXT,
@@ -322,12 +337,14 @@ CREATE TABLE IF NOT EXISTS fade_orders (
   flow_cursor_ts  INTEGER,
   decision_id     INTEGER,
   mode            TEXT NOT NULL DEFAULT 'paper',
+  -- 1 if the order's token paid $1 at settlement.
   won             INTEGER,
+  -- BUY: filled x (payout - price). SELL: filled x (price - payout).
   pnl             REAL,
   settled_ts      INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fade_orders_key
-  ON fade_orders(window_slug, token_id, kind, rung, placed_ts);
+  ON fade_orders(window_slug, token_id, kind, level, placed_ts);
 CREATE INDEX IF NOT EXISTS idx_fade_orders_state
   ON fade_orders(state);
 CREATE INDEX IF NOT EXISTS idx_fade_orders_window
@@ -420,14 +437,16 @@ FADE_DECISION_COLUMN_MIGRATIONS = {
     "side": "TEXT",
     "kelly_f": "REAL",
     "stake_usd": "REAL",
-    "ladder_json": "TEXT",
+    "child_orders_json": "TEXT",
     "hedge_json": "TEXT",
     "factors_json": "TEXT",
     "reason": "TEXT",
 }
 
 FADE_ORDER_COLUMN_MIGRATIONS = {
+    "order_side": "TEXT NOT NULL DEFAULT 'BUY' CHECK (order_side IN ('BUY', 'SELL'))",
     "depth_ahead": "REAL NOT NULL DEFAULT 0",
+    "levels_ahead_json": "TEXT",
     "crossed": "REAL NOT NULL DEFAULT 0",
     "cancelled_ts": "INTEGER",
     "cancel_reason": "TEXT",

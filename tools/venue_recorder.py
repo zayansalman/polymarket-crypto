@@ -22,7 +22,7 @@ Three things it does that the 5m-era recorder
                a tested 0.5), concentrated in burst states — where the strategy
                claims to trade. ``s_age_ms`` is that bias term, made measurable.
 
-  discovery    the ladder is DISCOVERED, never assumed. Every scan writes a
+  discovery    the set of market windows is DISCOVERED, never assumed. Every scan writes a
                census row. C7 killed a whole thesis because market structure was
                asserted from memory instead of a live query; a 2026-08-13 probe
                found no ``*-updown-1h-*`` family on the venue at all, against a
@@ -73,7 +73,7 @@ BINANCE_WS = "wss://stream.binance.com:9443/stream"
 UA = {"User-Agent": "polymarket-research-recorder/1.0", "Accept": "application/json"}
 
 # Underlying spot symbol per Polymarket asset token. The reference series must be
-# the one the venue settles on: the in-scope rungs settle on Binance spot candles,
+# the one the venue settles on: the in-scope windows settle on Binance spot candles,
 # not Chainlink (C18).
 SPOT_SYMBOL = {
     "btc": "BTCUSDT",
@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS rec_markets (
     condition_id    TEXT,
     asset           TEXT,
     family          TEXT,
-    rung_guess      TEXT,
-    rung_evidence   TEXT,
+    window_guess    TEXT,
+    window_evidence TEXT,
     question        TEXT,
     token_up        TEXT,
     token_down      TEXT,
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS rec_discovery (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_ms         INTEGER NOT NULL,
     family          TEXT,
-    rung_guess      TEXT,
+    window_guess    TEXT,
     n_markets       INTEGER,
     n_accepting     INTEGER,
     med_liquidity   REAL,
@@ -190,15 +190,15 @@ def now_ms() -> int:
 # Market discovery
 # --------------------------------------------------------------------------- #
 
-_UPDOWN_SLUG = re.compile(r"^(?P<asset>[a-z]+)-updown-(?P<rung>\d+[smhd])-(?P<ts>\d+)$")
+_UPDOWN_SLUG = re.compile(r"^(?P<asset>[a-z]+)-updown-(?P<window>\d+[smhd])-(?P<ts>\d+)$")
 _NAMED_SLUG = re.compile(r"^(?P<asset>[a-z]+)-up-or-down-", re.IGNORECASE)
 
 
 def classify(market: dict[str, Any]) -> tuple[str, str, str, str]:
-    """Return (asset, family, rung_guess, rung_evidence).
+    """Return (asset, family, window_guess, window_evidence).
 
     The guess is recorded next to the evidence that produced it. Nothing
-    downstream should trust ``rung_guess`` without being able to re-derive it —
+    downstream should trust ``window_guess`` without being able to re-derive it —
     that is the whole lesson of C7.
     """
     slug = (market.get("slug") or "").lower()
@@ -207,8 +207,8 @@ def classify(market: dict[str, Any]) -> tuple[str, str, str, str]:
     m = _UPDOWN_SLUG.match(slug)
     if m:
         asset = m.group("asset")
-        rung = m.group("rung")
-        return asset, f"{asset}-updown-{rung}", rung, f"slug pattern {slug!r}"
+        window = m.group("window")
+        return asset, f"{asset}-updown-{window}", window, f"slug pattern {slug!r}"
 
     m = _NAMED_SLUG.match(slug)
     if m:
@@ -217,14 +217,14 @@ def classify(market: dict[str, Any]) -> tuple[str, str, str, str]:
         # Named-date markets state their settlement hour in the question, e.g.
         # "Bitcoin Up or Down - May 20, 6AM ET". Window length is not stated, so
         # it is derived from the venue's own dates where both are present.
-        rung = "named"
+        window = "named"
         evidence = f"slug pattern {slug!r}; question {question!r}"
         start, end = _epoch(market.get("startDate")), _epoch(market.get("endDate"))
         if start and end:
             hours = (end - start) / 3600.0
-            rung = f"~{hours:.0f}h"
+            window = f"~{hours:.0f}h"
             evidence += f"; endDate-startDate = {hours:.1f}h"
-        return asset, family, rung, evidence
+        return asset, family, window, evidence
 
     family = "-".join(p for p in slug.split("-") if not p.isdigit())
     return "", family, "unknown", f"unmatched slug {slug!r}"
@@ -603,11 +603,11 @@ async def persist_markets(
         slug = m.get("slug")
         if not slug:
             continue
-        asset, family, rung, evidence = classify(m)
+        asset, family, window, evidence = classify(m)
         up, down = _tokens(m)
         await db.execute(
             """INSERT INTO rec_markets (
-                   slug, condition_id, asset, family, rung_guess, rung_evidence,
+                   slug, condition_id, asset, family, window_guess, window_evidence,
                    question, token_up, token_down, start_ts, end_ts,
                    first_seen_ms, last_seen_ms, liquidity, volume, raw_json)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -620,7 +620,7 @@ async def persist_markets(
                 m.get("conditionId"),
                 asset,
                 family,
-                rung,
+                window,
                 evidence,
                 m.get("question"),
                 up,
@@ -634,7 +634,7 @@ async def persist_markets(
                 json.dumps(m, separators=(",", ":")),
             ),
         )
-        census.setdefault((family, rung), []).append(m)
+        census.setdefault((family, window), []).append(m)
         symbol = SPOT_SYMBOL.get(asset)
         roles: dict[str, str] = {}
         if up:
@@ -645,18 +645,18 @@ async def persist_markets(
             roles[down] = "down"
         tape.append(TradeTarget(slug, m.get("conditionId"), roles))
 
-    for (family, rung), rows in census.items():
+    for (family, window), rows in census.items():
         liq = sorted(_float_or_none(r.get("liquidityNum") or r.get("liquidity")) or 0.0 for r in rows)
         vol = sorted(_float_or_none(r.get("volumeNum") or r.get("volume")) or 0.0 for r in rows)
         await db.execute(
             """INSERT INTO rec_discovery
-               (scan_ms, family, rung_guess, n_markets, n_accepting,
+               (scan_ms, family, window_guess, n_markets, n_accepting,
                 med_liquidity, med_volume, example_slug)
                VALUES (?,?,?,?,?,?,?,?)""",
             (
                 ts,
                 family,
-                rung,
+                window,
                 len(rows),
                 sum(1 for r in rows if r.get("acceptingOrders")),
                 liq[len(liq) // 2] if liq else 0.0,
@@ -682,21 +682,21 @@ async def cmd_discover(args: argparse.Namespace) -> int:
 
     census: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for m in markets:
-        _, family, rung, _ = classify(m)
-        census.setdefault((family, rung), []).append(m)
+        _, family, window, _ = classify(m)
+        census.setdefault((family, window), []).append(m)
 
     print(f"\n{len(markets)} open up/down markets in {len(census)} families\n")
-    print(f"{'family':<34} {'rung':>7} {'n':>4} {'med liq $':>11} {'med vol $':>11}  example")
+    print(f"{'family':<34} {'window':>7} {'n':>4} {'med liq $':>11} {'med vol $':>11}  example")
     print("-" * 100)
-    for (family, rung), rows in sorted(census.items(), key=lambda kv: -len(kv[1])):
+    for (family, window), rows in sorted(census.items(), key=lambda kv: -len(kv[1])):
         liq = sorted(_float_or_none(r.get("liquidityNum") or r.get("liquidity")) or 0.0 for r in rows)
         vol = sorted(_float_or_none(r.get("volumeNum") or r.get("volume")) or 0.0 for r in rows)
         print(
-            f"{family[:34]:<34} {rung:>7} {len(rows):>4} "
+            f"{family[:34]:<34} {window:>7} {len(rows):>4} "
             f"{liq[len(liq)//2]:>11,.0f} {vol[len(vol)//2]:>11,.0f}  {rows[0].get('slug','')[:28]}"
         )
     print(
-        "\nThe program of record assumes a 1h and a daily rung on BTC/ETH. Compare that\n"
+        "\nThe program of record assumes a 1h and a daily window on BTC/ETH. Compare that\n"
         "against the table above before pointing the recorder at a scope (C7, C17)."
     )
     return 0
@@ -833,13 +833,13 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--discover", action="store_true", help="census the venue ladder, write nothing")
+    p.add_argument("--discover", action="store_true", help="census the venue's market windows, write nothing")
     p.add_argument("--once", action="store_true", help="run exactly one capture cycle")
     p.add_argument("--run", action="store_true", help="record continuously")
     p.add_argument("--db", default="data/venue_archive.db", help="SQLite archive path")
     p.add_argument("--assets", default="", help="comma-separated asset filter, e.g. btc,eth")
     p.add_argument("--hz", type=float, default=1.0, help="capture frequency (>=1 per the spec)")
-    p.add_argument("--rediscover", type=float, default=300.0, help="seconds between ladder re-scans")
+    p.add_argument("--rediscover", type=float, default=300.0, help="seconds between market-window re-scans")
     args = p.parse_args()
 
     if args.discover:

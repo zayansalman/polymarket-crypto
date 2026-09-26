@@ -75,11 +75,13 @@ STRATEGIES: dict[str, Strategy] = {
         name="fade_1h_momentum_15m",
         label="Fade 1h Momentum on 15m",
         description=(
-            "Rests laddered paper bids on BTC/ETH/SOL/XRP 15m Up/Down windows, "
-            "sized by joint Kelly across the four coins, and hedges with a "
-            "resting bid on the other side; never crosses. Records every "
-            "coin's inputs each minute, and places no bids until the model is "
-            "plugged in. Paper only — it has no live path."
+            "Rests scaled passive limit orders on BTC/ETH/SOL/XRP 15m Up/Down "
+            "windows where the model says they pay: child orders at several "
+            "price levels at or under the best bid, sized by joint Kelly across "
+            "the four coins. A position that turns is cut with a resting sell of "
+            "the shares held, never by buying the other side; nothing crosses "
+            "the spread. Records every coin's inputs each minute. Paper only — "
+            "it has no live path."
         ),
     ),
 }

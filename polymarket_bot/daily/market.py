@@ -48,7 +48,7 @@ _GAMMA_ASSET_NAME = {
 _SLUG_ASSET_TO_SHORT = {v: k for k, v in _GAMMA_ASSET_NAME.items()}
 
 # Distinguishes this family from the old 5m/15m/1h clock-floor family
-# (slug shape "{asset}-updown-{rung}-{ts}") by slug shape alone — NOT by the
+# (slug shape "{asset}-updown-{window}-{ts}") by slug shape alone — NOT by the
 # startDate..endDate span, which is the TRADING window and can be ~2 days
 # wide even though the actual resolution always compares two specific
 # noon-ET closes on consecutive days (see fetch_close_at).
@@ -89,7 +89,7 @@ async def _fallback_via_discover(
         slug = (m.get("slug") or "").lower()
         if _DAILY_SLUG_MARKER not in slug:
             continue
-        asset_raw, _family, _rung, _evidence = classify(m)
+        asset_raw, _family, _window, _evidence = classify(m)
         if _SLUG_ASSET_TO_SHORT.get(asset_raw) != short_asset:
             continue
         if _epoch(m.get("endDate")) is not None:
@@ -235,7 +235,7 @@ async def build_market_view(
     # days a year the two noons are 23h or 25h apart, never 86400s.
     reference_ts = int(daily_reference_instant(end_dt).timestamp())
 
-    slug_asset, _family, _rung, _evidence = classify(market)
+    slug_asset, _family, _window, _evidence = classify(market)
     symbol = SPOT_SYMBOL.get(slug_asset) or SPOT_SYMBOL.get(short_asset)
     if symbol is None:
         return None

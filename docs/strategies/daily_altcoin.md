@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `daily_altcoin` on the MY STRATEGIES card |
 | Code | `polymarket_bot/daily/` — 6 files |
-| Code fingerprint | `14f1bd0c38c4` |
+| Code fingerprint | `be76d6598fd1` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -189,5 +189,6 @@ Read from `daily_shadow_positions` on 2026-09-21: 20 rows, 18 settled and 2 open
 
 ## Changelog
 
+- 2026-09-26 · `be76d6598fd1` · Wording only: a comment and an unused name now call the market's interval its window (standard terms). No behaviour change.
 - 2026-09-21 · `14f1bd0c38c4` · Added an At a glance summary (concept, main assumption, maths, how it works, how it was derived, references) for the dashboard's STRATEGY card.
 - 2026-09-21 · `14f1bd0c38c4` · Doc created.

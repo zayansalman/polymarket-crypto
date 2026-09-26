@@ -310,7 +310,13 @@ async def test_full_read_for_every_coin(fade_db) -> None:
     assert btc.window_avg.seconds == newest - S0 + 1
     assert btc.window_avg.printed == newest - S0 + 1 - len(GAP)
     assert btc.window_avg.longest_gap_s == len(GAP)
-    assert btc.d == pytest.approx(math.log(twap("btc", newest) / twap("btc", S0)))
+    # The price now is the live Chainlink price against the opening print; the TWAP-60s print
+    # now (a 60 s average) is recorded but is not the price now.
+    assert btc.d == pytest.approx(math.log(raw("btc", newest) / twap("btc", S0)))
+    assert btc.d != pytest.approx(math.log(twap("btc", newest) / twap("btc", S0)))
+    assert btc.as_record()["derived"]["d"] == pytest.approx(btc.d)
+    assert btc.as_record()["derived"]["d_binance"] == pytest.approx(
+        math.log(btc.binance.value / twap("btc", S0)))
     assert btc.abar == pytest.approx(log_avg - math.log(twap("btc", S0)))
 
     # Binance: the forming candles are dropped, newest first.
@@ -529,9 +535,13 @@ async def test_open_missed_after_a_restart(fade_db) -> None:
                                start_ref_source="TWAP-60s print at the open, read 2 s after "
                                                 "the open")
     got = await run(hub)
-    assert got["btc"].codes == ("average_incomplete",)
-    assert got["btc"].known["start_ref"] == pytest.approx(twap("btc", S0))
-    assert "59 s hole" in got["btc"].message
+    # The window's average so far has a hole from the open, but it decides nothing: the
+    # window settles on the print at its close, so the coin still has its inputs.
+    btc = got["btc"]
+    assert isinstance(btc, Inputs), btc
+    assert btc.start_ref == pytest.approx(twap("btc", S0))
+    assert btc.window_avg.longest_gap_s == 59
+    assert btc.as_record()["window_avg"]["longest_gap_s"] == 59
 
 
 # --------------------------------------------------------------------------- the average
@@ -558,11 +568,13 @@ async def test_average_keeps_prints_the_hub_has_dropped(fade_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_long_hole_in_the_prints_is_a_problem(fade_db) -> None:
+async def test_a_long_hole_in_the_window_average_is_recorded_not_a_problem(fade_db) -> None:
     hub = scene()
     hub.history[(fi.TWAP60, "btc")] = history("btc", skip=range(S0 + 20, S0 + 60))
     got = await run(hub)
-    assert got["btc"].code == "average_incomplete" and "40 s hole" in got["btc"].message
+    btc = got["btc"]
+    assert isinstance(btc, Inputs), btc
+    assert btc.window_avg.longest_gap_s == 40 and btc.notes == ()
 
 
 def test_window_average_by_hand() -> None:
@@ -667,7 +679,7 @@ async def test_condition_id_from_gamma_when_the_hub_lacks_it(fade_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_database_failure_is_a_note_not_a_crash(fade_db, monkeypatch) -> None:
+async def test_a_database_failure_is_a_warning_not_a_crash(fade_db, monkeypatch) -> None:
     async def broken(**_: Any) -> None:
         raise RuntimeError("disk full")
 
@@ -680,9 +692,12 @@ async def test_a_database_failure_is_a_note_not_a_crash(fade_db, monkeypatch) ->
     got = await run(scene(), memory=memory)
     btc = got["btc"]
     assert isinstance(btc, Inputs)
-    assert any("Could not save this window's row: RuntimeError: disk full" in n
-               for n in btc.notes)
-    assert any("stored start reference" in n for n in btc.notes)
+    # A failure is a warning (the runner reports it as an error of the pass), not a plain note.
+    assert any("Could not save this window's row" in w and "RuntimeError: disk full" in w
+               for w in btc.warnings)
+    assert any("stored start reference" in w for w in btc.warnings)
+    assert not any("Could not" in n for n in btc.notes)
+    assert btc.as_record()["warnings"] == list(btc.warnings)
     assert f"btc-updown-15m-{S0}" not in memory.saved  # tried again next pass
 
 
@@ -736,8 +751,11 @@ async def test_price_to_beat_from_gamma_when_the_open_print_is_gone(fade_db) -> 
     venue = FakeVenue(gamma={slug: gamma_event(slug, twap("btc", S0))})
     got = await run(hub, venue)
     btc = got["btc"]
-    assert btc.known["start_ref"] == pytest.approx(twap("btc", S0))
-    assert btc.known["start_ref_source"].startswith(fi.GAMMA_PTB)
+    # A restart after the open trades on once Gamma gives the opening print: the hole in the
+    # window's average so far is information only.
+    assert isinstance(btc, Inputs), btc
+    assert btc.start_ref == pytest.approx(twap("btc", S0))
+    assert btc.start_ref_source.startswith(fi.GAMMA_PTB)
     (asked,) = gamma_asks(venue)
     assert asked.url.path == "/events" and asked.url.params["slug"] == slug
     row = await ledger.get_window(slug)

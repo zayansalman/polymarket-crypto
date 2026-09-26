@@ -146,11 +146,16 @@ inside it, not a haircut. The resting price maximises
 
 $$J(b) = P_{fill}(b)\,\big(p_{fill}(b) - b\big), \qquad J'(b^*) = 0 \text{ (solved by Brent's method)},$$
 
-and maker Kelly is $f^* = (p_{fill} - b)/(1-b)$ with no fee. Ladder rungs sit across the 5–15c band
-under the price, each sized by Kelly at its own $p_{fill}$.
+and maker Kelly is $f^* = (p_{fill} - b)/(1-b)$ with no fee. The order is a scaled passive limit
+order: a parent order split into child orders resting at price levels from the best bid down to
+15c under it (the Settings range), each sized by Kelly at its own $p_{fill}$ (the sizing maths is in
+`tasks/2026-09-22-fade-1h-sizing.md`).
 
-No gate anywhere: side from $\mathrm{sign}(p - \tfrac12)$, price $a^*$ or $b^*$, size Kelly. All are
-continuous in the state.
+No gate anywhere. The side is not where $p$ leans: the maths prices a buy of each side and takes
+the one that adds the most expected log growth, or nothing when neither adds any
+(`tasks/2026-09-22-fade-1h-sizing.md`, section 3b). Price $a^*$ or $b^*$, size Kelly. Nothing is
+compared with a fixed number. *(Amended 2026-09-26: the first draft took the side from
+$\mathrm{sign}(p - \tfrac12)$, which is a 50% cut. The side where $p$ leans can be the dear side.)*
 
 ## 7. Parameters
 
@@ -194,8 +199,12 @@ The question step 2 answers: on spot the 15m reversion is too small to trade (1.
 crowd does not already price it, a ~1.5% sign edge is ~1.5c/share at 50c, and a maker pays no
 fee. If the crowd does price it, the edge is zero and this will show it.
 
-**Baselines on the same rows:** Zayan's rule (1h side, price ≥ 40c) and the 2026-09-21 finding
-(1h side, price ≥ 55c).
+**Baselines on the same rows:** the market's own price, read as the chance of Up, and the no-edge
+martingale forecast $p = \Phi(y_\tau/(\sigma\sqrt h))$ (no momentum, no reversion). The model's $p$
+is scored against both on log-loss and Brier. Neither baseline has an edge to trade, so the model
+counts only where it beats them. *(Amended 2026-09-26, with results still pending: the first
+draft also compared two fixed-price rules on the 1h side. They are removed, because price rules
+are not used, not even as comparisons.)*
 
 ## 9. Validation (2026-09-21)
 

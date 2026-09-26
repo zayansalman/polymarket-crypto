@@ -149,17 +149,30 @@ async def window(asset: str = "btc", start: int = START, *, cid: bool = True) ->
 
 
 def bid(slug: str, side: str = "Up", *, price: float = 0.40, shares: float = 10.0,
-        depth: float = 0.0, rung: int = 0, kind: str = "entry") -> NewOrder:
+        depth: float = 0.0, level: int = 0, levels: tuple = ()) -> NewOrder:
+    """A buy (an entry) of ``side``'s token."""
     asset, _, _, start = slug.split("-")
     token = up_of(asset, int(start)) if side == "Up" else down_of(asset, int(start))
-    return NewOrder(window_slug=slug, token_id=token, side=side, kind=kind, price=price,
-                    shares=shares, rung=rung, depth_ahead=depth)
+    return NewOrder(window_slug=slug, token_id=token, side=side, kind="entry", price=price,
+                    shares=shares, level=level, depth_ahead=depth, levels_ahead=levels)
 
 
-async def rest(executor: ex.PaperExecutor, *orders: NewOrder, at: int) -> list[int]:
-    ids = await executor.requote(orders, best_asks={o.token_id: 0.99 for o in orders}, now=at)
-    assert all(i is not None for i in ids)
-    return [int(i) for i in ids if i is not None]
+def sale(slug: str, side: str = "Up", *, price: float = 0.60, shares: float = 5.0,
+         depth: float = 0.0, level: int = 0, levels: tuple = ()) -> NewOrder:
+    """A sale (a hedge) of shares of ``side``'s token already held."""
+    asset, _, _, start = slug.split("-")
+    token = up_of(asset, int(start)) if side == "Up" else down_of(asset, int(start))
+    return NewOrder(window_slug=slug, token_id=token, side=side, kind="hedge", price=price,
+                    shares=shares, level=level, depth_ahead=depth, levels_ahead=levels)
+
+
+async def rest(executor: ex.PaperExecutor, *orders: NewOrder, at: float) -> list[int]:
+    """Rest orders written at ``at``: they rest from the second after it."""
+    asks = {o.token_id: 0.99 for o in orders if o.order_side == "BUY"}
+    bids = {o.token_id: 0.01 for o in orders if o.order_side == "SELL"}
+    result = await executor.requote(orders, best_asks=asks, best_bids=bids, now=at)
+    assert all(i is not None for i in result.ids), result.held_back
+    return [int(i) for i in result.ids if i is not None]
 
 
 async def order_row(order_id: int) -> dict:
@@ -177,6 +190,14 @@ async def order_count() -> int:
     return int(row["n"])
 
 
+def _queued(order_id: int, price: float, *, shares: float = 20.0, depth: float = 0.0,
+            side: str = "Up", flow_from: int = 0, flow_to: int = 100, levels=None,
+            **kw) -> ex.QueuedOrder:
+    return ex.QueuedOrder(order_id=order_id, side=side, price=price, shares=shares,
+                          flow_from=flow_from, flow_to=flow_to,
+                          levels=levels if levels is not None else ((price, depth),), **kw)
+
+
 # ---------------------------------------------------------------------------
 # Pure queue maths
 # ---------------------------------------------------------------------------
@@ -188,6 +209,9 @@ def test_queue_ahead_is_everything_at_our_price_or_better() -> None:
     assert ex.queue_ahead(levels, 0.46) == 0.0
     # Prices parsed from text land a hair off the grid; they still count at the level.
     assert ex.queue_ahead([(0.1 + 0.2, 3.0)], 0.30) == pytest.approx(3.0)
+    # For a sale, the asks at our price or lower are ahead of us.
+    asks = [(0.58, 3.0), (0.60, 2.0), (0.62, 50.0)]
+    assert ex.queue_ahead(asks, 0.60, "SELL") == pytest.approx(5.0)
 
 
 def test_each_record_sells_into_exactly_one_outcome_like_the_maker_rule() -> None:
@@ -207,34 +231,47 @@ def test_each_record_sells_into_exactly_one_outcome_like_the_maker_rule() -> Non
             ), (side, price)
 
 
-def _queued(order_id: int, price: float, *, shares: float = 20.0, depth: float = 0.0,
-            side: str = "Up", flow_from: int = 0, flow_to: int = 100, **kw) -> ex.QueuedBid:
-    return ex.QueuedBid(order_id=order_id, side=side, price=price, shares=shares,
-                        depth_ahead=depth, flow_from=flow_from, flow_to=flow_to, **kw)
-
-
-def test_one_record_fills_our_rungs_top_down_and_never_beyond_its_size() -> None:
+def test_one_record_fills_our_child_orders_top_down_and_never_beyond_its_size() -> None:
     high, low = _queued(1, 0.45, depth=10.0), _queued(2, 0.40, depth=25.0)
     flows = ex.allocate_fills([ex.TapePrint(10, "Up", "SELL", 50.0, 0.39)], [low, high])
-    # The high rung works through its 10-share queue, then takes its 20.
+    # The higher price level works through its 10-share queue, then takes its 20.
     assert (flows[1].filled, flows[1].crossed, flows[1].fill_ts) == (20.0, 50.0, 10)
-    # The low rung sees only the 30 left: 25 of queue, then 5 for us.
+    # The lower one sees only the 30 left: 25 of queue, then 5 for us.
     assert (flows[2].filled, flows[2].crossed, flows[2].fill_ts) == (5.0, 30.0, 10)
     assert flows[1].filled + flows[2].filled <= 50.0
+    assert flows[2].levels == ((0.40, 0.0),)
 
     flows = ex.allocate_fills([ex.TapePrint(10, "Up", "SELL", 25.0, 0.39)],
                               [_queued(1, 0.45), _queued(2, 0.40)])
     assert (flows[1].filled, flows[2].filled) == (20.0, 5.0)
 
 
-def test_a_record_above_a_rung_reaches_only_the_rungs_it_crossed() -> None:
+def test_a_record_above_a_price_level_reaches_only_the_orders_it_crossed() -> None:
     flows = ex.allocate_fills([ex.TapePrint(10, "Up", "SELL", 50.0, 0.43)],
                               [_queued(1, 0.45), _queued(2, 0.40)])
     assert (flows[1].filled, flows[2].filled, flows[2].crossed) == (20.0, 0.0, 0.0)
 
 
+def test_trades_above_our_price_use_up_the_levels_above_us_level_by_level() -> None:
+    # Book: 500 bid at 0.45, 300 at 0.44, 100 at 0.40. Our bid: 10 at 0.40.
+    order = _queued(1, 0.40, shares=10.0,
+                    levels=((0.45, 500.0), (0.44, 300.0), (0.40, 100.0)))
+    tape = [ex.TapePrint(10, "Up", "SELL", 500.0, 0.45),
+            ex.TapePrint(11, "Up", "SELL", 300.0, 0.44),
+            ex.TapePrint(12, "Up", "SELL", 250.0, 0.40)]
+    flows = ex.allocate_fills(tape, [order])
+    # The first two use up the levels above us; the third works through the 100 at our
+    # price, and 10 of the 150 left are ours.
+    assert (flows[1].filled, flows[1].fill_ts, flows[1].crossed) == (10.0, 12, 250.0)
+    assert flows[1].levels == ((0.45, 0.0), (0.44, 0.0), (0.40, 0.0))
+    # A record between two levels uses up only the levels at its price or better.
+    flows = ex.allocate_fills([ex.TapePrint(10, "Up", "SELL", 700.0, 0.443)], [order])
+    assert (flows[1].filled, flows[1].levels) == (
+        0.0, ((0.45, 0.0), (0.44, 300.0), (0.40, 100.0)))
+
+
 def test_allocation_carries_on_from_what_was_read_before() -> None:
-    queued = _queued(1, 0.40, shares=10.0, depth=30.0, crossed=20.0)
+    queued = _queued(1, 0.40, shares=10.0, depth=10.0, crossed=20.0)  # 10 of 30 left ahead
     flows = ex.allocate_fills([ex.TapePrint(50, "Up", "SELL", 25.0, 0.40)], [queued])
     assert (flows[1].crossed, flows[1].filled, flows[1].added, flows[1].fill_ts) == (
         45.0, 10.0, 10.0, 50)
@@ -246,11 +283,11 @@ def test_allocation_carries_on_from_what_was_read_before() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rungs_fill_top_down_through_the_ledger(fade_db, venue) -> None:
+async def test_child_orders_fill_top_down_through_the_ledger(fade_db, venue) -> None:
     slug = await window()
     paper = ex.PaperExecutor(venue)
-    high, low = await rest(paper, bid(slug, price=0.45, shares=20, depth=10, rung=0),
-                           bid(slug, price=0.40, shares=20, depth=25, rung=1), at=START + 10)
+    high, low = await rest(paper, bid(slug, price=0.45, shares=20, depth=10, level=0),
+                           bid(slug, price=0.40, shares=20, depth=25, level=1), at=START + 10)
     venue.add(cid_of(), trade(START + 30, "Up", "SELL", 50.0, 0.39), nudge(START + 60))
 
     report = await paper.sync_fills(now=START + 120)
@@ -265,6 +302,74 @@ async def test_rungs_fill_top_down_through_the_ledger(fade_db, venue) -> None:
     assert bottom["flow_cursor_ts"] == START + 60  # the newest record's second is read next time
     # The tape is read with the browser user agent the venue needs.
     assert venue.calls[0][2]["User-Agent"].startswith("Mozilla/5.0")
+
+
+@pytest.mark.asyncio
+async def test_the_depth_ahead_is_kept_level_by_level_across_reads(fade_db, venue) -> None:
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    (order_id,) = await rest(paper, bid(slug, price=0.40, shares=10,
+                                        levels=((0.45, 500.0), (0.44, 300.0), (0.40, 100.0),
+                                                (0.39, 1000.0))), at=START + 10)
+    row = await order_row(order_id)
+    assert row["depth_ahead"] == 900.0  # the 0.39 level is behind us
+    venue.add(cid_of(), trade(START + 20, "Up", "SELL", 500.0, 0.45),
+              trade(START + 30, "Up", "SELL", 300.0, 0.44), nudge(START + 40))
+    first = await paper.sync_fills(now=START + 50)
+    assert first.fills == []
+    assert ledger.load_levels(await order_row(order_id)) == (
+        (0.45, 0.0), (0.44, 0.0), (0.40, 100.0))
+
+    venue.add(cid_of(), trade(START + 60, "Up", "SELL", 250.0, 0.40), nudge(START + 70))
+    second = await paper.sync_fills(now=START + 80)
+    assert [(f.shares, f.ts) for f in second.fills] == [(10.0, START + 60)]
+
+
+@pytest.mark.asyncio
+async def test_no_trade_from_before_an_order_was_written_can_fill_it(fade_db, venue) -> None:
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    (old,) = await rest(paper, bid(slug, price=0.54, shares=10), at=START + 9.5)
+    assert (await order_row(old))["placed_ts"] == START + 10
+    venue.add(cid_of(),
+              trade(START + 7, "Up", "SELL", 50.0, 0.45),  # before the write
+              trade(START + 9, "Up", "SELL", 50.0, 0.45),  # in the write's own second
+              nudge(START + 30))
+    await paper.sync_fills(now=START + 40)
+    assert (await order_row(old))["filled_shares"] == 0.0
+
+    # A cancel and its replacement written at START + 50: a trade in that second belongs to
+    # neither, one before it to the old order, one after it to the new one.
+    result = await paper.requote([bid(slug, price=0.53, shares=10)],
+                                 best_asks={up_of(): 0.99}, now=START + 50.4, cancel_ids=[old])
+    (new,) = result.ids
+    venue.add(cid_of(), trade(START + 49, "Up", "SELL", 3.0, 0.50),
+              trade(START + 50, "Up", "SELL", 4.0, 0.50),
+              trade(START + 51, "Up", "SELL", 5.0, 0.50), nudge(START + 60))
+    await paper.sync_fills(now=START + 70)
+    assert (await order_row(old))["filled_shares"] == 3.0
+    assert (await order_row(new))["filled_shares"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_the_executor_reads_its_clock_inside_the_write(fade_db, venue) -> None:
+    slug = await window()
+    now = [START + 5.0]
+    paper = ex.PaperExecutor(venue, clock=lambda: now[0])
+    real_place = ledger.place_orders
+
+    async def slow_place(*args, **kwargs):
+        now[0] = START + 42.6  # time passes before the write gets its lock
+        return await real_place(*args, **kwargs)
+
+    ledger.place_orders = slow_place  # type: ignore[assignment]
+    try:
+        result = await paper.requote([bid(slug)], best_asks={up_of(): 0.99})
+    finally:
+        ledger.place_orders = real_place  # type: ignore[assignment]
+    assert result.placed_ts == START + 43
+    assert await paper.cancel(result.ids, reason="stop") == 1
+    assert (await order_row(result.ids[0]))["cancelled_ts"] == START + 43  # rested no time
 
 
 @pytest.mark.asyncio
@@ -307,33 +412,238 @@ async def test_flow_stops_at_the_window_end(fade_db, venue) -> None:
     assert (row["cancelled_ts"], row["flow_cursor_ts"]) == (END, END)
 
 
+# ---------------------------------------------------------------------------
+# Sales of shares held (the hedge)
+# ---------------------------------------------------------------------------
+
+
+async def _holding(paper: ex.PaperExecutor, slug: str, *, shares: float = 10.0,
+                   price: float = 0.40) -> int:
+    """A buy of ``shares`` Up at ``price``, filled at START + 20, tape read to START + 30."""
+    (order_id,) = await rest(paper, bid(slug, price=price, shares=shares), at=START + 10)
+    venue_of = paper.bookkeeper._client  # the fake venue
+    venue_of.add(cid_of(), trade(START + 20, "Up", "SELL", shares, price), nudge(START + 30))
+    await paper.sync_fills(now=START + 40)
+    assert (await order_row(order_id))["state"] == "filled"
+    return order_id
+
+
 @pytest.mark.asyncio
-async def test_the_other_outcomes_buyers_fill_our_bids_without_double_counting(
+async def test_a_sale_fills_from_buyers_of_our_token_or_sellers_of_the_other(
     fade_db, venue
 ) -> None:
     slug = await window()
     paper = ex.PaperExecutor(venue)
-    entry, hedge = await rest(paper, bid(slug, "Up", price=0.40, shares=10),
-                              bid(slug, "Down", price=0.55, shares=10, kind="hedge"),
-                              at=START + 10)
+    await _holding(paper, slug)
+    # Sell 6 of the 10 Up at 0.60. Asks ahead of us: 3 at 0.58, 2 at 0.60 (0.62 is behind).
+    sale_id = await paper.place_sell(
+        sale(slug, price=0.60, shares=6.0, levels=((0.58, 3.0), (0.60, 2.0), (0.62, 50.0))),
+        best_bid=0.55, now=START + 50)
+    assert (await order_row(sale_id))["order_side"] == "SELL"
     venue.add(
         cid_of(),
-        trade(START + 20, "Down", "BUY", 6.0, 0.58),  # a sale of Up at 0.42: above our bid
-        trade(START + 21, "Down", "BUY", 7.0, 0.62),  # a sale of Up at 0.38: fills the entry
-        trade(START + 22, "Down", "SELL", 3.0, 0.55),  # a sale of Down at 0.55: the hedge
-        trade(START + 23, "Up", "BUY", 4.0, 0.44),  # a sale of Down at 0.56: above the hedge
-        trade(START + 24, "Up", "BUY", 5.0, 0.46),  # a sale of Down at 0.54: the hedge
-        trade(START + 25, "Up", "SELL", 2.0, 0.41),  # a sale of Up at 0.41: above the entry
-        nudge(START + 40),
+        trade(START + 60, "Up", "BUY", 2.0, 0.59),  # takes 2 of the 3 at 0.58, never us
+        trade(START + 61, "Down", "SELL", 4.0, 0.40),  # the mirror: Up bought at 0.60
+        trade(START + 62, "Up", "BUY", 10.0, 0.61),  # an Up buy through our price
+        trade(START + 63, "Up", "SELL", 5.0, 0.40),  # a sale of Up: never fills a sale
+        nudge(START + 80),
     )
 
-    await paper.sync_fills(now=START + 100)
+    report = await paper.sync_fills(now=START + 100)
 
-    up, down = await order_row(entry), await order_row(hedge)
-    assert (up["filled_shares"], up["crossed"], up["filled_ts"]) == (7.0, 7.0, START + 21)
-    assert (down["filled_shares"], down["crossed"], down["filled_ts"]) == (8.0, 8.0, START + 22)
-    positions = {p["side"]: p for p in await ledger.open_positions()}
-    assert positions["Down"]["hedge_shares"] == 8.0
+    # At START + 61: 1 left at 0.58, 2 at 0.60, then 1 for us. At START + 62: the other 5.
+    assert [(f.order_side, f.side, f.price, f.shares, f.ts) for f in report.fills] == [
+        ("SELL", "Up", 0.60, 6.0, START + 61)]
+    row = await order_row(sale_id)
+    assert (row["state"], row["filled_shares"], row["crossed"]) == ("filled", 6.0, 13.0)
+    (pos,) = await ledger.open_positions()
+    assert (pos["shares"], pos["sold_shares"], pos["proceeds_usd"]) == (
+        4.0, 6.0, pytest.approx(3.6))
+
+    venue.add(cid_of(), nudge(END + 30))
+    venue.resolve(cid_of(), winner_token=up_of(), up=up_of(), down=down_of())
+    await paper.sync_fills(now=END + 60)
+    (settled,) = (await paper.settle(now=END + 60)).settled
+    # 10 bought at 0.40, 6 sold at 0.60, the 4 kept pay $1.
+    assert settled.net_pnl == pytest.approx(4 * 1.0 + 6 * 0.60 - 10 * 0.40)
+    assert (settled.sold_shares, settled.sale_proceeds_usd) == (6.0, pytest.approx(3.6))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("winner", ["Up", "Down"])
+async def test_a_partly_filled_sale_settles_on_the_shares_it_sold(
+    fade_db, venue, winner: str
+) -> None:
+    # 10 Up bought at 0.40. A sale of 8 at 0.60 meets takers for 4 (2 buying Up at 0.60, 2
+    # selling Down at 0.40, the mirror) and rests unfilled to the close.
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    entry = await _holding(paper, slug, shares=10.0, price=0.40)
+    (sale_id,) = await rest(paper, sale(slug, price=0.60, shares=8.0), at=START + 50)
+    venue.add(cid_of(), trade(START + 60, "Up", "BUY", 2.0, 0.60),
+              trade(START + 70, "Down", "SELL", 2.0, 0.40), nudge(END + 30))
+    venue.resolve(cid_of(), winner_token=up_of() if winner == "Up" else down_of(),
+                  up=up_of(), down=down_of())
+
+    await paper.sync_fills(now=END + 60)
+    row = await order_row(sale_id)
+    assert (row["state"], row["filled_shares"]) == ("expired", 4.0)
+    (settled,) = (await paper.settle(now=END + 60)).settled
+
+    payout = 1.0 if winner == "Up" else 0.0
+    # The 6 kept pay out; the 4 sold brought in 0.60 each and no longer pay; the 10 cost 0.40.
+    assert settled.net_pnl == pytest.approx(6 * payout + 4 * 0.60 - 10 * 0.40)
+    assert (settled.filled_shares, settled.sold_shares) == (10.0, 4.0)
+    assert settled.sale_proceeds_usd == pytest.approx(2.4)
+    assert (await order_row(entry))["pnl"] == pytest.approx(10 * (payout - 0.40))
+    assert (await order_row(sale_id))["pnl"] == pytest.approx(4 * (0.60 - payout))
+    assert (await ledger.summary())["net_pnl_usd"] == pytest.approx(settled.net_pnl)
+
+
+@pytest.mark.asyncio
+async def test_a_sale_never_crosses_and_never_sells_more_than_is_held(fade_db, venue) -> None:
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    with pytest.raises(ex.PlacementRefused) as refused:
+        await paper.place_sell(sale(slug, price=0.60), best_bid=0.50, now=START + 5)
+    assert refused.value.reason == "not_held"
+    await _holding(paper, slug, shares=10.0)
+    for best_bid in (0.60, 0.61):
+        with pytest.raises(ex.PlacementRefused) as refused:
+            await paper.place_sell(sale(slug, price=0.60), best_bid=best_bid, now=START + 50)
+        assert refused.value.reason == "would_cross"
+    with pytest.raises(ex.PlacementRefused) as refused:
+        await paper.requote([sale(slug, price=0.60)], best_asks={up_of(): 0.99}, now=START + 50)
+    assert refused.value.reason == "no_bid"
+    with pytest.raises(ex.PlacementRefused) as refused:
+        await paper.place_bid(sale(slug), best_ask=0.99, now=START + 50)
+    assert refused.value.reason == "bad_order"
+    # An empty bid side cannot be crossed. Asking for 15 of the 10 held sells the 10.
+    sale_id = await paper.place_sell(sale(slug, price=0.60, shares=15.0), best_bid=None,
+                                     now=START + 50)
+    assert (await order_row(sale_id))["shares"] == 10.0
+    # Nothing left to offer.
+    with pytest.raises(ex.PlacementRefused) as refused:
+        await paper.place_sell(sale(slug, price=0.65, shares=5.0, level=1), best_bid=None,
+                               now=START + 55)
+    assert refused.value.reason == "not_held"
+
+
+@pytest.mark.asyncio
+async def test_buying_the_other_side_waits_but_the_cancels_go_through(fade_db, venue) -> None:
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    (up,) = await rest(paper, bid(slug, "Up", price=0.40), at=START + 10)
+    result = await paper.requote([bid(slug, "Down", price=0.55)],
+                                 best_asks={down_of(): 0.99}, now=START + 20, cancel_ids=[up])
+    assert result.ids == [None] and result.cancelled == 1
+    assert result.held_back[0][0] == ledger.OTHER_SIDE
+    assert (await order_row(up))["state"] == "cancelled"
+    # Once the cancelled Up bid's tape is read (it filled nothing), Down may be bought.
+    venue.add(cid_of(), nudge(START + 30))
+    await paper.sync_fills(now=START + 40)
+    assert (await paper.place_bid(bid(slug, "Down", price=0.55), best_ask=0.99,
+                                  now=START + 45)) is not None
+
+
+# ---------------------------------------------------------------------------
+# Bringing resting orders in line with the plan
+# ---------------------------------------------------------------------------
+
+
+def _row(order_id: int, price: float, shares: float, *, filled: float = 0.0,
+         placed: int = START, kind: str = "entry", slug: str = f"btc-updown-15m-{START}",
+         token: str = up_of()) -> dict:
+    return {"id": order_id, "window_slug": slug, "token_id": token, "kind": kind,
+            "price": price, "shares": shares, "filled_shares": filled, "placed_ts": placed}
+
+
+def test_an_unchanged_plan_keeps_every_order_and_places_nothing() -> None:
+    slug = f"btc-updown-15m-{START}"
+    wanted = [bid(slug, price=0.41, shares=45.0), bid(slug, price=0.39, shares=20.0, level=1)]
+    resting = [_row(1, 0.41, 45.0), _row(2, 0.39, 20.0)]
+    changes = ex.reconcile_orders(wanted, resting)
+    assert (changes.keep, changes.cancel, changes.place) == ((1, 2), (), ())
+    # A partly filled order is judged by what is left of it.
+    changes = ex.reconcile_orders([bid(slug, price=0.41, shares=30.0)],
+                                  [_row(1, 0.41, 45.0, filled=15.0)])
+    assert (changes.keep, changes.cancel, changes.place) == ((1,), (), ())
+
+
+def test_more_shares_add_a_child_order_for_the_difference_only() -> None:
+    slug = f"btc-updown-15m-{START}"
+    changes = ex.reconcile_orders([bid(slug, price=0.41, shares=52.37)], [_row(1, 0.41, 45.0)])
+    assert (changes.keep, changes.cancel) == ((1,), ())
+    (added,) = changes.place
+    assert (added.price, added.shares) == (0.41, 7.37)
+    # A difference under the venue's minimum order is not placed; the order keeps its place.
+    changes = ex.reconcile_orders([bid(slug, price=0.41, shares=45.07)], [_row(1, 0.41, 45.0)])
+    assert (changes.keep, changes.cancel, changes.place) == ((1,), (), ())
+
+
+def test_fewer_shares_cancel_the_newest_orders_and_add_back_what_is_still_wanted() -> None:
+    slug = f"btc-updown-15m-{START}"
+    resting = [_row(3, 0.41, 5.0, placed=START + 120), _row(1, 0.41, 30.0, placed=START),
+               _row(2, 0.41, 15.0, placed=START + 60)]
+    changes = ex.reconcile_orders([bid(slug, price=0.41, shares=36.0)], resting)
+    # Oldest first while they fit: 30, then 15 does not fit, then 5 does.
+    assert (changes.keep, changes.cancel, changes.place) == ((1, 3), (2,), ())
+    changes = ex.reconcile_orders([bid(slug, price=0.41, shares=44.0)], resting[1:])
+    assert (changes.keep, changes.cancel) == ((1,), (2,))
+    (added,) = changes.place
+    assert added.shares == 14.0
+    # The venue cannot shrink an order: a cut inside the only order cancels it and adds back
+    # the part still wanted, at the back of the queue.
+    changes = ex.reconcile_orders([bid(slug, price=0.41, shares=44.93)], [_row(1, 0.41, 45.0)])
+    assert (changes.keep, changes.cancel) == ((), (1,))
+    assert [o.shares for o in changes.place] == [44.93]
+
+
+def test_prices_the_plan_no_longer_wants_are_cancelled() -> None:
+    slug = f"btc-updown-15m-{START}"
+    resting = [_row(1, 0.41, 45.0), _row(2, 0.40, 10.0),
+               _row(3, 0.60, 5.0, kind="hedge")]
+    wanted = [bid(slug, price=0.41, shares=45.0), bid(slug, price=0.39, shares=10.0, level=1)]
+    changes = ex.reconcile_orders(wanted, resting)
+    assert (changes.keep, sorted(changes.cancel)) == ((1,), [2, 3])
+    assert [(o.price, o.shares) for o in changes.place] == [(0.39, 10.0)]
+    # Same price, different kind: a sale at 0.41 is not a buy at 0.41.
+    changes = ex.reconcile_orders([sale(slug, price=0.41, shares=45.0)], [_row(1, 0.41, 45.0)])
+    assert changes.cancel == (1,) and changes.place[0].kind == "hedge"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_keeps_an_orders_place_in_the_queue(fade_db, venue) -> None:
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    (first,) = await rest(paper, bid(slug, price=0.40, shares=10, depth=30), at=START + 10)
+    venue.add(cid_of(), trade(START + 20, "Up", "SELL", 25.0, 0.40), nudge(START + 30))
+    await paper.sync_fills(now=START + 40)
+
+    # The plan grows from 10 to 17: the first order stays (5 still ahead of it), and a new
+    # child order of 7 joins the back of the queue.
+    wanted = [bid(slug, price=0.40, shares=17, depth=40)]
+    done = await paper.reconcile(wanted, await ledger.open_orders(),
+                                 best_asks={up_of(): 0.45}, now=START + 50)
+    assert (done.changes.keep, done.changes.cancel) == ((first,), ())
+    (added,) = done.result.ids
+    assert (await order_row(added))["shares"] == 7.0
+    # The same plan again changes nothing and writes nothing.
+    again = await paper.reconcile(wanted, await ledger.open_orders(),
+                                  best_asks={up_of(): 0.45}, now=START + 60)
+    assert again.result.ids == [] and set(again.changes.keep) == {first, added}
+    assert await order_count() == 2
+
+    venue.add(cid_of(), trade(START + 70, "Up", "SELL", 20.0, 0.40), nudge(START + 80))
+    report = await paper.sync_fills(now=START + 90)
+    # The kept order fills first from its place: 5 of queue, then its 10; the new one's
+    # queue of 40 is still ahead of it.
+    assert [(f.order_id, f.shares) for f in report.fills] == [(first, 10.0)]
+
+
+# ---------------------------------------------------------------------------
+# How far the tape is trusted
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -360,9 +670,7 @@ async def test_the_queue_ahead_trades_first_across_passes(fade_db, venue) -> Non
 
 
 @pytest.mark.asyncio
-async def test_the_newest_second_waits_and_a_quiet_tape_moves_on_after_the_lag(
-    fade_db, venue
-) -> None:
+async def test_the_newest_second_waits_for_a_newer_record(fade_db, venue) -> None:
     slug = await window()
     paper = ex.PaperExecutor(venue)
     (order_id,) = await rest(paper, bid(slug, price=0.40, shares=10), at=START + 10)
@@ -379,11 +687,85 @@ async def test_the_newest_second_waits_and_a_quiet_tape_moves_on_after_the_lag(
     assert (row["filled_shares"], row["filled_ts"], row["flow_cursor_ts"]) == (
         5.0, START + 30, START + 50)
 
-    # With no newer record, the tape is trusted only once the lag allowance has passed.
-    await paper.sync_fills(now=START + 50 + LAG - 1)
-    assert (await order_row(order_id))["flow_cursor_ts"] == START + 50
-    await paper.sync_fills(now=START + 400 + LAG)
-    assert (await order_row(order_id))["flow_cursor_ts"] == START + 400
+
+@pytest.mark.asyncio
+async def test_the_clock_alone_never_vouches_for_a_quiet_or_stale_tape(fade_db, venue) -> None:
+    slug = await window()
+    keeper = ex.PaperBookkeeper(venue)
+    paper = ex.PaperExecutor(venue, bookkeeper=keeper)
+    (order_id,) = await rest(paper, bid(slug, price=0.40, shares=10), at=START + 10)
+    # The copy of the tape stops at START + 200 (it may be quiet, or the indexer may be
+    # running behind: nothing tells the two apart).
+    venue.add(cid_of(), nudge(START + 200))
+    venue.resolve(cid_of(), winner_token=up_of(), up=up_of(), down=down_of())
+
+    await paper.sync_fills(now=END + LAG)
+    assert (await order_row(order_id))["flow_cursor_ts"] == START + 200
+    waiting = await paper.settle(now=END + LAG)
+    assert (waiting.settled, waiting.waiting_tape, waiting.forced) == ([], 1, [])
+
+    # The delayed record turns up: it is still read.
+    venue.add(cid_of(), trade(END - 60, "Up", "SELL", 50.0, 0.38), nudge(END - 1))
+    report = await paper.sync_fills(now=END + LAG + 100)
+    assert [(f.shares, f.ts) for f in report.fills] == [(10.0, END - 60)]
+
+    # With no newer record at all, the window settles after the force delay, and says so.
+    other = await window("eth")
+    (quiet,) = await rest(paper, bid(other, price=0.40, shares=10), at=START + 10)
+    venue.add(cid_of("eth"), nudge(START + 200, asset="eth"))
+    venue.resolve(cid_of("eth"), winner_token=up_of("eth"), up=up_of("eth"),
+                  down=down_of("eth"))
+    await paper.sync_fills(now=END + keeper.force_settle_after_s)
+    forced = await paper.settle(now=END + keeper.force_settle_after_s)
+    assert forced.forced == [other]
+    assert "could not be read in full" in " ".join(forced.errors)
+    # btc's record at END - 1 vouched for eth's tape up to it; its last second never was.
+    assert (await order_row(quiet))["flow_cursor_ts"] == END - 1
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_tape_is_vouched_for_by_a_newer_record_elsewhere(fade_db, venue) -> None:
+    btc = await window("btc")
+    nxt = START + 900
+    eth = await window("eth", nxt)
+    paper = ex.PaperExecutor(venue)
+    (quiet,) = await rest(paper, bid(btc, price=0.40, shares=10), at=START + 10)
+    (busy,) = await rest(paper, bid(eth, price=0.40, shares=10), at=nxt + 10)
+    venue.add(cid_of("btc"), nudge(START + 200))
+    venue.add(cid_of("eth", nxt), nudge(nxt + 800, asset="eth", start=nxt))
+
+    # Before the eth record is read, nothing vouches for btc's quiet stretch.
+    await paper.sync_fills(now=START + 300)
+    assert (await order_row(quiet))["flow_cursor_ts"] == START + 200
+    # END + LAG - 1: the eth tape is newer, but the last second is not yet LAG old.
+    await paper.sync_fills(now=END + LAG - 1)
+    assert (await order_row(quiet))["flow_cursor_ts"] == END - 1
+    # END + LAG: old enough, and the eth tape holds a record newer than it.
+    await paper.sync_fills(now=END + LAG)
+    assert (await order_row(quiet))["flow_cursor_ts"] == END
+    assert (await order_row(busy))["flow_cursor_ts"] == nxt + 800
+
+
+@pytest.mark.asyncio
+async def test_the_newest_windows_tape_is_read_when_nothing_else_can_vouch(
+    fade_db, venue
+) -> None:
+    btc = await window("btc")
+    nxt = START + 900
+    await window("eth", nxt)  # no orders there, but it is trading
+    paper = ex.PaperExecutor(venue)
+    (quiet,) = await rest(paper, bid(btc, price=0.40, shares=10), at=START + 10)
+    venue.add(cid_of("btc"), nudge(START + 200))
+    venue.add(cid_of("eth", nxt), nudge(END + 500, asset="eth", start=nxt))
+
+    await paper.sync_fills(now=END + LAG + 10)
+
+    assert (await order_row(quiet))["flow_cursor_ts"] == END
+    (probe,) = venue.tape_calls(cid_of("eth", nxt))
+    assert int(probe["limit"]) == ex.FRESHNESS_PAGE
+    # Nothing to vouch for: no extra read.
+    await paper.sync_fills(now=END + LAG + 20)
+    assert len(venue.tape_calls(cid_of("eth", nxt))) == 1
 
 
 @pytest.mark.asyncio
@@ -435,8 +817,9 @@ async def test_long_tapes_are_paged_with_overlap_and_counted_once(fade_db, venue
     offsets = [int(p["offset"]) for p in venue.tape_calls()]
     assert offsets == [0, ex.TAPE_PAGE - ex.TAPE_PAGE_OVERLAP,
                        2 * (ex.TAPE_PAGE - ex.TAPE_PAGE_OVERLAP)]
-    # Every record once, except the newest second's two, which wait for the next read.
-    assert (await order_row(order_id))["filled_shares"] == 1198.0
+    # Every record once, except the two from the write's own second (before the order rested)
+    # and the newest second's two, which wait for the next read.
+    assert (await order_row(order_id))["filled_shares"] == 1196.0
 
 
 @pytest.mark.asyncio
@@ -542,7 +925,7 @@ async def test_unreadable_records_are_left_out_and_said_so(fade_db, venue) -> No
 
 
 # ---------------------------------------------------------------------------
-# Placing: resting bids only
+# Placing: passive orders only
 # ---------------------------------------------------------------------------
 
 
@@ -562,8 +945,8 @@ async def test_a_bid_at_or_above_the_ask_is_refused_and_nothing_is_written(
     (resting,) = await rest(paper, bid(slug, price=0.30), at=START + 5)
     with pytest.raises(ex.PlacementRefused):
         await paper.requote(
-            [bid(slug, price=0.35, rung=1), bid(slug, "Down", price=0.61, kind="hedge")],
-            best_asks={up_of(): 0.41, down_of(): 0.60}, now=START + 10, cancel_ids=[resting],
+            [bid(slug, price=0.35, level=1), bid(slug, price=0.42, level=2)],
+            best_asks={up_of(): 0.41}, now=START + 10, cancel_ids=[resting],
         )
     assert await order_count() == 1
     assert (await order_row(resting))["state"] == "resting"
@@ -581,12 +964,12 @@ async def test_a_bid_below_the_ask_rests_and_an_empty_ask_side_cannot_be_crossed
     slug = await window()
     paper = ex.PaperExecutor(venue)
     first = await paper.place_bid(bid(slug, price=0.40), best_ask=0.41, now=START + 10)
-    second = await paper.place_bid(bid(slug, "Down", price=0.55, kind="hedge"), best_ask=None,
+    second = await paper.place_bid(bid(slug, price=0.35, level=1), best_ask=None,
                                    now=START + 10)
     assert first is not None and second is not None
     rows = [await order_row(first), await order_row(second)]
-    assert [(r["state"], r["mode"], r["placed_ts"]) for r in rows] == [
-        ("resting", "paper", START + 10)] * 2
+    assert [(r["state"], r["mode"], r["placed_ts"], r["order_side"]) for r in rows] == [
+        ("resting", "paper", START + 11, "BUY")] * 2
 
 
 @pytest.mark.asyncio
@@ -608,7 +991,7 @@ async def test_the_ledgers_refusals_come_back_as_placement_refused(fade_db, venu
                        kind="entry", price=0.40, shares=10)
     wrong_token = NewOrder(window_slug=slug, token_id=down_of(), side="Up", kind="entry",
                            price=0.40, shares=10)
-    cases = [([unknown], START + 10), ([bid(slug, price=0.40)], END),
+    cases = [([unknown], START + 10), ([bid(slug, price=0.40)], END - 1),
              ([wrong_token], START + 10)]
     for orders, at in cases:
         with pytest.raises(ex.PlacementRefused) as refused:
@@ -621,7 +1004,7 @@ async def test_the_ledgers_refusals_come_back_as_placement_refused(fade_db, venu
 
 
 @pytest.mark.asyncio
-async def test_the_kill_switch_stops_new_bids_at_the_executor_too(
+async def test_the_kill_switch_stops_new_orders_at_the_executor_too(
     fade_db, venue, tmp_path: Path
 ) -> None:
     slug = await window()
@@ -642,11 +1025,9 @@ async def test_the_kill_switch_stops_new_bids_at_the_executor_too(
 async def test_traded_and_untraded_windows_both_settle_fee_free(fade_db, venue) -> None:
     btc, eth = await window("btc"), await window("eth")
     paper = ex.PaperExecutor(venue)
-    entry, hedge = await rest(paper, bid(btc, "Up", price=0.40, shares=10),
-                              bid(btc, "Down", price=0.55, shares=5, kind="hedge"),
-                              at=START + 10)
-    venue.add(cid_of(), trade(START + 20, "Up", "SELL", 10.0, 0.40),
-              trade(START + 30, "Down", "SELL", 5.0, 0.55), nudge(END + 30))
+    entry = await _holding(paper, btc, shares=10.0, price=0.40)
+    (hedge,) = await rest(paper, sale(btc, price=0.55, shares=5), at=START + 50)
+    venue.add(cid_of(), trade(START + 60, "Up", "BUY", 5.0, 0.55), nudge(END + 30))
     venue.resolve(cid_of(), winner_token=up_of(), up=up_of(), down=down_of())
     venue.resolve(cid_of("eth"), winner_token=down_of("eth"), up=up_of("eth"),
                   down=down_of("eth"))
@@ -657,14 +1038,15 @@ async def test_traded_and_untraded_windows_both_settle_fee_free(fade_db, venue) 
     assert report.errors == [] and report.forced == []
     by_slug = {s.window_slug: s for s in report.settled}
     assert set(by_slug) == {btc, eth}
-    # Resting fills pay no fee: 10 x (1 - 0.40) won, 5 x 0.55 lost.
-    assert by_slug[btc].net_pnl == pytest.approx(10 * 0.60 - 5 * 0.55)
+    # Passive fills pay no fee: 10 bought at 0.40, 5 sold at 0.55, the 5 kept won $1 each.
+    assert by_slug[btc].net_pnl == pytest.approx(5 * 1.0 + 5 * 0.55 - 10 * 0.40)
     assert (by_slug[btc].outcome, by_slug[btc].orders) == ("Up", 2)
     assert (by_slug[eth].outcome, by_slug[eth].orders, by_slug[eth].net_pnl) == ("Down", 0, 0.0)
-    assert ((await ledger.get_window(eth))["outcome"], (await order_row(entry))["won"],
-            (await order_row(hedge))["won"]) == ("Down", 1, 0)
+    assert ((await ledger.get_window(eth))["outcome"], (await order_row(entry))["pnl"],
+            (await order_row(hedge))["pnl"]) == (
+        "Down", pytest.approx(6.0), pytest.approx(5 * (0.55 - 1.0)))
     assert await ledger.settlement_due(END + 60) == []
-    assert (await ledger.summary())["net_pnl_usd"] == pytest.approx(3.25)
+    assert (await ledger.summary())["net_pnl_usd"] == pytest.approx(3.75)
 
     # Settling again does nothing.
     assert (await paper.settle(now=END + 120)).settled == []
@@ -815,7 +1197,7 @@ async def test_live_mode_places_nothing_but_keeps_settling_paper(fade_db, venue)
     slug = await window()
     paper = ex.PaperExecutor(venue)
     entry, spare = await rest(paper, bid(slug, price=0.40, shares=10),
-                              bid(slug, price=0.35, shares=10, rung=1), at=START + 10)
+                              bid(slug, price=0.35, shares=10, level=1), at=START + 10)
     venue.add(cid_of(), trade(START + 20, "Up", "SELL", 10.0, 0.40), nudge(START + 30))
     await paper.sync_fills(now=START + 40)
     await _db.set_config(ex.MODE_KEY, "live")

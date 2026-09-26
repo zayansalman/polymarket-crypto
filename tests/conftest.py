@@ -111,6 +111,9 @@ def _no_fade_1h_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     Its loop reads the venue and writes its ledger every pass. The app imports
     ``run_forever`` inside the lifespan, so patching the module attribute is
     enough. Tests of the runner keep the real one (``real_run_forever``).
+    Every test also starts from a fresh card state, so a runner test that
+    leaves an error in the module-level status never shows up on a later
+    test's page.
     """
     from polymarket_bot.fade_1h_momentum_15m import runner as _fade_runner
 
@@ -121,4 +124,6 @@ def _no_fade_1h_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_fade_runner, "real_run_forever", _fade_runner.run_forever,
                         raising=False)
     monkeypatch.setattr(_fade_runner, "run_forever", _idle)
+    monkeypatch.setattr(_fade_runner, "_STATUS",
+                        {"state": "not_started", "last_pass_ts": None, "last_error": None})
 

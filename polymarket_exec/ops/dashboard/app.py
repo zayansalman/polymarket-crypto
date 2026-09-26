@@ -160,11 +160,12 @@ async def _lifespan(app: FastAPI):
     marketdata_task = asyncio.create_task(market_data.run(marketdata_stop_event))
     _marketdata_hub.set_current(market_data)
 
-    # Fade 1h Momentum on 15m: paper resting bids on the BTC/ETH/SOL/XRP 15m
-    # Up/Down windows, read from the hub above — so it starts after the hub is
-    # current. Paper only: it has no live order path. It settles and checks
-    # fills every pass whatever its switch says, and records every coin's
-    # inputs; it places no bids until its model is plugged in.
+    # Fade 1h Momentum on 15m: scaled passive limit orders on paper on the
+    # BTC/ETH/SOL/XRP 15m Up/Down windows, read from the hub above — so it
+    # starts after the hub is current. Paper only: it has no live order path.
+    # It settles and checks fills every pass whatever its switch says, records
+    # every coin's inputs, and rests child orders only where the maths says
+    # they pay.
     from polymarket_bot.fade_1h_momentum_15m.runner import run_forever as _run_fade
 
     fade_stop_event = asyncio.Event()

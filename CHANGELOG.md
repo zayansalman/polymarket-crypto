@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — Fade 1h Momentum on 15m runs as a paper strategy (2026-09-26)
+
+A new paper strategy for the BTC, ETH, SOL and XRP 15-minute Up/Down windows,
+switch `fade_1h_momentum_15m` on MY STRATEGIES. Paper only: there is no live
+order path, and with LIVE selected it places nothing and says so on its card.
+
+- Added: `polymarket_bot/fade_1h_momentum_15m/` (live inputs from the market
+  data hub, a standard-library port of the research model for the TWAP-60s
+  settlement, the sizing and decision maths, the paper executor and ledger, the
+  live learner and the runner), the `fade_windows`, `fade_decisions`,
+  `fade_orders` and `fade_dials` tables, the "Fade 1h Momentum on 15m" group of
+  settings, and the FADE 1H MOMENTUM ON 15M card.
+- Orders are scaled passive limit orders: a parent order split into child
+  orders resting at price levels at or under the best bid (a sale: at or over
+  the best ask), never crossing the spread. Side, prices and sizes come out of
+  the expected log growth of the bankroll, over both sides; each is zero when
+  it does not pay. A losing position is cut by a resting sell of the shares
+  held, never by buying the other side.
+- Paper fills follow the real trade tape through the depth ahead of each order,
+  price level by price level, with partial fills; orders keep their place in
+  the queue across passes. Windows settle from the venue.
+- The dials learn from every settled window, with the research fit of the
+  price process held as a fixed prior.
+- The FEEDS card now names the strategy as the user of the Chainlink,
+  Chainlink TWAP-60s and Binance price streams (was "none yet").
+- `runtime_knobs.get` treats a stored choice a knob no longer offers as unset,
+  so the default applies and the Settings page shows what the code reads.
+- Standard terms throughout: code, tables, settings, the card and docs say
+  child orders, price levels and depth ahead.
+- `tools/venue_recorder.py`: the guessed market window is stored as
+  `window_guess` and `window_evidence` (no archive existed to migrate).
+- Maths: `tasks/2026-09-22-fade-1h-sizing.md`. Living doc:
+  `docs/strategies/fade_1h_momentum_15m.md`.
+- Not done: no job deletes old `fade_decisions` rows (one row per coin a
+  minute, so the table keeps growing). Deleting recorded data is the
+  operator's call.
+
 ## Unreleased — Remove the strategy group split (2026-09-21)
 
 The group field existed only to move copy-trade switches onto their own card.

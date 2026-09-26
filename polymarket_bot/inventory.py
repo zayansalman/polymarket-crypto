@@ -110,17 +110,19 @@ FAMILIES: tuple[Family, ...] = (
         path="polymarket_bot/fade_1h_momentum_15m/",
         what=(
             "Every minute, prices each of BTC, ETH, SOL and XRP's 15m Up/Down "
-            "window with the model (the chance it settles Up on the TWAP-60s "
-            "print at the close), follows the market as far as the settled "
-            "windows say, and rests a ladder of paper bids under the ask where "
-            "that pays, sized by Kelly across the four coins together. It "
-            "hedges a held position with a resting bid on the other side and "
-            "never crosses the spread. After each settled window the dials "
-            "move one step toward the result."
+            "window with the model (the chance it settles Up on the Chainlink "
+            "TWAP-60s print at the close) and follows the market as far as the "
+            "settled windows say. It prices a paper buy of each side and rests "
+            "the one that pays more, or nothing: passive limit orders at or "
+            "under the best bid, split across several prices and sized by "
+            "Kelly across the four coins together. A position the maths turns "
+            "against is cut by offering the shares held for sale. It never "
+            "holds both sides and never crosses the spread. After each settled "
+            "window the dials move one step toward the result."
         ),
         status=RUNNING,
         record=(
-            "Bids on paper since 2026-09-22 · starting dials fitted on the "
+            "Paper orders since 2026-09-22 · starting dials fitted on the "
             "Sep 17-20 tape, learning from every settled window"
         ),
         switch="fade_1h_momentum_15m",

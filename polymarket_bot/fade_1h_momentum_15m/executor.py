@@ -1,53 +1,71 @@
-"""Order execution for Fade 1h Momentum on 15m: paper resting bids, their fills, settlement.
+"""Order execution for Fade 1h Momentum on 15m: paper child orders, their fills, settlement.
 
-Paper and live share one pipeline: the strategy asks an :class:`Executor` to rest bids, cancel
-them, bring fills up to date and settle, and never branches on the mode anywhere else. Only
-the paper implementation exists. There is no live order path for this strategy: it is not
+Paper and live share one pipeline: the strategy asks an :class:`Executor` to rest orders,
+cancel them, bring fills up to date and settle, and never branches on the mode anywhere else.
+Only the paper implementation exists. There is no live order path for this strategy: it is not
 built, and live trading is not authorised for any market (AGENTS.md). :func:`choose_executor`
 reads the operator's requested mode each pass and hands back ``None`` for LIVE, with a plain
-message for the card, while fills and settlement of the paper bids already made keep running.
+message for the card, while fills and settlement of the paper orders already made keep
+running.
 
-Every order is a resting limit bid. Nothing crosses the spread: a bid at or above the ask is
-refused before anything is written, and there is no taker path (a hedge is a resting bid on the
-other side). Every fill is therefore a resting fill at our own price, with no fee.
+Every order is a passive limit order. Nothing crosses the spread: a buy at or above the best
+ask, or a sell at or below the best bid, is refused before anything is written, and there is
+no taker path. A parent order is split into child orders, one per price level; each is a row
+of its own. An entry buys one outcome's token. A hedge SELLS shares of that token already held
+(never more than are held and not already offered), so the strategy never holds both outcomes.
+Every fill is a passive fill at our own price, with no fee.
 
-How a paper bid fills
----------------------
+How a paper order fills
+-----------------------
 The authority is the venue's public trade tape (``data-api /trades?market=<id>&takerOnly=
 true``): one record per taker order. Checked live on 2026-09-22:
 
-- A taker order that sweeps several price levels is ONE record at its average price. So a
-  record at or below our bid has already eaten everything bid above us, and the queue in front
-  of a new bid is all the size resting at our price or better (:func:`queue_ahead`). A sweep
-  whose average stays above our bid is not counted even if its last shares reached it, so if
-  anything fills are under-counted.
+- A taker order that sweeps several price levels is ONE record at its average price.
 - The venue's book for one outcome already contains the mirror of the other (an Up bid at 0.14
   is also shown as a Down ask at 0.86). A taker BUYING the other outcome at q is therefore a
-  sale into our bids at 1 - q, and a taker SELLING our outcome at p is a sale at p (the rule of
-  ``polymarket_bot.maker.filler.crossed_volume``). Every record is a sale into the bids of
-  exactly one outcome, so one record can never fill both an entry and a hedge.
+  sale into our outcome's bids at 1 - q, and a taker SELLING our outcome at p is a sale at p
+  (the rule of ``polymarket_bot.maker.filler.crossed_volume``). Every record is a sale into the
+  bids of exactly one outcome. By the same mirror, our resting SELL of a token at s is a bid
+  for the other outcome at 1 - s: it fills when a taker buys our token at s or more, or sells
+  the other token at 1 - s or less.
 - The tape runs minutes behind (2-5 minutes seen, arriving in batches), and replies can come
   from copies at different points in time.
 
-So, for each order, the tape is read from where its last read stopped (its cursor, first its
+For each order the tape is read from where its last read stopped (its cursor, first its
 placement) up to when it stopped resting (its cancel, else its window end), and never past what
-the tape can vouch for (see "How far the tape is trusted" below). Volume that reaches the
-order's price first works through the queue that was in front of it when it was placed; only
-the volume after that is ours, up to the order's size. When several of our own bids rest on one
-outcome, a record reaches the highest bid first and a lower bid sees only what the higher ones
-did not take: our paper bids are not in the real book, so one record must not fill two of them
+the tape can vouch for (see "How far the tape is trusted" below).
+
+The depth ahead of an order is kept price level by price level: what was displayed at its
+price or better when it was placed (bids for a buy, asks for a sell). A record at price q
+first uses up the depth still displayed at q or better, best level first. Only a record that
+gets down to our price reaches our own level; what is left of it after the depth there is
+ours, up to the order's size. So trades above our price move us up the queue by using up the
+levels above us, and never fill us. When several of our own orders sit on one outcome's bids,
+a record reaches the highest first and a lower one sees only what the higher ones did not
+take: our paper orders are not in the real book, so one record must not fill two of them
 beyond its size (:func:`allocate_fills`). The fill is stamped with the time of the record that
 reached it, not the time we noticed.
+
+Time
+----
+An order rests from the second after it is written (``ledger.place_orders``), and a cancel stops
+it at the second it is written, so no trade already on the tape can fill an order that did not
+exist yet, and no trade is credited to both a cancelled order and its replacement. The executor
+reads its clock inside the ledger's write; pass ``now`` only to fix the time in a test.
 
 How far the tape is trusted
 ---------------------------
 The newest record in a reply marks how far that reply is complete: everything strictly older
-is assumed to be in it (the tape is indexed in time order). Where a market is quiet, anything
-older than ``max_tape_lag_s`` is assumed complete too. A read that fails, or whose pages
-shifted while being read, moves no cursor, so nothing is ever skipped; the next pass reads the
-same stretch again. Because the tape lags, a fill can come to light minutes after it happened,
-including for a bid already cancelled by a requote: callers sizing a new bid must allow for
-fills of recent bids that the tape has not shown yet.
+is assumed to be in it (the tape is indexed in time order). A market with no newer record may
+have had no trades, or its copy of the tape may be running behind; the clock alone never tells
+the two apart. So a stretch after a market's newest record is taken as complete only when it
+is at least ``max_tape_lag_s`` old AND some market's tape read in the same pass already holds a
+record at least that new (the indexer has got past it). When no market read has one, the
+newest window's market is read once for it. A read that fails, or whose pages shifted while
+being read, moves no cursor, so nothing is ever skipped; the next pass reads the same stretch
+again. Because the tape lags, a fill can come to light minutes after it happened, including for
+an order already cancelled: callers sizing a new order must allow for fills of recent orders
+that the tape has not shown yet.
 
 Settlement
 ----------
@@ -64,9 +82,10 @@ rest.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -81,6 +100,7 @@ from polymarket_bot.fade_1h_momentum_15m.ledger import (
     FlowUpdate,
     NewOrder,
     PendingFlow,
+    PlaceResult,
     Settlement,
 )
 from polymarket_bot.maker.quoter import UA as BROWSER_HEADERS
@@ -99,6 +119,8 @@ TAPE_PAGE = 500
 # thrown away rather than risk a gap.
 TAPE_PAGE_OVERLAP = 50
 TAPE_MAX_OFFSET = 5000
+# Records asked for when a market's tape is read only to see how far the tape has got.
+FRESHNESS_PAGE = 20
 DEFAULT_MAX_TAPE_LAG_S = 900
 DEFAULT_FORCE_SETTLE_AFTER_S = 3600
 DEFAULT_MAX_SETTLE_PER_PASS = 40
@@ -110,6 +132,9 @@ SETTLE_RETRY_MAX_S = 1800.0
 # Plain-English lists on the card name at most this many windows.
 MAX_SLUGS_NAMED = 3
 HTTP_TIMEOUT_S = 10.0
+# The venue takes sizes in hundredths of a share, and no order under 5 shares on these markets.
+SHARE_STEP = 0.01
+MIN_ORDER_SHARES = 5.0
 
 # Executor states, shown on the card.
 PAPER_STATE = "paper"
@@ -121,6 +146,8 @@ RESTART_REASON = "restart"
 _PRICE_EPS = 1e-9
 _SHARES_EPS = 1e-9
 
+Clock = Callable[[], float]
+
 
 # ---------------------------------------------------------------------------
 # Errors and reports
@@ -128,7 +155,7 @@ _SHARES_EPS = 1e-9
 
 
 class PlacementRefused(RuntimeError):
-    """A bid was not placed, and nothing was written. ``reason`` is a short code."""
+    """Orders were not placed, and nothing was written. ``reason`` is a short code."""
 
     def __init__(self, reason: str, message: str) -> None:
         super().__init__(message)
@@ -145,7 +172,8 @@ class MarketUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class FillEvent:
-    """Shares an order gained in one read."""
+    """Shares an order gained in one read. ``side`` is the order's outcome and ``price`` its
+    own price; ``order_side`` says whether shares were bought or sold."""
 
     order_id: int
     window_slug: str
@@ -154,6 +182,7 @@ class FillEvent:
     price: float
     shares: float
     ts: int
+    order_side: str = "BUY"
 
 
 @dataclass
@@ -185,6 +214,22 @@ class SettleReport:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class OrderChanges:
+    """What it takes to bring the resting child orders in line with the plan: the ids to
+    keep (with their place in the queue), the ids to cancel, and the child orders to add."""
+
+    keep: tuple[int, ...]
+    cancel: tuple[int, ...]
+    place: tuple[NewOrder, ...]
+
+
+@dataclass(frozen=True)
+class Reconciled:
+    changes: OrderChanges
+    result: PlaceResult
+
+
 # ---------------------------------------------------------------------------
 # The executor seam
 # ---------------------------------------------------------------------------
@@ -207,8 +252,9 @@ class HttpClient(Protocol):
 class Executor(Protocol):
     """Where the strategy's orders go. Paper is the only implementation.
 
-    Every method is safe to call on every pass. ``place_bid`` and ``requote`` only ever rest
-    bids, and refuse (``PlacementRefused``) a bid that would cross the ask.
+    Every method is safe to call on every pass. Orders only ever rest: ``place_bid``,
+    ``place_sell``, ``requote`` and ``reconcile`` refuse (``PlacementRefused``) a buy that would
+    meet the ask or a sell that would meet the bid.
     """
 
     mode: str
@@ -217,15 +263,31 @@ class Executor(Protocol):
         self, order: NewOrder, *, best_ask: float | None, now: float | None = None
     ) -> int | None: ...
 
+    async def place_sell(
+        self, order: NewOrder, *, best_bid: float | None, now: float | None = None
+    ) -> int | None: ...
+
     async def requote(
         self,
         orders: Sequence[NewOrder],
         *,
-        best_asks: Mapping[str, float | None],
+        best_asks: Mapping[str, float | None] | None = None,
+        best_bids: Mapping[str, float | None] | None = None,
         now: float | None = None,
         cancel_ids: Iterable[int] = (),
         cancel_reason: str = "requote",
-    ) -> list[int | None]: ...
+    ) -> PlaceResult: ...
+
+    async def reconcile(
+        self,
+        wanted: Sequence[NewOrder],
+        resting: Sequence[Mapping[str, Any]],
+        *,
+        best_asks: Mapping[str, float | None] | None = None,
+        best_bids: Mapping[str, float | None] | None = None,
+        now: float | None = None,
+        cancel_reason: str = "requote",
+    ) -> Reconciled: ...
 
     async def cancel(
         self, order_ids: Iterable[int], *, reason: str, now: float | None = None
@@ -241,10 +303,12 @@ class Executor(Protocol):
 # ---------------------------------------------------------------------------
 
 
-def queue_ahead(bid_levels: Iterable[tuple[float, float]], price: float) -> float:
-    """Shares resting at ``price`` or better on our outcome's bid side: the queue in front of a
-    new bid there. ``bid_levels`` are (price, size) pairs from that outcome's book."""
-    return sum(float(size) for px, size in bid_levels if float(px) >= price - _PRICE_EPS)
+def queue_ahead(levels: Iterable[tuple[float, float]], price: float,
+                order_side: str = "BUY") -> float:
+    """Displayed shares at ``price`` or better: the depth a new order there joins behind.
+    ``levels`` are (price, shares) pairs from the side it rests on (bids for a buy, asks for a
+    sell)."""
+    return sum(size for _, size in _ledger.ahead_of(order_side, price, levels))
 
 
 @dataclass(frozen=True)
@@ -269,85 +333,192 @@ class TapePrint:
 
 
 @dataclass(frozen=True)
-class QueuedBid:
-    """One resting bid as the fill allocation sees it.
+class QueuedOrder:
+    """One resting order as the fill allocation sees it, in the terms of the book it sits in.
 
-    ``crossed`` is the volume that has reached this bid's price since it was placed (after our
-    own higher bids took their fills) and ``filled`` its shares so far. The stretch of tape it
-    reads now is [flow_from, flow_to).
+    A buy of an outcome sits among that outcome's bids at its own price. A sell of an outcome
+    at s sits among the OTHER outcome's bids at 1 - s (the mirror). ``levels`` is the displayed
+    depth still ahead of it in those terms, best (highest) first, the last usually at its own
+    price. ``crossed`` is the volume that has reached its price level since it was placed and
+    ``filled`` its shares so far. The stretch of tape it reads now is [flow_from, flow_to).
     """
 
     order_id: int
     side: str
     price: float
     shares: float
-    depth_ahead: float
     flow_from: int
     flow_to: int
+    levels: tuple[tuple[float, float], ...] = ()
     crossed: float = 0.0
     filled: float = 0.0
     placed_ts: int = 0
 
 
 @dataclass(frozen=True)
-class BidFlow:
-    """Where one bid stands after a read. ``added`` shares came from this read, the first of
-    them at ``fill_ts``."""
+class OrderFlow:
+    """Where one order stands after a read. ``added`` shares came from this read, the first
+    of them at ``fill_ts``; ``levels`` is the depth still ahead (book terms)."""
 
     order_id: int
     crossed: float
     filled: float
     added: float
     fill_ts: int | None
+    levels: tuple[tuple[float, float], ...]
 
 
-def allocate_fills(prints: Sequence[TapePrint], bids: Sequence[QueuedBid]) -> dict[int, BidFlow]:
-    """Run the tape through our resting bids, oldest record first.
+def allocate_fills(prints: Sequence[TapePrint],
+                   orders: Sequence[QueuedOrder]) -> dict[int, OrderFlow]:
+    """Run the tape through our resting orders, oldest record first.
 
-    Each record sells into one outcome's bids. It reaches our highest bid on that outcome
-    first; whatever that bid takes is gone before the next one down sees it. A bid counts a
-    record only if the record's price for its outcome is at or below the bid, and only inside
-    the bid's own stretch of tape. The queue in front of a bid is worked through before any of
-    the volume is its own.
+    Each record sells into one outcome's bids at price q. For each of our orders there, best
+    price first: the record uses up the depth still displayed ahead of the order at q or
+    better, best level first. If q is at or below the order's price, what is left reaches its
+    level, works through the depth there, and the rest is the order's, up to its size; what it
+    takes is gone before our next order down sees the record. A record counts only inside an
+    order's own stretch of tape.
     """
-    crossed = {b.order_id: float(b.crossed) for b in bids}
-    filled = {b.order_id: float(b.filled) for b in bids}
+    levels = {o.order_id: [[float(px), float(size)] for px, size in o.levels] for o in orders}
+    crossed = {o.order_id: float(o.crossed) for o in orders}
+    filled = {o.order_id: float(o.filled) for o in orders}
     fill_ts: dict[int, int] = {}
-    ladders: dict[str, list[QueuedBid]] = {side: [] for side in SIDES}
-    for b in bids:
-        if b.side not in ladders:
-            raise ValueError(f"order {b.order_id}: side must be one of {SIDES}")
-        ladders[b.side].append(b)
-    for ladder in ladders.values():
-        ladder.sort(key=lambda b: (-b.price, b.placed_ts, b.order_id))
+    books: dict[str, list[QueuedOrder]] = {side: [] for side in SIDES}
+    for o in orders:
+        if o.side not in books:
+            raise ValueError(f"order {o.order_id}: side must be one of {SIDES}")
+        books[o.side].append(o)
+    for book in books.values():
+        book.sort(key=lambda o: (-o.price, o.placed_ts, o.order_id))
 
     for p in sorted(prints, key=lambda t: t.ts):
         outcome, px = p.hits()
         available = float(p.size)
-        for b in ladders.get(outcome, ()):
+        for o in books.get(outcome, ()):
             if available <= _SHARES_EPS:
                 break
-            if not b.flow_from <= p.ts < b.flow_to or px > b.price + _PRICE_EPS:
+            if not o.flow_from <= p.ts < o.flow_to:
                 continue
-            reached = crossed[b.order_id] + available
-            ours = min(float(b.shares), max(0.0, reached - float(b.depth_ahead)))
-            take = min(available, max(0.0, ours - filled[b.order_id]))
-            crossed[b.order_id] = reached
+            ahead = levels[o.order_id]
+            reach = available
+            # The levels above our price that the record traded at or through.
+            for level in ahead:
+                if level[0] <= o.price + _PRICE_EPS or level[0] < px - _PRICE_EPS:
+                    break
+                used = min(reach, level[1])
+                level[1] -= used
+                reach -= used
+            if px > o.price + _PRICE_EPS:
+                continue  # it never got down to our price
+            crossed[o.order_id] += reach
+            # The depth at our own price, then us.
+            for level in ahead:
+                if level[0] > o.price + _PRICE_EPS:
+                    continue
+                used = min(reach, level[1])
+                level[1] -= used
+                reach -= used
+            take = min(reach, max(0.0, float(o.shares) - filled[o.order_id]))
             if take > _SHARES_EPS:
-                filled[b.order_id] += take
-                fill_ts.setdefault(b.order_id, p.ts)
+                filled[o.order_id] += take
+                fill_ts.setdefault(o.order_id, p.ts)
                 available -= take
 
     return {
-        b.order_id: BidFlow(
-            order_id=b.order_id,
-            crossed=crossed[b.order_id],
-            filled=filled[b.order_id],
-            added=max(0.0, filled[b.order_id] - float(b.filled)),
-            fill_ts=fill_ts.get(b.order_id),
+        o.order_id: OrderFlow(
+            order_id=o.order_id,
+            crossed=crossed[o.order_id],
+            filled=filled[o.order_id],
+            added=max(0.0, filled[o.order_id] - float(o.filled)),
+            fill_ts=fill_ts.get(o.order_id),
+            levels=tuple((px, max(0.0, size)) for px, size in levels[o.order_id]),
         )
-        for b in bids
+        for o in orders
     }
+
+
+def _book_terms(order_side: str, side: str, price: float,
+                levels: Iterable[tuple[float, float]]) -> tuple[str, float, tuple]:
+    """An order's outcome, price and depth ahead in the terms of the bids it sits among."""
+    if order_side == "SELL":
+        return (_other(side), 1.0 - price,
+                tuple((1.0 - float(px), float(size)) for px, size in levels))
+    return side, price, tuple((float(px), float(size)) for px, size in levels)
+
+
+def _own_terms(order_side: str, levels: Iterable[tuple[float, float]]) -> tuple:
+    if order_side == "SELL":
+        return tuple((round(1.0 - px, 6), size) for px, size in levels)
+    return tuple((round(px, 6), size) for px, size in levels)
+
+
+def reconcile_orders(
+    wanted: Sequence[NewOrder],
+    resting: Sequence[Mapping[str, Any]],
+    *,
+    min_shares: float = MIN_ORDER_SHARES,
+    share_step: float = SHARE_STEP,
+) -> OrderChanges:
+    """Bring resting child orders in line with the plan, keeping every place in the queue the
+    plan allows (pure).
+
+    ``wanted``: the child orders the maths wants resting now, with their unfilled sizes.
+    ``resting``: ``ledger.open_orders()`` rows. Orders match on window, token, kind and price
+    (the same tick).
+
+    - A price the plan no longer wants: every resting order there is cancelled.
+    - A price it wants: the resting orders there are kept oldest first (they are furthest up
+      the queue) while their unfilled shares fit the plan's size; the rest are cancelled. If
+      the kept orders fall short, one new child order adds the difference, rounded down to
+      ``share_step``, unless that is under the venue's minimum order (``min_shares``).
+
+    The venue has no way to shrink an order in place, so a cut that lands inside one order
+    cancels that order and adds back the part still wanted as a new child order. No size or
+    price tolerance: an order is kept only when the plan wants at least its size at its price.
+    """
+    targets: dict[tuple, list[NewOrder]] = {}
+    for order in wanted:
+        targets.setdefault(_match_key(order.window_slug, order.token_id, order.kind,
+                                      order.price), []).append(order)
+    rows_at: dict[tuple, list[Mapping[str, Any]]] = {}
+    for row in resting:
+        key = _match_key(row["window_slug"], row["token_id"], row["kind"], row["price"])
+        rows_at.setdefault(key, []).append(row)
+
+    keep: list[int] = []
+    cancel: list[int] = []
+    kept_at: dict[tuple, float] = {}
+    for key, rows in rows_at.items():
+        want = sum(float(o.shares) for o in targets.get(key, ()))
+        kept = 0.0
+        for row in sorted(rows, key=lambda r: (int(r["placed_ts"]), int(r["id"]))):
+            left = max(0.0, float(row["shares"]) - float(row.get("filled_shares") or 0.0))
+            if kept + left <= want + _SHARES_EPS:
+                keep.append(int(row["id"]))
+                kept += left
+            else:
+                cancel.append(int(row["id"]))
+        kept_at[key] = kept
+
+    place: list[NewOrder] = []
+    for key, orders in targets.items():
+        want = sum(float(o.shares) for o in orders)
+        extra = _round_down(want - kept_at.get(key, 0.0), share_step)
+        if extra > _SHARES_EPS and extra >= min_shares - _SHARES_EPS:
+            place.append(dataclasses.replace(orders[0], shares=extra))
+    return OrderChanges(keep=tuple(keep), cancel=tuple(cancel), place=tuple(place))
+
+
+def _match_key(window_slug: Any, token_id: Any, kind: Any, price: Any) -> tuple:
+    return (str(window_slug), str(token_id), str(kind), round(float(price), 6))
+
+
+def _round_down(shares: float, step: float) -> float:
+    if shares <= 0:
+        return 0.0
+    if step <= 0:
+        return shares
+    return round(math.floor(shares / step + 1e-9) * step, 6)
 
 
 def _other(side: str) -> str:
@@ -558,24 +729,46 @@ async def market_outcome(
     return winners.pop() if winners else None
 
 
+async def tape_newest_ts(client: HttpClient, condition_id: str) -> int | None:
+    """The time of the newest taker record on a market's tape (None if it has none). Raises
+    ``TapeUnavailable`` if the tape cannot be read."""
+    try:
+        resp = await client.get(
+            f"{DATA_API}/trades",
+            params={"market": condition_id, "limit": FRESHNESS_PAGE, "offset": 0,
+                    "takerOnly": "true"},
+            headers=BROWSER_HEADERS, timeout=HTTP_TIMEOUT_S,
+        )
+        resp.raise_for_status()
+        feed = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        raise TapeUnavailable(f"could not read the trade tape ({_status(exc)})") from exc
+    if not isinstance(feed, list):
+        raise TapeUnavailable("the trade tape answered in an unexpected shape")
+    newest: int | None = None
+    for rec in feed:
+        key = _record_key(rec)
+        if key is None or not _same_market(rec, condition_id):
+            continue
+        newest = key[0] if newest is None else max(newest, key[0])
+    return newest
+
+
 # ---------------------------------------------------------------------------
 # Paper book-keeping: runs in every mode
 # ---------------------------------------------------------------------------
 
 
-def _now(now: float | None) -> float:
-    return time.time() if now is None else float(now)
-
-
 class PaperBookkeeper:
-    """Brings paper fills up to date and settles windows. Mode-independent: paper bids already
-    placed keep filling and settling whatever the operator selects, as the strategy switch's
-    contract requires ("off means open nothing new, never abandon").
+    """Brings paper fills up to date and settles windows. Mode-independent: paper orders
+    already placed keep filling and settling whatever the operator selects, as the strategy
+    switch's contract requires ("off means open nothing new, never abandon").
 
     Every cursor lives in the ledger, so a restart loses nothing. The only memory kept here is
     when each unsettled window's result was last looked up, so that the per-pass cap on
     lookups goes round every due window instead of being used up by the same old ones. Keep
     one bookkeeper for the life of the runner (pass it to :func:`choose_executor`).
+    ``clock`` gives the time whenever a call is not handed ``now``.
     """
 
     def __init__(
@@ -585,10 +778,12 @@ class PaperBookkeeper:
         max_tape_lag_s: float = DEFAULT_MAX_TAPE_LAG_S,
         force_settle_after_s: float = DEFAULT_FORCE_SETTLE_AFTER_S,
         max_settle_per_pass: int = DEFAULT_MAX_SETTLE_PER_PASS,
+        clock: Clock = time.time,
     ) -> None:
         if max_tape_lag_s < 0 or force_settle_after_s < 0 or max_settle_per_pass < 1:
             raise ValueError("tape lag and force delay must be >= 0, settle cap >= 1")
         self._client = client
+        self.clock = clock
         self.max_tape_lag_s = float(max_tape_lag_s)
         self.force_settle_after_s = float(force_settle_after_s)
         self.max_settle_per_pass = int(max_settle_per_pass)
@@ -596,17 +791,21 @@ class PaperBookkeeper:
         self._looked_up: dict[str, float] = {}
         self._failures: dict[str, int] = {}
 
+    def _time(self, now: float | None) -> float:
+        return float(self.clock()) if now is None else float(now)
+
     async def recover_after_restart(self, *, now: float | None = None) -> int:
-        """Stop every bid left resting by a previous run. Their tape up to now is still read
+        """Stop every order left resting by a previous run. Their tape up to now is still read
         (by ``sync_fills``), so fills made before the restart are kept."""
-        cancelled = await _ledger.cancel_all_open(ts=_now(now), reason=RESTART_REASON)
+        cancelled = await _ledger.cancel_all_open(
+            ts=self.clock if now is None else now, reason=RESTART_REASON)
         if cancelled:
             log.info("fade1h.restart_cancelled", orders=cancelled)
         return cancelled
 
     async def sync_fills(self, *, now: float | None = None) -> FillReport:
-        """Expire bids in ended windows, then read each market's tape and record fills."""
-        t = _now(now)
+        """Expire orders in ended windows, then read each market's tape and record fills."""
+        t = self._time(now)
         report = FillReport()
         report.expired = await _ledger.expire_due(t)
         rows = await _ledger.orders_needing_flow()
@@ -620,22 +819,35 @@ class PaperBookkeeper:
                     report.errors.append(message)
                 continue
             markets.setdefault(str(cid), []).append(row)
+
+        reads: dict[str, TapeRead] = {}
         for cid, group in markets.items():
             try:
-                await self._sync_market(cid, group, t, report)
+                reads[cid] = await self._read(cid, group, report)
             except Exception as exc:  # noqa: BLE001 - one market must not stop the others
-                slug = group[0]["window_slug"]
-                reason = (
-                    str(exc) if isinstance(exc, TapeUnavailable)
-                    else f"the fill check failed ({type(exc).__name__}: {exc})"
-                )
-                report.errors.append(f"{slug}: {reason}. Its fills are checked again next pass.")
-                log.warning("fade1h.fill_check_failed", window=slug, error=str(exc))
+                self._report_failure(group, exc, report)
+
+        clock = int(math.floor(t))
+        fresh = await self._freshness(reads, markets, clock)
+        for cid, tape in reads.items():
+            group = markets[cid]
+            try:
+                await self._apply(cid, group, tape, clock, fresh, report)
+            except Exception as exc:  # noqa: BLE001 - one market must not stop the others
+                self._report_failure(group, exc, report)
         return report
 
-    async def _sync_market(
-        self, cid: str, rows: list[dict], now: float, report: FillReport
-    ) -> None:
+    @staticmethod
+    def _report_failure(group: list[dict], exc: BaseException, report: FillReport) -> None:
+        slug = group[0]["window_slug"]
+        reason = (
+            str(exc) if isinstance(exc, TapeUnavailable)
+            else f"the fill check failed ({type(exc).__name__}: {exc})"
+        )
+        report.errors.append(f"{slug}: {reason}. Its fills are checked again next pass.")
+        log.warning("fade1h.fill_check_failed", window=slug, error=str(exc))
+
+    async def _read(self, cid: str, rows: list[dict], report: FillReport) -> TapeRead:
         first = rows[0]
         tape = await read_taker_tape(
             self._client, cid, since=min(int(r["flow_from"]) for r in rows),
@@ -649,50 +861,95 @@ class PaperBookkeeper:
             )
             log.warning("fade1h.tape_records_skipped", window=first["window_slug"],
                         skipped=tape.skipped)
-        clock = int(math.floor(now))
-        horizon = clock - int(self.max_tape_lag_s)
-        if tape.newest_ts is not None:
-            horizon = max(horizon, tape.newest_ts)
-        horizon = min(horizon, clock)
+        return tape
 
-        bids = [
-            QueuedBid(
-                order_id=int(r["id"]), side=str(r["side"]), price=float(r["price"]),
-                shares=float(r["shares"]), depth_ahead=float(r["depth_ahead"] or 0.0),
-                flow_from=int(r["flow_from"]), flow_to=min(horizon, int(r["flow_until"])),
-                crossed=float(r["crossed"] or 0.0), filled=float(r["filled_shares"] or 0.0),
-                placed_ts=int(r["placed_ts"]),
+    async def _freshness(self, reads: Mapping[str, TapeRead],
+                         markets: Mapping[str, list[dict]], clock: int) -> int | None:
+        """The newest record seen on any market's tape this pass: the indexer has got at least
+        that far. If some market needs the clock to vouch for a stretch past its own newest
+        record and nothing read is that new, the newest window's market is read for it."""
+        fresh = max((r.newest_ts for r in reads.values() if r.newest_ts is not None),
+                    default=None)
+        vouch = clock - int(self.max_tape_lag_s)
+        need: int | None = None
+        for cid, tape in reads.items():
+            rows = markets[cid]
+            target = min(vouch, max(int(r["flow_until"]) for r in rows))
+            covered = min(int(r["flow_from"]) for r in rows)
+            if tape.newest_ts is not None:
+                covered = max(covered, tape.newest_ts)
+            if target > covered:
+                need = target if need is None else max(need, target)
+        if need is None or (fresh is not None and fresh >= need):
+            return fresh
+        try:
+            market = await _ledger.latest_market(clock, exclude=reads)
+            probed = (
+                await tape_newest_ts(self._client, str(market["condition_id"]))
+                if market is not None else None
             )
-            for r in rows
-        ]
-        moving = [b for b in bids if b.flow_to > b.flow_from]
+        except Exception as exc:  # noqa: BLE001 - without it the stretch just waits
+            log.warning("fade1h.tape_freshness_unread", error=str(exc))
+            return fresh
+        if probed is None:
+            return fresh
+        return probed if fresh is None else max(fresh, probed)
+
+    async def _apply(self, cid: str, rows: list[dict], tape: TapeRead, clock: int,
+                     fresh: int | None, report: FillReport) -> None:
+        # Complete up to the newest record in this reply; beyond it only once the stretch is
+        # max_tape_lag_s old and some tape read this pass already holds a newer record.
+        reached = [tape.newest_ts] if tape.newest_ts is not None else []
+        if fresh is not None:
+            reached.append(min(clock - int(self.max_tape_lag_s), fresh))
+        if not reached:
+            return
+        horizon = min(max(reached), clock)
+
+        queued: list[QueuedOrder] = []
+        by_id: dict[int, dict] = {}
+        for r in rows:
+            order_side = str(r.get("order_side") or "BUY")
+            side, price, levels = _book_terms(order_side, str(r["side"]), float(r["price"]),
+                                              _ledger.load_levels(r))
+            by_id[int(r["id"])] = r
+            queued.append(QueuedOrder(
+                order_id=int(r["id"]), side=side, price=price, shares=float(r["shares"]),
+                flow_from=int(r["flow_from"]), flow_to=min(horizon, int(r["flow_until"])),
+                levels=levels, crossed=float(r["crossed"] or 0.0),
+                filled=float(r["filled_shares"] or 0.0), placed_ts=int(r["placed_ts"]),
+            ))
+        moving = [q for q in queued if q.flow_to > q.flow_from]
         if not moving:
             return
         flows = allocate_fills(tape.prints, moving)
-        updates = [
-            FlowUpdate(
-                order_id=b.order_id, cursor_ts=b.flow_to, crossed=flows[b.order_id].crossed,
-                add_shares=flows[b.order_id].added, fill_ts=flows[b.order_id].fill_ts,
-            )
-            for b in moving
-        ]
+        updates = []
+        for q in moving:
+            flow = flows[q.order_id]
+            order_side = str(by_id[q.order_id].get("order_side") or "BUY")
+            updates.append(FlowUpdate(
+                order_id=q.order_id, cursor_ts=q.flow_to, crossed=flow.crossed,
+                add_shares=flow.added, fill_ts=flow.fill_ts,
+                levels_ahead=_own_terms(order_side, flow.levels),
+            ))
         result = await _ledger.record_flow(updates)
         report.orders_updated += result.updated
-        by_id = {int(r["id"]): r for r in rows}
-        for b in moving:
-            flow = flows[b.order_id]
+        for q in moving:
+            flow = flows[q.order_id]
             if flow.added <= _SHARES_EPS or flow.fill_ts is None:
                 continue
-            row = by_id[b.order_id]
+            row = by_id[q.order_id]
             event = FillEvent(
-                order_id=b.order_id, window_slug=str(row["window_slug"]), side=b.side,
-                kind=str(row["kind"]), price=b.price, shares=flow.added, ts=flow.fill_ts,
+                order_id=q.order_id, window_slug=str(row["window_slug"]), side=str(row["side"]),
+                kind=str(row["kind"]), price=float(row["price"]), shares=flow.added,
+                ts=flow.fill_ts, order_side=str(row.get("order_side") or "BUY"),
             )
             report.fills.append(event)
             log.info(
                 "fade1h.filled", window=event.window_slug, side=event.side, kind=event.kind,
-                price=event.price, shares=round(event.shares, 2), at=event.ts,
-                queue=round(b.depth_ahead, 1), crossed=round(flow.crossed, 1),
+                order_side=event.order_side, price=event.price, shares=round(event.shares, 2),
+                at=event.ts, depth_ahead=round(float(row.get("depth_ahead") or 0.0), 1),
+                crossed=round(flow.crossed, 1),
             )
 
     def _retry_at(self, slug: str) -> float:
@@ -715,7 +972,7 @@ class PaperBookkeeper:
         (never tried first of all), so windows that stay unresolved or keep failing cannot
         crowd out newer ones; a window whose lookup failed waits a growing pause first.
         """
-        t = _now(now)
+        t = self._time(now)
         report = SettleReport()
         due = await _ledger.settlement_due(t)
         due_slugs = {str(w["window_slug"]) for w in due}
@@ -805,7 +1062,7 @@ class PaperBookkeeper:
         if settlement.forced_pending:
             report.forced.append(slug)
             report.errors.append(
-                f"{slug}: settled with {settlement.forced_pending} bid(s) whose trade tape "
+                f"{slug}: settled with {settlement.forced_pending} order(s) whose trade tape "
                 "could not be read in full, so their fills may be under-counted."
             )
             log.warning("fade1h.settled_forced", window=slug, pending=settlement.forced_pending)
@@ -825,7 +1082,7 @@ def _kill_path(path: Path | str | None) -> Path:
 
 
 class PaperExecutor:
-    """Paper resting bids: written to the ledger, filled only by the real trade tape."""
+    """Paper child orders: written to the ledger, filled only by the real trade tape."""
 
     mode = "paper"
 
@@ -835,8 +1092,10 @@ class PaperExecutor:
         *,
         bookkeeper: PaperBookkeeper | None = None,
         kill_switch_path: Path | str | None = None,
+        clock: Clock | None = None,
     ) -> None:
-        self.bookkeeper = bookkeeper or PaperBookkeeper(client)
+        self.bookkeeper = bookkeeper or PaperBookkeeper(client, clock=clock or time.time)
+        self._clock: Clock = clock or self.bookkeeper.clock
         self._kill_switch_path = kill_switch_path
 
     def _kill_active(self) -> bool:
@@ -845,87 +1104,159 @@ class PaperExecutor:
         except OSError:
             return True  # cannot tell: place nothing
 
+    def _write_time(self, now: float | None) -> _ledger.WriteTime:
+        """The clock itself, read by the ledger inside its write; ``now`` only when given."""
+        return self._clock if now is None else float(now)
+
     async def place_bid(
         self, order: NewOrder, *, best_ask: float | None, now: float | None = None
     ) -> int | None:
-        """Rest one bid. ``best_ask`` is the lowest ask on the order's own token (None when
-        nobody is offering it). Returns the order id, or None if it was already placed."""
-        (order_id,) = await self.requote([order], best_asks={order.token_id: best_ask}, now=now)
+        """Rest one buy. ``best_ask`` is the lowest ask on the order's own token (None when
+        nobody is offering it). Returns the order id, or None if it was already placed.
+        Raises ``PlacementRefused`` if it would cross or is held back."""
+        if not isinstance(order, NewOrder) or order.order_side != "BUY":
+            raise PlacementRefused("bad_order", "place_bid only places buy orders.")
+        return self._single(await self.requote([order], best_asks={order.token_id: best_ask},
+                                               now=now))
+
+    async def place_sell(
+        self, order: NewOrder, *, best_bid: float | None, now: float | None = None
+    ) -> int | None:
+        """Rest one sale of shares held. ``best_bid`` is the highest bid on the order's own
+        token (None when nobody is bidding). A sale bigger than the free shares is cut to them
+        (the row says how many). Returns the order id, or None if it was already placed.
+        Raises ``PlacementRefused`` if it would cross or no shares are free to sell."""
+        if not isinstance(order, NewOrder) or order.order_side != "SELL":
+            raise PlacementRefused("bad_order", "place_sell only places sell orders.")
+        return self._single(await self.requote([order], best_bids={order.token_id: best_bid},
+                                               now=now))
+
+    @staticmethod
+    def _single(result: PlaceResult) -> int | None:
+        (order_id,) = result.ids
+        if order_id is None and 0 in result.held_back:
+            reason, message = result.held_back[0]
+            raise PlacementRefused(reason, message)
         return order_id
 
     async def requote(
         self,
         orders: Sequence[NewOrder],
         *,
-        best_asks: Mapping[str, float | None],
+        best_asks: Mapping[str, float | None] | None = None,
+        best_bids: Mapping[str, float | None] | None = None,
         now: float | None = None,
         cancel_ids: Iterable[int] = (),
         cancel_reason: str = "requote",
-    ) -> list[int | None]:
+    ) -> PlaceResult:
         """Cancel ``cancel_ids`` and rest ``orders`` in one transaction.
 
-        ``best_asks`` holds the lowest ask for every token bid on (None: no asks). Every bid
-        must rest strictly below it. Refuses the whole batch with ``PlacementRefused``,
-        writing nothing (the cancels included), if any bid would cross, if an order is not a
-        ``NewOrder``, if the kill switch file is present, if a bid's window has no market id
-        (its fills could never be read from the tape), or if the ledger refuses it (window
-        unknown or over, or the token is not that side's token).
+        ``best_asks`` holds the lowest ask for every token bought, ``best_bids`` the highest
+        bid for every token sold (None: that side of the book is empty). Every buy must rest
+        strictly below the ask and every sell strictly above the bid.
+
+        Refuses the whole batch with ``PlacementRefused``, writing nothing (the cancels
+        included), if any order would cross, if an order is not a ``NewOrder``, if the kill
+        switch file is present, if an order's window has no market id (its fills could never
+        be read from the tape), or if the ledger refuses it (window unknown or over, or the
+        token is not that side's token). Orders the one-side rule holds back (a sale of shares
+        not free, a buy while the other outcome is held) are listed in the result's
+        ``held_back``; the cancels and the other orders still go through.
         """
         batch = list(orders)
+        asks = dict(best_asks or {})
+        bids = dict(best_bids or {})
         if batch:
             if self._kill_active():
                 raise PlacementRefused(
-                    KILL_STATE, "The kill switch is on, so no new bids are placed."
+                    KILL_STATE, "The kill switch is on, so no new orders are placed."
                 )
             for order in batch:
                 if not isinstance(order, NewOrder):
-                    raise PlacementRefused("bad_order", "Only NewOrder bids can be placed.")
-                if order.token_id not in best_asks:
-                    raise PlacementRefused(
-                        "no_ask", f"No best ask was given for token {order.token_id}, so the "
-                        "bid cannot be checked against the spread."
-                    )
-                ask = best_asks[order.token_id]
-                if ask is None:
-                    continue
-                ask_value = _float(ask)
-                if ask_value is None or not 0.0 < ask_value <= 1.0:
-                    raise PlacementRefused(
-                        "bad_ask", f"The best ask {ask!r} for token {order.token_id} is not a "
-                        "price."
-                    )
-                if order.price >= ask_value - _PRICE_EPS:
-                    raise PlacementRefused(
-                        "would_cross",
-                        f"A bid at {order.price:.3f} would meet the ask at {ask_value:.3f}; "
-                        "bids only ever rest below the ask.",
-                    )
+                    raise PlacementRefused("bad_order", "Only NewOrder orders can be placed.")
+                _check_passive(order, asks, bids)
             for slug in dict.fromkeys(order.window_slug for order in batch):
                 window = await _ledger.get_window(slug)
                 # A window's market id is only ever added, never removed, so this check
                 # cannot go stale before the placement below.
                 if window is not None and not window.get("condition_id"):
                     raise PlacementRefused(
-                        "no_market_id", f"{slug}: no market id recorded, so a bid there could "
-                        "never be filled from the trade tape."
+                        "no_market_id", f"{slug}: no market id recorded, so an order there "
+                        "could never be filled from the trade tape."
                     )
         try:
             return await _ledger.place_orders(
-                batch, ts=_now(now), cancel_ids=cancel_ids, cancel_reason=cancel_reason
+                batch, ts=self._write_time(now), cancel_ids=cancel_ids,
+                cancel_reason=cancel_reason, min_shares=MIN_ORDER_SHARES, share_step=SHARE_STEP,
             )
         except ValueError as exc:  # the ledger wrote nothing
             raise PlacementRefused("ledger_refused", str(exc)) from exc
 
+    async def reconcile(
+        self,
+        wanted: Sequence[NewOrder],
+        resting: Sequence[Mapping[str, Any]],
+        *,
+        best_asks: Mapping[str, float | None] | None = None,
+        best_bids: Mapping[str, float | None] | None = None,
+        now: float | None = None,
+        cancel_reason: str = "requote",
+    ) -> Reconciled:
+        """Bring ``resting`` (``ledger.open_orders()`` rows) in line with ``wanted`` by
+        :func:`reconcile_orders`, then cancel and place in one transaction (:meth:`requote`).
+        Nothing is written when nothing changes."""
+        changes = reconcile_orders(wanted, resting)
+        if not changes.cancel and not changes.place:
+            return Reconciled(changes, PlaceResult(ids=[]))
+        result = await self.requote(
+            changes.place, best_asks=best_asks, best_bids=best_bids, now=now,
+            cancel_ids=changes.cancel, cancel_reason=cancel_reason,
+        )
+        return Reconciled(changes, result)
+
     async def cancel(
         self, order_ids: Iterable[int], *, reason: str, now: float | None = None
     ) -> int:
-        return await _ledger.cancel_orders(order_ids, ts=_now(now), reason=reason)
+        return await _ledger.cancel_orders(order_ids, ts=self._write_time(now), reason=reason)
 
     async def sync_fills(self, *, now: float | None = None) -> FillReport:
         return await self.bookkeeper.sync_fills(now=now)
 
     async def settle(self, *, now: float | None = None) -> SettleReport:
         return await self.bookkeeper.settle(now=now)
+
+
+def _check_passive(order: NewOrder, best_asks: Mapping[str, float | None],
+                   best_bids: Mapping[str, float | None]) -> None:
+    """Refuse an order that would cross: a buy at or above the best ask, a sell at or below
+    the best bid."""
+    sell = order.order_side == "SELL"
+    book, name = (best_bids, "bid") if sell else (best_asks, "ask")
+    if order.token_id not in book:
+        raise PlacementRefused(
+            f"no_{name}", f"No best {name} was given for token {order.token_id}, so the "
+            f"{'sale' if sell else 'bid'} cannot be checked against the spread."
+        )
+    quote = book[order.token_id]
+    if quote is None:
+        return  # that side of the book is empty: nothing to cross
+    value = _float(quote)
+    if value is None or not 0.0 <= value <= 1.0:
+        raise PlacementRefused(
+            f"bad_{name}", f"The best {name} {quote!r} for token {order.token_id} is not a price."
+        )
+    if sell and order.price <= value + _PRICE_EPS:
+        raise PlacementRefused(
+            "would_cross",
+            f"A sale at {order.price:.3f} would meet the bid at {value:.3f}; sales only ever "
+            "rest above the bid.",
+        )
+    if not sell and order.price >= value - _PRICE_EPS:
+        raise PlacementRefused(
+            "would_cross",
+            f"A bid at {order.price:.3f} would meet the ask at {value:.3f}; bids only ever rest "
+            "below the ask.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -935,8 +1266,8 @@ class PaperExecutor:
 
 @dataclass(frozen=True)
 class ExecutorChoice:
-    """This pass's executor. ``executor`` is None when no new bids may be placed; the
-    bookkeeper keeps filling and settling the paper bids already made in every state."""
+    """This pass's executor. ``executor`` is None when no new orders may be placed; the
+    bookkeeper keeps filling and settling the paper orders already made in every state."""
 
     requested_mode: str
     state: str
@@ -960,27 +1291,29 @@ async def choose_executor(
     *,
     bookkeeper: PaperBookkeeper | None = None,
     kill_switch_path: Path | str | None = None,
+    clock: Clock | None = None,
 ) -> ExecutorChoice:
     """Pick this pass's executor from the requested mode and the kill switch.
 
     Pass the runner's one long-lived ``bookkeeper`` on every call: it remembers which
     windows' results were looked up lately, and a fresh one each pass would forget that.
+    ``clock`` stamps the executor's writes (default: the bookkeeper's clock).
 
-    - kill switch file present: none (no new bids).
+    - kill switch file present: none (no new orders).
     - paper: ``PaperExecutor``.
     - live: none. No live order path exists for this strategy and live trading is not
       authorised, so the card says so and nothing new is placed.
     - anything else, or the mode cannot be read: none.
     """
-    keeper = bookkeeper or PaperBookkeeper(client)
+    keeper = bookkeeper or PaperBookkeeper(client, clock=clock or time.time)
     try:
         mode = await requested_mode()
     except Exception as exc:  # noqa: BLE001 - fail closed, and say why
         log.warning("fade1h.mode_read_failed", error=str(exc))
         return ExecutorChoice(
             "unknown", UNKNOWN_MODE_STATE,
-            f"Could not read the PAPER/LIVE selection ({type(exc).__name__}), so no new bids "
-            "are placed this pass. Bids already filled keep settling.", None, keeper,
+            f"Could not read the PAPER/LIVE selection ({type(exc).__name__}), so no new orders "
+            "are placed this pass. Orders already filled keep settling.", None, keeper,
         )
     path = _kill_path(kill_switch_path)
     try:
@@ -990,37 +1323,39 @@ async def choose_executor(
     if killed:
         return ExecutorChoice(
             mode, KILL_STATE,
-            f"The kill switch file is present ({path}). No new bids, and resting bids are "
-            "cancelled. Bids already filled keep settling.", None, keeper,
+            f"The kill switch file is present ({path}). No new orders, and resting orders are "
+            "cancelled. Orders already filled keep settling.", None, keeper,
         )
     if mode == "paper":
         return ExecutorChoice(
             mode, PAPER_STATE,
-            "Paper trading: bids rest only in this app's ledger and fill only when the real "
+            "Paper trading: orders rest only in this app's ledger and fill only when the real "
             "trade tape reaches them.",
-            PaperExecutor(client, bookkeeper=keeper, kill_switch_path=kill_switch_path),
+            PaperExecutor(client, bookkeeper=keeper, kill_switch_path=kill_switch_path,
+                          clock=clock),
             keeper,
         )
     if mode == "live":
         return ExecutorChoice(
             mode, LIVE_STATE,
             "LIVE is selected, but this strategy has no live order path: it is not built, and "
-            "live trading is not authorised for any market. No new bids are placed; paper "
-            "bids already filled keep settling.", None, keeper,
+            "live trading is not authorised for any market. No new orders are placed; paper "
+            "orders already filled keep settling.", None, keeper,
         )
     return ExecutorChoice(
         mode, UNKNOWN_MODE_STATE,
-        f"The selected mode {mode!r} is not PAPER or LIVE, so no new bids are placed. Bids "
-        "already filled keep settling.", None, keeper,
+        f"The selected mode {mode!r} is not PAPER or LIVE, so no new orders are placed. "
+        "Orders already filled keep settling.", None, keeper,
     )
 
 
 async def stand_down(choice: ExecutorChoice, *, now: float | None = None) -> int:
-    """When this pass may not place bids, cancel every paper bid still resting (a resting bid
-    that filled later would open a position). Returns how many were cancelled."""
+    """When this pass may not place orders, cancel every paper order still resting (a resting
+    order that filled later would change the position). Returns how many were cancelled."""
     if choice.can_place:
         return 0
-    cancelled = await _ledger.cancel_all_open(ts=_now(now), reason=choice.state)
+    cancelled = await _ledger.cancel_all_open(
+        ts=choice.bookkeeper.clock if now is None else now, reason=choice.state)
     if cancelled:
         log.info("fade1h.stood_down", state=choice.state, orders=cancelled)
     return cancelled

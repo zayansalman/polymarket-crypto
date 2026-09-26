@@ -1,44 +1,80 @@
-"""The Fade 1h Momentum on 15m loop: bookkeeping, inputs, the model hook, sizing and bids.
+"""The Fade 1h Momentum on 15m loop: bookkeeping, inputs, the model hook, sizing and orders.
 
 ``run_forever(stop_event)`` runs for the dashboard's lifetime (started in the app lifespan,
 after the market-data hub). Paper only: live trading is not authorised for any market, and
-this strategy has no live order path. Every order is a resting limit bid; nothing crosses the
-spread, and a hedge is a resting bid on the other side.
+this strategy has no live order path. Every order is a scaled passive limit order: one parent
+order split into child orders resting at several price levels on the passive side of the touch
+(a buy at or under the best bid, a sell at or over the best ask). Nothing crosses the spread.
+The strategy never holds both sides of a window: a position is cut by a resting sell of the
+shares held, never by buying the other side.
 
 One pass, in the order that keeps the record honest
 ---------------------------------------------------
 1. Setup, once per process: seed the dials (version 0, the prior, and version 1, the starting
-   dials fitted on the Sep 17-20 tape: ``learner.seed_starting_dials``), and stop every bid a
+   dials fitted on the Sep 17-20 tape: ``learner.seed_starting_dials``), and stop every order a
    previous run left resting (their tape is still read, so fills made before the restart are
-   kept). Until this has worked, no new bid is placed; bookkeeping runs regardless.
+   kept). Until this has worked, no new order is placed; bookkeeping runs regardless.
 2. Bookkeeping, every pass whatever the switch or the mode says: bring fills up to date from
    the trade tape, then settle every ended window the venue has resolved, traded or not, and
    let the learner take one step on every window just settled (``learner.learn_from_settled``,
    off the event loop; a new dials version per step). Each step is guarded on its own.
 3. The executor for this pass, from the operator's PAPER/LIVE selection and the kill switch.
    Anything but PAPER places nothing: LIVE shows "not built / not authorised" on the card,
-   resting paper bids are cancelled, and the paper bids already filled keep settling.
-4. The strategy switch. Off: cancel resting bids, release the market data, open nothing new.
-5. On: read Settings, gather every coin's inputs, and ask the model (``decide.decide``, off
-   the event loop: about 2,000 simulated paths a coin) for a Decision per coin: the side, the
-   chance traded on, every ladder rung's fill and win chances, and hedge quotes.
-6. For the coins with a Decision: size the ladders against the free bankroll, shrink them by
-   the joint Kelly of all the coins decided in this pass, size any hedge of a position held in
-   the window, then bring the resting bids in line with that plan (unchanged bids keep their
-   place in the queue; the rest are cancelled and replaced in one transaction).
-7. Record one ``fade_decisions`` row per coin (its inputs, and what was done or why nothing
-   was), and this pass's state for the card (``status()`` and the ``STATUS_KEY`` config row).
-8. Sleep for the poll interval from Settings.
+   resting paper orders are cancelled, and the paper orders already filled keep settling.
+4. The strategy switch. Off: cancel resting orders, release the market data, open nothing new.
+5. On: read Settings, then the clock again (bookkeeping can take a while, and the inputs, the
+   time left and the price ages are measured from this reading), and gather every coin's
+   inputs. Before the model runs, the ledger gives each coin's position in its current window
+   (the net shares held) and the bankroll the sizing works from.
+6. The model (``decide.decide``, off the event loop: about 2,000 simulated paths a coin) prices
+   a parent buy order on each side and, with shares held, a resting sell of them, sized in the
+   fractional-Kelly account with the shares held; it returns the one that adds the most
+   expected log growth, or none.
+7. For the coins with an order: buys are shrunk by the joint Kelly of all the coins buying in
+   this pass (bets on opposite sides hedge each other and are not shrunk), each buy child order
+   is capped at the largest single order, sizes go to the venue's share step and 5-share
+   minimum, and the buys as a whole are fitted into the free cash. Then the resting orders are
+   brought in line with the plan by ``executor.reconcile``: an order at the same price is kept,
+   with its place in the queue, while the plan still wants at least its size; the rest are
+   cancelled and the difference placed, in one transaction.
+8. Record one ``fade_decisions`` row per coin (its inputs, what the maths said and what was
+   done, or why nothing was), and this pass's state for the card (``status()`` and the
+   ``STATUS_KEY`` config row; the keys are listed under "The card's view" below). A failure
+   that did not stop a coin (its inputs' ``warnings``) is an error of the pass.
+9. Sleep for the poll interval from Settings.
 
-The free bankroll (``W``) is the starting paper bankroll plus settled P&L, minus what filled
-but unsettled shares cost, minus the unfilled part of every bid that could still turn out to
-have filled (the tape runs minutes behind) except the resting bids this pass is about to
-re-plan. A bid cancelled this pass counts against ``W`` from the next pass until its tape is
-read. The entry ladder is sized from ``W`` alone and the hedge from ``W`` and the held shares,
-as sections 3 and 4 of ``tasks/2026-09-22-fade-1h-sizing-hedging.md`` define them.
+The bankroll
+------------
+The free cash is ``ledger.free_cash_usd``: the starting paper bankroll plus settled P&L, minus
+the cash in unsettled windows (what bought shares cost minus what sold shares brought in), minus
+the unfilled part of every buy order that could still turn out to have filled (the tape runs
+minutes behind), except the resting buy orders of the windows this pass re-plans. Each coin's
+model sizes from that cash plus what the positions in the other coins' current windows are
+worth at their books' mids (its own window's position is in the Kelly account already). Buys
+only ever spend the free cash.
+
+The card's view (``status()``, also saved under ``STATUS_KEY``)
+-------------------------------------------------------------
+state (running, setting_up, switched_off, paper/live/kill-switch executor states,
+no_executor, pass_failed, stopped, stopped_on_error), strategy, last_pass_ts, passes, errors
+(every distinct error of the latest pass), last_error, last_error_ts, executor {state,
+requested_mode, message, can_place}, bankroll {start_usd, free_usd}, dials_version, fills,
+shares_filled, settled, learned, learn_note, settle_waiting {resolution, tape, retry_later,
+no_market_id, backlog}, cancelled, and assets {asset: entry}. Each coin's entry: action (one of
+the decision row actions below, or switched_off), reason, window_slug, decision_id, notes and
+warnings (its inputs'); with a Problem, codes; with a Decision, order_action (buy, sell or
+none), side, p, p_model, explanation, orders (each planned child order's record: level, kind,
+order_side, side, price, shares, usd, depth_ahead, p_fill, q_fill, optimal_shares), position
+(held_side, held_shares, and the sell or a note; None when nothing is held) and sizing
+(cash_usd, bankroll_usd, account_cash_usd, joint_scale, fit_scale, buy_usd, sell_shares,
+optimal_shares, growth); once the orders were brought in line, kept, placed and cancelled
+(counts) and held_back (plain-English reasons an order was held back); error, when the coin
+failed. A loop that fails before its first pass in this process keeps its own state and error
+and borrows only the last pass time of the run before (``from_earlier_run``), so the card never
+shows an earlier run's clean status over a loop that died.
 
 Never raises (a cancel still propagates, which the app's teardown expects): every step is
-guarded, and every failure is logged and shown on the card as ``last_error``.
+guarded, and every failure is logged and shown on the card.
 """
 
 from __future__ import annotations
@@ -66,7 +102,7 @@ from polymarket_bot.fade_1h_momentum_15m import learner as _learner
 from polymarket_bot.fade_1h_momentum_15m import ledger as _ledger
 from polymarket_bot.fade_1h_momentum_15m import sizing as _sizing
 from polymarket_bot.fade_1h_momentum_15m.decide import (
-    Decision, DecideSettings, NoDecision, RungQuote,
+    ChildOrder, Decision, DecideSettings, NoDecision, ParentOrder,
 )
 from polymarket_bot.fade_1h_momentum_15m.inputs import Inputs, Problem
 
@@ -76,6 +112,7 @@ STRATEGY = "fade_1h_momentum_15m"
 LABEL = "Fade 1h (15m)"
 OWNER = _inputs.OWNER
 ASSETS = _inputs.ASSETS
+SIDES = _decide.SIDES
 STATUS_KEY = "fade_1h.runner_status"
 DEFAULT_POLL_S = 60.0
 MIN_SLEEP_S = 1.0
@@ -90,17 +127,22 @@ NO_INPUTS = "no_inputs"  # a coin's inputs were missing, stale or inconsistent
 COIN_OFF = "coin_off"  # the coin is switched off in Settings
 NO_MODEL = "no_model"  # the model gave no Decision (it cannot price this window)
 MODEL_ERROR = "model_error"  # the model hook raised or returned something unusable
-NO_BID = "no_bid"  # a Decision, but the maths gives no stake anywhere
-BID = "bid"  # bids planned (kept or placed)
-NOT_PLACED = "not_placed"  # a plan, but this pass may not place bids (LIVE, kill switch...)
+NO_ORDER = "no_order"  # a Decision, but no order pays (or none survives the venue's minimum)
+ORDERS = "orders"  # child orders planned (kept or placed)
+NOT_PLACED = "not_placed"  # a plan, but this pass may not place orders (LIVE, kill switch...)
 REFUSED = "refused"  # follow-up row: the executor refused the plan
 
-NO_MODEL_REASON = "The model gave no decision for this window: inputs recorded, no bids."
+# Runner states beyond the executor's, shown on the card.
+PASS_FAILED = "pass_failed"  # a pass raised past its own guards
+STOPPED = "stopped"
+STOPPED_ON_ERROR = "stopped_on_error"
 
+NO_MODEL_REASON = "The model gave no decision for this window: inputs recorded, no orders."
+TRADING_STEP_FAILED = "trading_step_failed"  # cancel reason when the trading step fails
 
-_SHARE_STEP = 0.01  # the venue takes sizes in hundredths of a share
-_MIN_SHARES = 5.0  # the venue's minimum order size on these markets
-_PRICE_EPS = 1e-9
+MIN_SHARES = _executor.MIN_ORDER_SHARES  # the venue's minimum order on these markets
+SHARE_STEP = _executor.SHARE_STEP  # the venue takes sizes in hundredths of a share
+_SHARES_EPS = 1e-9
 _MAX_NAMED = 5
 
 # The card's view of the runner, replaced whole at the end of every pass.
@@ -110,6 +152,34 @@ _STATUS: dict[str, Any] = {"state": "not_started", "last_pass_ts": None, "last_e
 def status() -> dict[str, Any]:
     """A copy of the runner's latest state for the card (``STATUS_KEY`` holds the same)."""
     return copy.deepcopy(_STATUS)
+
+
+async def _save_status() -> None:
+    try:
+        await _db.set_config(STATUS_KEY, json.dumps(_STATUS, default=str))
+    except Exception as exc:  # noqa: BLE001 - the in-memory copy still serves the card
+        log.warning("fade1h.status_not_saved", error=f"{type(exc).__name__}: {exc}")
+
+
+async def _record_failure(message: str, ts: float, state: str) -> None:
+    """Put a failure that escaped a pass's own guards on the card (memory and STATUS_KEY).
+
+    Before this process's first pass, the run before's last pass time is borrowed (marked
+    ``from_earlier_run``) so the card has it for context, while the state and the error are
+    this process's own."""
+    global _STATUS
+    status = {**_STATUS, "state": state, "last_error": message, "last_error_ts": ts,
+              "errors": [message]}
+    if not status.get("last_pass_ts"):
+        try:
+            saved = json.loads(await _db.get_config(STATUS_KEY) or "null")
+        except Exception:  # noqa: BLE001 - only the earlier pass time is lost
+            saved = None
+        if isinstance(saved, dict) and saved.get("last_pass_ts"):
+            status.update(last_pass_ts=saved["last_pass_ts"], passes=saved.get("passes"),
+                          from_earlier_run=True)
+    _STATUS = status
+    await _save_status()
 
 
 # ---------------------------------------------------------------------------
@@ -125,23 +195,24 @@ class Settings:
     bankroll_usd: float
     kelly_multiplier: float
     max_order_usd: float
-    band_lo: float  # dollars under the side's best ask, nearest rung
-    band_hi: float  # deepest rung
-    hedge: bool
+    band_lo: float  # dollars from the touch to the nearest price level (0 joins it)
+    band_hi: float  # ... to the deepest price level
+    reduce_positions: bool
     spot_feed: str
     coins: Mapping[str, bool]
 
     @property
     def decide(self) -> DecideSettings:
         return DecideSettings(spot_feed=self.spot_feed, band_lo=self.band_lo,
-                              band_hi=self.band_hi)
+                              band_hi=self.band_hi, kelly_multiplier=self.kelly_multiplier,
+                              reduce_positions=self.reduce_positions)
 
     def as_record(self) -> dict[str, Any]:
         return {
             "bankroll_usd": self.bankroll_usd, "kelly_multiplier": self.kelly_multiplier,
             "max_order_usd": self.max_order_usd, "band_lo": self.band_lo,
-            "band_hi": self.band_hi, "hedge": self.hedge, "spot_feed": self.spot_feed,
-            "coins": dict(self.coins),
+            "band_hi": self.band_hi, "reduce_positions": self.reduce_positions,
+            "spot_feed": self.spot_feed, "coins": dict(self.coins),
         }
 
 
@@ -163,83 +234,17 @@ async def read_settings() -> Settings:
         bankroll_usd=float(await get("fade1h_bankroll_usd")),
         kelly_multiplier=float(await get("fade1h_kelly_multiplier")),
         max_order_usd=float(await get("fade1h_max_order_usd")),
-        band_lo=float(await get("fade1h_ladder_lo_cents")) / 100.0,
-        band_hi=float(await get("fade1h_ladder_hi_cents")) / 100.0,
-        hedge=bool(await get("fade1h_hedge_enabled")),
+        band_lo=float(await get("fade1h_levels_near_cents")) / 100.0,
+        band_hi=float(await get("fade1h_levels_far_cents")) / 100.0,
+        reduce_positions=bool(await get("fade1h_reduce_positions")),
         spot_feed=str(await get("fade1h_spot_feed")),
         coins={a: bool(await get(f"fade1h_trade_{a}")) for a in ASSETS},
     )
 
 
 # ---------------------------------------------------------------------------
-# Sizing: from Decisions to a plan of resting bids (pure)
+# Sizing: from Decisions to a plan of child orders (pure)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PlannedBid:
-    """One resting bid the plan wants in the book."""
-
-    kind: str  # entry | hedge
-    side: str
-    token_id: str
-    price: float
-    shares: float
-    rung: int
-    depth_ahead: float
-    p_fill: float | None = None
-    q_fill: float | None = None
-
-    @property
-    def cost_usd(self) -> float:
-        return self.price * self.shares
-
-    def as_record(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "rung": self.rung, "kind": self.kind, "side": self.side, "price": self.price,
-            "shares": self.shares, "stake_usd": round(self.cost_usd, 6),
-            "depth_ahead": self.depth_ahead,
-        }
-        if self.p_fill is not None:
-            out["p_fill"], out["q_fill"] = self.p_fill, self.q_fill
-        return out
-
-
-@dataclass
-class CoinPlan:
-    """What the maths wants resting for one coin this pass, and how it got there."""
-
-    asset: str
-    window_slug: str
-    side: str
-    bids: list[PlannedBid] = field(default_factory=list)
-    kelly_f: float = 0.0  # bankroll fraction of the ladder after joint sizing and multiplier
-    full_kelly_usd: float = 0.0  # the ladder alone at full Kelly, dollars
-    joint_scale: float = 0.0  # joint Kelly over the coin's own Kelly, 0..1
-    q_bar: float | None = None  # the ladder's share-weighted win chance given a fill
-    price_bar: float | None = None  # its average price per share
-    hedge: dict[str, Any] | None = None
-    notes: list[str] = field(default_factory=list)
-
-    @property
-    def entries(self) -> list[PlannedBid]:
-        return [b for b in self.bids if b.kind == "entry"]
-
-    @property
-    def entry_cost_usd(self) -> float:
-        return sum(b.cost_usd for b in self.entries)
-
-    @property
-    def cost_usd(self) -> float:
-        return sum(b.cost_usd for b in self.bids)
-
-    def sizing_record(self, bankroll_usd: float) -> dict[str, Any]:
-        return {
-            "bankroll_usd": bankroll_usd, "full_kelly_usd": self.full_kelly_usd,
-            "joint_scale": self.joint_scale, "kelly_f": self.kelly_f, "q_bar": self.q_bar,
-            "price_bar": self.price_bar, "entry_cost_usd": self.entry_cost_usd,
-            "hedge_cost_usd": self.cost_usd - self.entry_cost_usd,
-        }
 
 
 def _book(inputs: Inputs, side: str) -> Any:
@@ -250,232 +255,285 @@ def _token(inputs: Inputs, side: str) -> str:
     return inputs.up_token if side == "Up" else inputs.down_token
 
 
-def _on_tick(price: float, tick: float) -> float:
-    """``price`` rounded down onto the tick grid (a lower bid never crosses)."""
-    step = tick if math.isfinite(tick) and tick > 0 else _inputs.DEFAULT_TICK
-    return round(math.floor(price / step + 1e-6) * step, 6)
-
-
-def _order_shares(stake_usd: float, price: float, max_order_usd: float) -> float:
-    """Shares for a dollar stake: capped at the largest single bid, rounded down to the
-    venue's share step, and zero below its minimum order."""
-    stake = min(stake_usd, max_order_usd)
-    if not (math.isfinite(stake) and stake > 0):
+def _round_down(shares: float) -> float:
+    """Shares rounded down to the venue's step, and zero below its minimum order."""
+    if not (math.isfinite(shares) and shares > 0.0):
         return 0.0
-    return _sizing.size_to_order(stake, price, min_shares=_MIN_SHARES, tick=_SHARE_STEP)
+    steps = math.floor(shares / SHARE_STEP + 1e-9)
+    n = round(steps * SHARE_STEP, 6)
+    return n if n >= MIN_SHARES - _SHARES_EPS else 0.0
 
 
-def _grid_rungs(decision: Decision, inputs: Inputs, settings: Settings,
-                notes: list[str]) -> list[RungQuote]:
-    """The Decision's rungs that sit on this pass's ladder grid, nearest first."""
-    book = _book(inputs, decision.side)
-    grid = _decide.ladder_prices(book.best_ask, inputs.tick_size, settings.band_lo,
-                                 settings.band_hi)
-    on_grid = {round(p, 6) for p in grid}
-    kept: dict[float, RungQuote] = {}
-    off = 0
-    for rung in decision.rungs:
-        key = round(rung.price, 6)
-        if key not in on_grid or key in kept:
-            off += 1
-            continue
-        kept[key] = rung
-    if off:
-        notes.append(f"{off} rung(s) were not on the ladder grid ({settings.band_lo * 100:g}-"
-                     f"{settings.band_hi * 100:g}c under the {decision.side} ask of "
-                     f"{book.best_ask:g}) and were left out.")
-    return sorted(kept.values(), key=lambda r: -r.price)
+@dataclass(frozen=True)
+class PlannedOrder:
+    """One child order the plan wants resting.
+
+    ``kind`` "entry" buys ``side``'s token; "hedge" sells shares of it already held.
+    ``level``: the price level's place in its parent order, 0 nearest the touch.
+    ``levels_ahead``: the displayed book on the side it rests on (bids for a buy, asks for a
+    sell), as the ledger keeps it: the levels at our price or better. ``optimal_shares``: what
+    the maths gave this level before the joint shrink, the caps and the venue's rounding.
+    """
+
+    kind: str
+    side: str
+    token_id: str
+    price: float
+    shares: float
+    level: int
+    levels_ahead: tuple[tuple[float, float], ...]
+    p_fill: float
+    q_fill: float
+    optimal_shares: float
+
+    @property
+    def order_side(self) -> str:
+        return _ledger.ORDER_SIDE_OF_KIND[self.kind]
+
+    @property
+    def usd(self) -> float:
+        """What the child order costs (a buy) or brings in (a sell) if it all fills."""
+        return self.price * self.shares
+
+    @property
+    def depth_ahead(self) -> float:
+        order_side = self.order_side
+        return math.fsum(size for px, size in self.levels_ahead
+                         if (px >= self.price - 1e-9 if order_side == "BUY"
+                             else px <= self.price + 1e-9))
+
+    def new_order(self, window_slug: str, decision_id: int | None) -> _ledger.NewOrder:
+        return _ledger.NewOrder(
+            window_slug=window_slug, token_id=self.token_id, side=self.side, kind=self.kind,
+            price=self.price, shares=self.shares, level=self.level,
+            levels_ahead=self.levels_ahead, decision_id=decision_id,
+        )
+
+    def as_record(self) -> dict[str, Any]:
+        return {
+            "level": self.level, "kind": self.kind, "order_side": self.order_side,
+            "side": self.side, "price": self.price, "shares": self.shares,
+            "usd": round(self.usd, 6), "depth_ahead": self.depth_ahead,
+            "p_fill": self.p_fill, "q_fill": self.q_fill,
+            "optimal_shares": self.optimal_shares,
+        }
+
+
+@dataclass
+class CoinPlan:
+    """What the maths wants resting for one coin this pass, and how it got there."""
+
+    asset: str
+    window_slug: str
+    action: str = "none"  # buy | sell | none: the Decision's order
+    side: str | None = None
+    orders: list[PlannedOrder] = field(default_factory=list)
+    bankroll_usd: float = 0.0  # the wealth this coin's model sized from
+    joint_scale: float = 1.0  # joint Kelly over the coin's own Kelly (buys), 0..1
+    fit_scale: float = 1.0  # the share of the buys that fits the free cash, 0..1
+    held_side: str | None = None
+    held_shares: float = 0.0
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def buys(self) -> list[PlannedOrder]:
+        return [o for o in self.orders if o.kind == "entry"]
+
+    @property
+    def sells(self) -> list[PlannedOrder]:
+        return [o for o in self.orders if o.kind == "hedge"]
+
+    @property
+    def buy_usd(self) -> float:
+        return math.fsum(o.usd for o in self.buys)
+
+    def sizing_record(self, dec: Decision, cash_usd: float) -> dict[str, Any]:
+        order = dec.order
+        return {
+            "cash_usd": cash_usd, "bankroll_usd": self.bankroll_usd,
+            "account_cash_usd": dec.account_cash, "joint_scale": self.joint_scale,
+            "fit_scale": self.fit_scale, "buy_usd": self.buy_usd,
+            "sell_shares": math.fsum(o.shares for o in self.sells),
+            "optimal_shares": order.shares if order is not None else 0.0,
+            "growth": order.growth if order is not None else 0.0,
+        }
+
+    def position_record(self, dec: Decision) -> dict[str, Any] | None:
+        """The position held in the window and what the maths does with it, for the card."""
+        if self.held_side is None:
+            return None
+        out: dict[str, Any] = {"held_side": self.held_side, "held_shares": self.held_shares}
+        sale = dec.option("sell", self.held_side)
+        chosen = self.sells[0] if self.sells else None
+        if chosen is not None:
+            out["sell"] = chosen.as_record()
+        elif sale is not None and sale.paying and dec.order is sale:
+            out["note"] = ("The maths would sell "
+                           f"{sale.paying[0].shares:.2f} at {sale.paying[0].price:g}, below "
+                           f"the venue's minimum order of {MIN_SHARES:g} shares.")
+        elif sale is None:
+            out["note"] = "Reducing a held position is switched off in Settings."
+        elif dec.order is not None and dec.order.action == "buy":
+            out["note"] = "Adding to the position pays more than selling any of it."
+        else:
+            out["note"] = "Keeping the shares pays more than selling them at any price level."
+        return out
+
+
+def _children(order: ParentOrder) -> list[tuple[int, ChildOrder]]:
+    """The child orders the maths gives shares, with their level (0 nearest the touch)."""
+    return [(i, c) for i, c in enumerate(order.child_orders) if c.shares > _SHARES_EPS]
 
 
 def plan_orders(
     cases: Mapping[str, tuple[Inputs, Decision]],
-    held: Mapping[str, Mapping[str, float]],
     *,
-    bankroll_usd: float,
+    cash_usd: float,
+    bankrolls: Mapping[str, float],
+    held: Mapping[str, Mapping[str, float]],
     rho: float,
     settings: Settings,
 ) -> dict[str, CoinPlan]:
-    """Size every coin's Decision into resting bids (pure; run it off the event loop).
+    """Turn every coin's Decision into child orders (pure; run it off the event loop).
 
-    ``held``: shares already filled in each coin's current window, ``{asset: {side: n}}``.
+    ``cash_usd``: the free cash buys may spend. ``bankrolls``: the wealth each coin's model sized
+    from. ``held``: net shares held in each coin's current window, ``{asset: {side: n}}``.
 
-    1. Each coin's ladder alone at full Kelly, ``sizing.ladder`` against ``bankroll_usd``.
-    2. Each ladder summarised as one bet (its average price per share, and its share-weighted
-       win chance given a fill); ``sizing.joint_kelly`` sizes those bets together with the
-       copula correlation ``rho``. A coin's ladder is scaled by its joint stake over its own
-       Kelly stake (joint sizing only ever shrinks), then by the Kelly multiplier.
-    3. A hedge for a net position held in the window, from the matching HedgeQuote, by
-       ``sizing.hedge_shares_given_fill`` with the paired shares added to the cash (they pay
-       $1 whichever side wins) and only the unpaired shares at risk.
-    4. Stakes become shares with ``size_to_order`` (the largest single bid caps each one), and
-       if the plan as a whole would cost more than the free bankroll it is scaled down to fit.
+    1. Buys: each coin's parent buy order summarised as one bet (its share-weighted chance of
+       winning given a fill, its average price, its side); ``sizing.joint_kelly`` sizes the bets
+       together with the copula correlation ``rho`` (a bet on Down loads on the shared factor
+       the other way). A coin's buys are scaled by its joint stake over its own Kelly stake;
+       joint sizing only ever shrinks. Each child order is capped at the largest single order.
+    2. Sells: a resting sell of shares held is sized by ``sizing.reduce_position`` inside the
+       model; it only lowers the exposure, so it is neither joint-shrunk nor capped.
+    3. Every size is rounded down to the venue's share step, and zero under its minimum order.
+    4. If the buys as a whole cost more than the free cash, every buy is scaled down to fit.
     """
-    W = float(bankroll_usd)
-    k = float(settings.kelly_multiplier)
     plans: dict[str, CoinPlan] = {}
-    ladders: dict[str, tuple[list[RungQuote], list[float]]] = {}
+    buyers: list[str] = []
+    for asset, (inp, dec) in cases.items():
+        side_held, n_held = None, 0.0
+        for side, shares in (held.get(asset) or {}).items():
+            if float(shares or 0.0) > _SHARES_EPS:
+                side_held, n_held = side, float(shares)
+        plan = CoinPlan(asset=asset, window_slug=inp.window_slug, action=dec.action,
+                        side=dec.side, bankroll_usd=float(bankrolls.get(asset, cash_usd)),
+                        held_side=side_held, held_shares=n_held)
+        plans[asset] = plan
+        if dec.order is None and settings.band_lo > settings.band_hi + 1e-12:
+            plan.notes.append(
+                f"The nearest price level ({100 * settings.band_lo:g}c from the touch) is set "
+                f"further out than the deepest ({100 * settings.band_hi:g}c), so there is no "
+                "price level to rest a child order at. Change the price range in Settings.")
+        elif dec.order is None:
+            plan.notes.append(
+                f"Neither adding to the {n_held:.2f} {side_held} shares held nor selling them "
+                "adds expected growth, so no order rests." if side_held is not None else
+                "Neither side adds expected growth at any price level in the band, so no "
+                "order rests.")
+        elif dec.order.action == "buy" and dec.order.bet is not None:
+            buyers.append(asset)
+
+    if buyers:
+        bets = [cases[a][1].order.bet for a in buyers]  # type: ignore[union-attr]
+        joint = _sizing.joint_kelly(bets, rho, 1.0)
+        for asset, bet, f_joint in zip(buyers, bets, joint):
+            alone = _sizing.kelly_maker(bet.q, bet.price)
+            plans[asset].joint_scale = min(1.0, max(0.0, f_joint / alone)) if alone > 0 else 1.0
 
     for asset, (inp, dec) in cases.items():
-        plan = CoinPlan(asset=asset, window_slug=inp.window_slug, side=dec.side)
-        plans[asset] = plan
-        rungs = _grid_rungs(dec, inp, settings, plan.notes)
-        if not rungs:
-            if not dec.rungs:
-                plan.notes.append("The model gave no ladder rungs.")
+        plan, order = plans[asset], dec.order
+        if order is None:
             continue
-        if W <= 0:
-            plan.notes.append(f"No free bankroll (${W:.2f}), so no new entry bids.")
-            continue
-        try:
-            full = _sizing.ladder([(r.price, r.p_fill, r.q_fill) for r in rungs], W, 1.0)
-        except ValueError as exc:
-            plan.notes.append(f"The model's rung chances cannot be sized: {exc}.")
-            continue
-        total = sum(full)
-        plan.full_kelly_usd = total
-        if total <= 0:
-            plan.notes.append("No rung's chance of winning beats its price, so the ladder "
-                              "gets no stake.")
-            continue
-        shares = sum(x / r.price for x, r in zip(full, rungs))
-        plan.price_bar = total / shares
-        plan.q_bar = min(1.0, max(0.0, sum(x / r.price * r.q_fill
-                                           for x, r in zip(full, rungs)) / shares))
-        ladders[asset] = (rungs, full)
-
-    if ladders:
-        names = list(ladders)
-        bets = [_sizing.Bet(plans[a].q_bar, plans[a].price_bar) for a in names]
-        joint = _sizing.joint_kelly(bets, rho, 1.0)
-        for asset, f_joint in zip(names, joint):
-            plan = plans[asset]
-            alone = _sizing.kelly_maker(plan.q_bar, plan.price_bar)
-            plan.joint_scale = min(1.0, max(0.0, f_joint / alone)) if alone > 0 else 0.0
-            plan.kelly_f = k * f_joint
-            inp, dec = cases[asset]
-            book = _book(inp, dec.side)
-            rungs, full = ladders[asset]
-            for i, (rung, x) in enumerate(zip(rungs, full)):
-                n = _order_shares(k * plan.joint_scale * x, rung.price, settings.max_order_usd)
+        book = _book(inp, order.side)
+        token = _token(inp, order.side)
+        if order.action == "buy":
+            for level, child in _children(order):
+                n = child.shares * plan.joint_scale
+                if settings.max_order_usd > 0:
+                    n = min(n, settings.max_order_usd / child.price)
+                n = _round_down(n)
                 if n > 0:
-                    plan.bids.append(PlannedBid(
-                        kind="entry", side=dec.side, token_id=_token(inp, dec.side),
-                        price=rung.price, shares=n, rung=i,
-                        depth_ahead=book.depth_ahead(rung.price),
-                        p_fill=rung.p_fill, q_fill=rung.q_fill,
-                    ))
-            if not plan.entries:
-                plan.notes.append("The ladder's stakes are all below the venue's minimum "
-                                  f"order of {_MIN_SHARES:g} shares.")
+                    plan.orders.append(PlannedOrder(
+                        kind="entry", side=order.side, token_id=token, price=child.price,
+                        shares=n, level=level, levels_ahead=tuple(book.bids),
+                        p_fill=child.p_fill, q_fill=child.q_fill,
+                        optimal_shares=child.shares))
+        else:
+            for level, child in _children(order):
+                n = _round_down(min(child.shares, plan.held_shares))
+                if n > 0:
+                    plan.orders.append(PlannedOrder(
+                        kind="hedge", side=order.side, token_id=token, price=child.price,
+                        shares=n, level=level, levels_ahead=tuple(book.asks),
+                        p_fill=child.p_fill, q_fill=child.q_fill,
+                        optimal_shares=child.shares))
+        if not plan.orders:
+            plan.notes.append(
+                f"The maths' order is below the venue's minimum of {MIN_SHARES:g} shares a "
+                "child order once the joint sizing and the caps are applied, so nothing rests.")
 
-    if settings.hedge:
-        for asset, (inp, dec) in cases.items():
-            _plan_hedge(plans[asset], inp, dec, held.get(asset) or {}, W, settings)
-
-    total_cost = sum(p.cost_usd for p in plans.values())
-    if total_cost > max(W, 0.0) + 1e-9:
-        factor = max(W, 0.0) / total_cost
+    total = math.fsum(p.buy_usd for p in plans.values())
+    room = max(float(cash_usd), 0.0)
+    if total > room + 1e-9:
+        factor = room / total
         for plan in plans.values():
-            resized = []
-            for b in plan.bids:
-                n = _order_shares(b.cost_usd * factor, b.price, settings.max_order_usd)
-                if n > 0:
-                    resized.append(dataclasses.replace(b, shares=min(n, b.shares)))
-            if plan.bids:
-                plan.notes.append(f"Scaled down to {factor:.0%} so the plan fits the free "
-                                  f"bankroll of ${max(W, 0.0):.2f}.")
-            plan.bids = resized
+            if not plan.buys:
+                continue
+            plan.fit_scale = factor
+            kept = []
+            for o in plan.orders:
+                if o.kind == "entry":
+                    n = _round_down(o.shares * factor)
+                    if n <= 0:
+                        continue
+                    o = dataclasses.replace(o, shares=min(n, o.shares))
+                kept.append(o)
+            plan.orders = kept
+            plan.notes.append(f"The buys were scaled down to {factor:.0%} so they fit the free "
+                              f"cash of ${room:.2f}.")
     return plans
 
 
-def _plan_hedge(plan: CoinPlan, inp: Inputs, dec: Decision, held: Mapping[str, float],
-                W: float, settings: Settings) -> None:
-    up, down = float(held.get("Up") or 0.0), float(held.get("Down") or 0.0)
-    if abs(up - down) <= _PRICE_EPS:
-        return
-    side_held = "Up" if up > down else "Down"
-    n, paired = abs(up - down), min(up, down)
-    quote = dec.hedge_for(side_held)
-    record: dict[str, Any] = {"held": side_held, "held_shares": n, "paired_shares": paired}
-    plan.hedge = record
-    if quote is None:
-        record["note"] = f"The model gave no hedge quote for the {side_held} position."
-        return
-    other = quote.side
-    book = _book(inp, other)
-    price = _on_tick(quote.price, inp.tick_size)
-    record.update(side=other, price=price, p_held_given_fill=quote.p_held_given_fill)
-    if not 0.0 < price < book.best_ask - _PRICE_EPS:
-        record["note"] = (f"The hedge quote {quote.price:g} is not below the {other} ask of "
-                          f"{book.best_ask:g}; a hedge only ever rests.")
-        return
-    h = _sizing.hedge_shares_given_fill(quote.p_held_given_fill, price, W + paired, n)
-    shares = _order_shares(h * price, price, settings.max_order_usd)
-    record.update(optimal_shares=h, shares=shares)
-    if shares > 0:
-        plan.bids.append(PlannedBid(
-            kind="hedge", side=other, token_id=_token(inp, other), price=price,
-            shares=shares, rung=0, depth_ahead=book.depth_ahead(price),
-        ))
-
-
-def diff_orders(planned: Sequence[PlannedBid], resting: Sequence[Mapping[str, Any]]
-                ) -> tuple[list[int], list[int], list[PlannedBid]]:
-    """Match the plan against the bids resting now: ``(keep_ids, cancel_ids, new_bids)``.
-
-    A resting bid is kept, with its place in the queue, when the plan wants the same kind,
-    side, token and price with the same shares still unfilled. Every other resting bid is
-    cancelled and every unmatched planned bid is placed.
-    """
-    keep: list[int] = []
-    new: list[PlannedBid] = []
-    left = list(resting)
-    for bid in planned:
-        match = None
-        for row in left:
-            remaining = float(row["shares"]) - float(row.get("filled_shares") or 0.0)
-            if (row["kind"] == bid.kind and row["side"] == bid.side
-                    and str(row["token_id"]) == bid.token_id
-                    and abs(float(row["price"]) - bid.price) <= _PRICE_EPS
-                    and abs(remaining - bid.shares) < _SHARE_STEP / 2):
-                match = row
-                break
-        if match is None:
-            new.append(bid)
-        else:
-            keep.append(int(match["id"]))
-            left.remove(match)
-    return keep, [int(r["id"]) for r in left], new
-
-
-def free_bankroll(start_usd: float, summary: Mapping[str, Any],
-                  pending: Sequence[Mapping[str, Any]], replanned: set[str]) -> float:
-    """The bankroll free for this pass's plan (module docstring).
-
-    ``pending``: ``ledger.orders_needing_flow()`` rows. ``replanned``: the window slugs whose
-    resting bids this pass re-plans (their cost is the plan's, not a deduction).
-    """
-    unread = 0.0
-    for row in pending:
-        if row.get("state") in _ledger.RESTING_STATES and row.get("window_slug") in replanned:
-            continue
-        remaining = float(row["shares"]) - float(row.get("filled_shares") or 0.0)
-        unread += max(0.0, remaining) * float(row["price"])
-    return (float(start_usd) + float(summary.get("net_pnl_usd") or 0.0)
-            - float(summary.get("open_exposure_usd") or 0.0) - unread)
-
-
 def _decide_all(ready: Mapping[str, Inputs], params: Mapping[str, Any],
-                settings: DecideSettings) -> dict[str, Any]:
+                settings: DecideSettings, held: Mapping[str, Mapping[str, float]],
+                bankrolls: Mapping[str, float]) -> dict[str, Any]:
     """Every ready coin's Decision (or None, or the exception it raised). Runs in a worker
     thread; one coin failing never stops the others."""
     out: dict[str, Any] = {}
     for asset, inputs in ready.items():
         try:
-            out[asset] = _decide.decide(inputs, params, settings)
+            out[asset] = _decide.decide(inputs, params, settings, held=held.get(asset) or {},
+                                        bankroll=bankrolls[asset])
         except Exception as exc:  # noqa: BLE001 - reported per coin by the caller
             out[asset] = exc
     return out
+
+
+def _held_by_window(positions: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, float]]:
+    """Net shares held per window and side, from ``ledger.open_positions()``."""
+    out: dict[str, dict[str, float]] = {}
+    for row in positions:
+        shares = float(row.get("shares") or 0.0)
+        if shares > _SHARES_EPS:
+            out.setdefault(str(row["window_slug"]), {})[str(row["side"])] = shares
+    return out
+
+
+def bankrolls_for(coins: Mapping[str, Inputs], by_window: Mapping[str, Mapping[str, float]],
+                  cash_usd: float) -> dict[str, float]:
+    """The wealth each coin's model sizes from: the free cash plus what the positions in the
+    OTHER coins' current windows are worth at their side's book mid (the coin's own position
+    is in its Kelly account). ``by_window``: net shares held per window and side. Positions in
+    ended windows awaiting their result count at zero."""
+    marks: dict[str, float] = {}
+    for asset, inp in coins.items():
+        value = 0.0
+        for side, shares in (by_window.get(inp.window_slug) or {}).items():
+            value += shares * _book(inp, side).mid
+        marks[asset] = value
+    total = math.fsum(marks.values())
+    return {asset: float(cash_usd) + total - marks[asset] for asset in coins}
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +572,21 @@ def _coin(asset: str) -> str:
     return asset.upper()
 
 
+def _input_notes(asset: str, got: Inputs | Problem, report: PassReport) -> dict[str, Any]:
+    """A coin's input notes and warnings for its card entry. A warning is a failure that did
+    not stop the coin (a database read or write), so it is also an error of the pass."""
+    warnings = [str(w) for w in getattr(got, "warnings", ()) or ()]
+    for text in warnings:
+        report.errors.append(f"{_coin(asset)}: {text}")
+    return {"notes": [str(n) for n in getattr(got, "notes", ()) or ()], "warnings": warnings}
+
+
 class Runner:
     """One runner per process: keeps the HTTP client, the input memory and the bookkeeper
-    (which remembers when each window's result was last looked up) for its lifetime."""
+    (which remembers when each window's result was last looked up) for its lifetime.
+
+    ``clock`` is read at the moment each thing is measured or written: the ledger reads it
+    inside its own writes, so an order rests from the second after it is written."""
 
     def __init__(
         self,
@@ -533,58 +603,70 @@ class Runner:
         self._clock = clock
         self._kill_switch_path = kill_switch_path
         self._memory = memory or _inputs.InputMemory()
-        self.bookkeeper = bookkeeper or _executor.PaperBookkeeper(client)
+        self.bookkeeper = bookkeeper or _executor.PaperBookkeeper(client, clock=clock)
         self._ready = False
         self._last_hub: Any = None
         self._passes = 0
         self._last_error: str | None = None
         self._last_error_ts: float | None = None
 
+    def _now(self) -> float:
+        return float(self._clock())
+
     # -- the pass -----------------------------------------------------------
 
     async def pass_once(self) -> PassReport:
         """One guarded pass. Never raises (a cancel propagates)."""
-        now = float(self._clock())
-        report = PassReport(ts=now)
-        await self._setup(now, report)
-        await self._bookkeeping(now, report)
-        choice = await self._choose(now, report)
+        report = PassReport(ts=self._now())
+        await self._setup(report)
+        await self._bookkeeping(report)
+        choice = await self._choose(report)
         try:
             on = await _strategies.enabled(STRATEGY)
         except Exception as exc:  # noqa: BLE001 - fail closed
             report.fail("Reading the strategy switch", exc)
             on = False
         if not on:
-            await self._switched_off(now, report)
+            await self._switched_off(report)
         elif not self._ready:
             report.state = "setting_up"
-            report.errors.append("Setup has not finished, so no new bids are placed yet.")
+            report.errors.append("Setup has not finished, so no new orders are placed yet.")
         else:
             if choice is None or not choice.can_place:
                 # Inputs are still read and recorded; the card shows why nothing is placed.
                 report.state = choice.state if choice is not None else "no_executor"
             try:
-                await self._trade(now, choice, report)
+                await self._trade(choice, report)
             except Exception as exc:  # noqa: BLE001 - shown on the card
                 report.fail("The trading step", exc)
+                await self._stand_down_after_failure(report)
         await self._finish(report)
         return report
 
-    async def _setup(self, now: float, report: PassReport) -> None:
+    async def _stand_down_after_failure(self, report: PassReport) -> None:
+        """The trading step failed before it could bring the orders in line: stop them all,
+        so none keeps resting at a price the maths no longer stands behind."""
+        try:
+            report.cancelled += await _ledger.cancel_all_open(
+                ts=self._clock, reason=TRADING_STEP_FAILED)
+        except Exception as exc:  # noqa: BLE001
+            report.fail("Cancelling resting orders", exc)
+
+    async def _setup(self, report: PassReport) -> None:
         if self._ready:
             return
         try:
-            dials = await _learner.seed_starting_dials(ts=now)
+            dials = await _learner.seed_starting_dials(ts=self._now())
             report.dials_version = int(dials["version"])
-            await self.bookkeeper.recover_after_restart(now=now)
+            await self.bookkeeper.recover_after_restart()
         except Exception as exc:  # noqa: BLE001 - retried next pass
             report.fail("Setup (dials and restart recovery)", exc)
             return
         self._ready = True
 
-    async def _bookkeeping(self, now: float, report: PassReport) -> None:
+    async def _bookkeeping(self, report: PassReport) -> None:
         try:
-            fills = await self.bookkeeper.sync_fills(now=now)
+            fills = await self.bookkeeper.sync_fills()
         except Exception as exc:  # noqa: BLE001
             report.fail("Checking fills", exc)
         else:
@@ -593,7 +675,7 @@ class Runner:
             report.errors.extend(fills.errors)
             await self._notify_fills(fills.fills)
         try:
-            settled = await self.bookkeeper.settle(now=now)
+            settled = await self.bookkeeper.settle()
         except Exception as exc:  # noqa: BLE001
             report.fail("Settling", exc)
         else:
@@ -606,13 +688,12 @@ class Runner:
             report.errors.extend(settled.errors)
             await self._notify_settled(settled.settled)
             if settled.settled:
-                await self._learn(now, settled.settled, report)
+                await self._learn(settled.settled, report)
 
-    async def _learn(self, now: float, settled: Sequence[_ledger.Settlement],
-                     report: PassReport) -> None:
+    async def _learn(self, settled: Sequence[_ledger.Settlement], report: PassReport) -> None:
         """One learning step on the windows just settled (the learner never raises)."""
         try:
-            learned = await _learner.learn_from_settled(settled, ts=now)
+            learned = await _learner.learn_from_settled(settled, ts=self._now())
         except Exception as exc:  # noqa: BLE001 - belt and braces
             report.fail("Learning", exc)
             return
@@ -622,62 +703,67 @@ class Runner:
             report.dials_version = learned.version
             report.learn_note = learned.note
 
-    async def _choose(self, now: float, report: PassReport) -> _executor.ExecutorChoice | None:
+    async def _choose(self, report: PassReport) -> _executor.ExecutorChoice | None:
         try:
             choice = await _executor.choose_executor(
-                self._client, bookkeeper=self.bookkeeper, kill_switch_path=self._kill_switch_path
+                self._client, bookkeeper=self.bookkeeper,
+                kill_switch_path=self._kill_switch_path, clock=self._clock,
             )
         except Exception as exc:  # noqa: BLE001 - no executor: place nothing
             message = report.fail("Choosing the executor", exc)
             report.executor = {"state": _executor.UNKNOWN_MODE_STATE, "requested_mode": None,
-                               "message": f"{message}. No new bids this pass.",
+                               "message": f"{message}. No new orders this pass.",
                                "can_place": False}
             try:
                 report.cancelled += await _ledger.cancel_all_open(
-                    ts=now, reason=_executor.UNKNOWN_MODE_STATE)
+                    ts=self._clock, reason=_executor.UNKNOWN_MODE_STATE)
             except Exception as exc2:  # noqa: BLE001
-                report.fail("Cancelling resting bids", exc2)
+                report.fail("Cancelling resting orders", exc2)
             return None
         report.executor = {"state": choice.state, "requested_mode": choice.requested_mode,
                            "message": choice.message, "can_place": choice.can_place}
         if not choice.can_place:
             try:
-                report.cancelled += await _executor.stand_down(choice, now=now)
+                report.cancelled += await _executor.stand_down(choice)
             except Exception as exc:  # noqa: BLE001
-                report.fail("Cancelling resting bids", exc)
+                report.fail("Cancelling resting orders", exc)
         return choice
 
-    async def _switched_off(self, now: float, report: PassReport) -> None:
+    async def _switched_off(self, report: PassReport) -> None:
         report.state = "switched_off"
         try:
-            report.cancelled += await _ledger.cancel_all_open(ts=now, reason="switched_off")
+            report.cancelled += await _ledger.cancel_all_open(ts=self._clock,
+                                                              reason="switched_off")
         except Exception as exc:  # noqa: BLE001
-            report.fail("Cancelling resting bids", exc)
+            report.fail("Cancelling resting orders", exc)
         self.release()
         for asset in ASSETS:
             report.assets[asset] = {
                 "action": "switched_off",
-                "reason": "The strategy is switched off: no new bids. Fills and settlement "
+                "reason": "The strategy is switched off: no new orders. Fills and settlement "
                           "keep running.",
             }
 
-    async def _trade(self, now: float, choice: _executor.ExecutorChoice | None,
+    async def _trade(self, choice: _executor.ExecutorChoice | None,
                      report: PassReport) -> None:
         settings = await read_settings()
-        dials = await _ledger.dials() or await _ledger.seed_dials(ts=now)
+        dials = await _ledger.dials() or await _ledger.seed_dials(ts=self._now())
         params = dict(dials.get("params") or {})
         version = int(dials["version"])
         report.dials_version = version
         hub = self._hub_fn()
         if hub is not None:
             self._last_hub = hub
+        # The time the inputs, the prices' ages and the time left are measured from: read
+        # after the bookkeeping, which can take a while.
+        now = self._now()
         gathered = await _inputs.gather(hub, self._client, now, memory=self._memory)
         state = choice.state if choice is not None else _executor.UNKNOWN_MODE_STATE
         can_place = choice is not None and choice.can_place
 
-        cases: dict[str, tuple[Inputs, Decision]] = {}
         simple: dict[str, tuple[str, str, Inputs | Problem]] = {}
         ready: dict[str, Inputs] = {}
+        priced: dict[str, Inputs] = {}  # coins with inputs, switched on or not (for marks)
         for asset in ASSETS:
             got = gathered.get(asset)
             if not isinstance(got, (Inputs, Problem)):
@@ -685,52 +771,75 @@ class Runner:
                               message="No inputs were returned for this coin.")
             if isinstance(got, Problem):
                 simple[asset] = (NO_INPUTS, got.message, got)
-            elif not settings.coins.get(asset, True):
+                continue
+            priced[asset] = got
+            if not settings.coins.get(asset, True):
                 simple[asset] = (COIN_OFF, f"{_coin(asset)} is switched off in Settings: "
-                                           "inputs recorded, no bids.", got)
+                                           "inputs recorded, no orders.", got)
             else:
                 ready[asset] = got
+
+        # The position and the bankroll the model sizes from, before it runs.
+        resting = await _ledger.open_orders()
+        cash: float | None = None
+        held: dict[str, dict[str, float]] = {}
+        bankrolls: dict[str, float] = {}
+        if ready:
+            positions = await _ledger.open_positions()
+            by_window = _held_by_window(positions)
+            held = {a: dict(by_window.get(inp.window_slug) or {}) for a, inp in ready.items()}
+            cash = await _ledger.free_cash_usd(
+                settings.bankroll_usd, replanned={inp.window_slug for inp in ready.values()})
+            bankrolls = bankrolls_for(priced, by_window, cash)
+        else:
+            try:
+                cash = await _ledger.free_cash_usd(settings.bankroll_usd)
+            except Exception as exc:  # noqa: BLE001 - only the card's figure is lost
+                report.fail("Reading the free cash", exc)
+        report.bankroll = {"start_usd": settings.bankroll_usd, "free_usd": cash}
+
         # The model runs off the event loop (a capped simulation per coin).
-        answers = await asyncio.to_thread(_decide_all, ready, params, settings.decide)
+        answers = (await asyncio.to_thread(_decide_all, ready, params, settings.decide, held,
+                                           bankrolls) if ready else {})
+        cases: dict[str, tuple[Inputs, Decision]] = {}
         for asset, got in ready.items():
             decision = answers.get(asset)
             if isinstance(decision, NoDecision):
                 simple[asset] = (NO_MODEL, f"The model cannot price this window: {decision} "
-                                           "No bids for this coin.", got)
-                continue
-            if isinstance(decision, BaseException):
-                exc = decision
-                simple[asset] = (MODEL_ERROR, f"The model failed: {type(exc).__name__}: "
-                                              f"{exc}. No bids for this coin.", got)
-                log.warning("fade1h.model_failed", asset=asset, error=str(exc))
-                continue
-            if decision is None:
+                                           "No orders for this coin.", got)
+            elif isinstance(decision, BaseException):
+                simple[asset] = (MODEL_ERROR, f"The model failed: {type(decision).__name__}: "
+                                              f"{decision}. No orders for this coin.", got)
+                log.warning("fade1h.model_failed", asset=asset, error=str(decision))
+            elif decision is None:
                 simple[asset] = (NO_MODEL, NO_MODEL_REASON, got)
             elif not isinstance(decision, Decision):
                 simple[asset] = (MODEL_ERROR, "The model returned something other than a "
-                                              "Decision. No bids for this coin.", got)
+                                              "Decision. No orders for this coin.", got)
             else:
                 cases[asset] = (got, decision)
 
-        resting = await _ledger.open_orders()
         plans: dict[str, CoinPlan] = {}
-        W: float | None = None
         if cases:
+            # Buy orders of ready coins the model gave nothing are cancelled this pass, but
+            # their tape is not read yet: they may still turn out to have filled.
+            unsure = math.fsum(
+                max(0.0, float(o["shares"]) - float(o.get("filled_shares") or 0.0))
+                * float(o["price"])
+                for o in resting
+                if o.get("order_side") == "BUY" and o.get("asset") in ready
+                and o.get("asset") not in cases and o.get("window_slug") in
+                {inp.window_slug for inp in ready.values()})
+            rho = float(params.get("rho", _ledger.PRIOR_DIALS["rho"]))
             try:
-                W, plans = await self._plan(cases, params, settings)
-            except Exception as exc:  # noqa: BLE001 - record the inputs anyway, bid nothing
+                plans = await asyncio.to_thread(
+                    plan_orders, cases, cash_usd=(cash or 0.0) - unsure, bankrolls=bankrolls,
+                    held=held, rho=rho, settings=settings)
+            except Exception as exc:  # noqa: BLE001 - record the inputs anyway, place nothing
                 message = report.fail("Sizing", exc)
-                plans = {
-                    asset: CoinPlan(asset=asset, window_slug=inp.window_slug, side=dec.side,
-                                    notes=[f"{message}. No bids this pass."])
-                    for asset, (inp, dec) in cases.items()
-                }
-        else:
-            try:
-                W = await _ledger.free_cash_usd(settings.bankroll_usd)
-            except Exception as exc:  # noqa: BLE001 - only the card's figure is lost
-                report.fail("Reading the free bankroll", exc)
-        report.bankroll = {"start_usd": settings.bankroll_usd, "free_usd": W}
+                plans = {asset: CoinPlan(asset=asset, window_slug=inp.window_slug,
+                                         notes=[f"{message}. No orders this pass."])
+                         for asset, (inp, _) in cases.items()}
 
         for asset in ASSETS:
             mine = [o for o in resting if o.get("asset") == asset]
@@ -739,34 +848,14 @@ class Runner:
                     action, reason, got = simple[asset]
                     await self._record_simple(now, asset, action, reason, got, settings,
                                               state, version, report)
-                    await self._cancel(choice, [int(o["id"]) for o in mine], action, now,
-                                       report)
+                    await self._cancel(choice, [int(o["id"]) for o in mine], action, report)
                 else:
                     inp, dec = cases[asset]
-                    await self._act(now, asset, inp, dec, plans[asset], mine, settings, W,
-                                    choice, state, can_place, version, report)
+                    await self._act(now, asset, inp, dec, plans[asset], mine, settings,
+                                    cash or 0.0, choice, state, can_place, version, report)
             except Exception as exc:  # noqa: BLE001 - one coin must not stop the others
                 message = report.fail(f"{_coin(asset)}", exc)
                 report.assets.setdefault(asset, {})["error"] = message
-
-    async def _plan(self, cases: Mapping[str, tuple[Inputs, Decision]],
-                    params: Mapping[str, Any], settings: Settings
-                    ) -> tuple[float, dict[str, CoinPlan]]:
-        """The free bankroll and every decided coin's plan."""
-        summary = await _ledger.summary()
-        pending = await _ledger.orders_needing_flow()
-        positions = await _ledger.open_positions()
-        replanned = {inp.window_slug for inp, _ in cases.values()}
-        W = free_bankroll(settings.bankroll_usd, summary, pending, replanned)
-        held: dict[str, dict[str, float]] = {}
-        for row in positions:
-            for asset, (inp, _) in cases.items():
-                if row["window_slug"] == inp.window_slug:
-                    held.setdefault(asset, {})[row["side"]] = float(row["shares"] or 0.0)
-        rho = float(params.get("rho", _ledger.PRIOR_DIALS["rho"]))
-        plans = await asyncio.to_thread(
-            plan_orders, cases, held, bankroll_usd=W, rho=rho, settings=settings)
-        return W, plans
 
     async def _record_simple(self, now: float, asset: str, action: str, reason: str,
                              got: Inputs | Problem, settings: Settings, state: str,
@@ -778,81 +867,74 @@ class Runner:
             window_slug=got.window_slug, mode=state, dials_version=version, reason=reason,
         )
         entry: dict[str, Any] = {"action": action, "reason": reason,
-                                 "window_slug": got.window_slug, "decision_id": decision_id}
+                                 "window_slug": got.window_slug, "decision_id": decision_id,
+                                 **_input_notes(asset, got, report)}
         if isinstance(got, Problem):
             entry["codes"] = list(got.codes)
         report.assets[asset] = entry
 
     async def _cancel(self, choice: _executor.ExecutorChoice | None, ids: list[int],
-                      reason: str, now: float, report: PassReport) -> None:
-        """Cancel a coin's resting bids. When this pass may not place bids they were all
+                      reason: str, report: PassReport) -> None:
+        """Cancel a coin's resting orders. When this pass may not place orders they were all
         stood down already."""
         if not ids or choice is None or choice.executor is None:
             return
-        report.cancelled += await choice.executor.cancel(ids, reason=reason, now=now)
+        report.cancelled += await choice.executor.cancel(ids, reason=reason)
 
     async def _act(self, now: float, asset: str, inp: Inputs, dec: Decision, plan: CoinPlan,
-                   resting: list[dict], settings: Settings, W: float | None,
+                   resting: list[dict], settings: Settings, cash: float,
                    choice: _executor.ExecutorChoice | None, state: str, can_place: bool,
                    version: int, report: PassReport) -> None:
-        if not plan.bids:
-            action = NO_BID
-            reason = " ".join(plan.notes) or "The maths gives no stake at any rung."
+        if not plan.orders:
+            action = NO_ORDER
+            reason = " ".join(plan.notes) or "The maths gives no order at any price level."
         elif not can_place:
             action = NOT_PLACED
             reason = (choice.message if choice is not None
-                      else "No executor this pass, so no new bids.")
+                      else "No executor this pass, so no new orders.")
         else:
-            action, reason = BID, (" ".join(plan.notes) or None)
+            action, reason = ORDERS, (" ".join(plan.notes) or None)
         record = inp.as_record()
         record["settings"] = settings.as_record()
-        entries = plan.entries
-        hedge_bid = next((b for b in plan.bids if b.kind == "hedge"), None)
-        hedge = dict(plan.hedge or {})
-        if hedge_bid is not None:
-            hedge["bid"] = hedge_bid.as_record()
+        position = plan.position_record(dec)
+        wealth = plan.bankroll_usd
         decision_id = await _ledger.record_decision(
             ts=now, asset=asset, inputs=record, action=action, window_slug=inp.window_slug,
-            mode=state, dials_version=version, p_model=dec.p_model, p=dec.p, side=dec.side,
-            kelly_f=plan.kelly_f, stake_usd=plan.entry_cost_usd,
-            ladder=[b.as_record() for b in entries], hedge=hedge or None,
-            factors={"model": dict(dec.factors),
-                     "sizing": plan.sizing_record(W if W is not None else 0.0),
+            mode=state, dials_version=version, p_model=dec.p_model, p=dec.p,
+            side=dec.side,
+            kelly_f=plan.buy_usd / wealth if wealth > 0 else None,
+            stake_usd=plan.buy_usd,
+            child_orders=[o.as_record() for o in plan.orders], hedge=position,
+            factors={"model": dict(dec.factors), "sizing": plan.sizing_record(dec, cash),
+                     "order": {"action": dec.action, "side": dec.side},
                      "explanation": dec.explanation},
             reason=reason,
         )
         entry: dict[str, Any] = {
             "action": action, "reason": reason, "window_slug": inp.window_slug,
-            "decision_id": decision_id, "side": dec.side, "p": dec.p, "p_model": dec.p_model,
-            "explanation": dec.explanation, "bids": [b.as_record() for b in plan.bids],
+            "decision_id": decision_id, "order_action": dec.action, "side": dec.side,
+            "p": dec.p, "p_model": dec.p_model, "explanation": dec.explanation,
+            "orders": [o.as_record() for o in plan.orders], "position": position,
+            "sizing": plan.sizing_record(dec, cash), **_input_notes(asset, inp, report),
         }
         report.assets[asset] = entry
         if not can_place or choice is None or choice.executor is None:
             return
-        in_window = [o for o in resting if o["window_slug"] == inp.window_slug]
-        elsewhere = [int(o["id"]) for o in resting if o["window_slug"] != inp.window_slug]
-        keep, cancel, new = diff_orders(plan.bids, in_window)
-        cancel += elsewhere
-        entry.update(kept=len(keep), cancelled=len(cancel), placed=0)
-        if not cancel and not new:
-            return
-        orders = [
-            _ledger.NewOrder(
-                window_slug=inp.window_slug, token_id=b.token_id, side=b.side, kind=b.kind,
-                price=b.price, shares=b.shares, rung=b.rung, depth_ahead=b.depth_ahead,
-                decision_id=decision_id,
-            )
-            for b in new
-        ]
+        wanted = [o.new_order(inp.window_slug, decision_id) for o in plan.orders]
+        # Every resting order of this coin: the ones in another window are not wanted and are
+        # cancelled in the same transaction.
         try:
-            ids = await choice.executor.requote(
-                orders, best_asks={inp.up_token: inp.up_book.best_ask,
-                                   inp.down_token: inp.down_book.best_ask},
-                now=now, cancel_ids=cancel, cancel_reason="requote",
+            done = await choice.executor.reconcile(
+                wanted, resting,
+                best_asks={inp.up_token: inp.up_book.best_ask,
+                           inp.down_token: inp.down_book.best_ask},
+                best_bids={inp.up_token: inp.up_book.best_bid,
+                           inp.down_token: inp.down_book.best_bid},
+                cancel_reason="requote",
             )
         except _executor.PlacementRefused as exc:
-            message = f"The bids were refused ({exc.reason}): {exc}"
-            entry.update(action=REFUSED, reason=message, cancelled=0)
+            message = f"The orders were refused ({exc.reason}): {exc}"
+            entry.update(action=REFUSED, reason=message, kept=0, placed=0, cancelled=0)
             report.errors.append(f"{_coin(asset)}: {message}")
             await _ledger.record_decision(
                 ts=now, asset=asset, window_slug=inp.window_slug, mode=state,
@@ -860,8 +942,13 @@ class Runner:
                 inputs={"status": "refused", "decision_id": decision_id},
             )
             return
-        report.cancelled += len(cancel)
-        entry["placed"] = sum(1 for i in ids if i is not None)
+        result = done.result
+        placed = sum(1 for i in result.ids if i is not None)
+        report.cancelled += result.cancelled
+        entry.update(kept=len(done.changes.keep), placed=placed, cancelled=result.cancelled)
+        if result.held_back:
+            entry["held_back"] = [text for _, text in
+                                  (result.held_back[i] for i in sorted(result.held_back))]
 
     # -- the card -----------------------------------------------------------
 
@@ -876,7 +963,7 @@ class Runner:
             "strategy": STRATEGY,
             "last_pass_ts": report.ts,
             "passes": self._passes,
-            "errors": list(report.errors),
+            "errors": list(dict.fromkeys(report.errors)),
             "last_error": self._last_error,
             "last_error_ts": self._last_error_ts,
             "executor": dict(report.executor),
@@ -891,20 +978,18 @@ class Runner:
             "cancelled": report.cancelled,
             "assets": copy.deepcopy(report.assets),
         }
-        try:
-            await _db.set_config(STATUS_KEY, json.dumps(_STATUS, default=str))
-        except Exception as exc:  # noqa: BLE001 - the in-memory copy still serves the card
-            log.warning("fade1h.status_not_saved", error=f"{type(exc).__name__}: {exc}")
+        await _save_status()
 
     async def _notify_fills(self, fills: Sequence[_executor.FillEvent]) -> None:
         if not fills:
             return
-        parts = [f"{f.window_slug.split('-')[0].upper()} {f.side} {f.shares:.2f} sh at "
-                 f"{f.price:g} ({f.kind})" for f in fills[:_MAX_NAMED]]
+        parts = [f"{f.window_slug.split('-')[0].upper()} "
+                 f"{'sold' if f.order_side == 'SELL' else 'bought'} {f.shares:.2f} {f.side} at "
+                 f"{f.price:g}" for f in fills[:_MAX_NAMED]]
         more = len(fills) - _MAX_NAMED
         text = "; ".join(parts) + (f"; and {more} more" if more > 0 else "")
         try:
-            await _db.notify(FILL_EVENT, f"{LABEL}: paper bids filled: {text}.",
+            await _db.notify(FILL_EVENT, f"{LABEL}: paper orders filled: {text}.",
                              {"fills": [dataclasses.asdict(f) for f in fills]})
         except Exception as exc:  # noqa: BLE001 - the ledger has the fills either way
             log.warning("fade1h.notify_failed", error=f"{type(exc).__name__}: {exc}")
@@ -914,14 +999,17 @@ class Runner:
             if s.filled_shares <= 0:
                 continue  # a window nothing filled in: recorded, but not news
             sign = "+" if s.net_pnl >= 0 else "-"
+            sold = (f", {s.sold_shares:.2f} sold for ${s.sale_proceeds_usd:.2f}"
+                    if s.sold_shares > 0 else "")
             try:
                 await _db.notify(
                     SETTLED_EVENT,
                     f"{LABEL}: {s.window_slug} settled {s.outcome}: net {sign}"
-                    f"${abs(s.net_pnl):.2f} on {s.filled_shares:.2f} filled shares "
-                    f"(${s.staked_usd:.2f} staked).",
+                    f"${abs(s.net_pnl):.2f} on {s.filled_shares:.2f} shares bought "
+                    f"(${s.staked_usd:.2f}){sold}.",
                     {"window_slug": s.window_slug, "outcome": s.outcome,
-                     "net_pnl": s.net_pnl, "filled_shares": s.filled_shares},
+                     "net_pnl": s.net_pnl, "filled_shares": s.filled_shares,
+                     "sold_shares": s.sold_shares},
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("fade1h.notify_failed", error=f"{type(exc).__name__}: {exc}")
@@ -972,8 +1060,10 @@ def _stopped(stop_event: Any) -> bool:
 
 async def run_forever(stop_event: asyncio.Event | None = None) -> None:
     """Run passes until ``stop_event`` is set (or forever if None). Never raises: a failure
-    anywhere is logged and shown on the card, and the next pass tries again. A cancel (the
-    app's teardown) propagates after the market data is released."""
+    anywhere is logged and shown on the card (a pass that fails past its own guards, and a
+    loop that cannot start or dies, both land in ``status()`` and ``STATUS_KEY``), and the next
+    pass tries again. A cancel (the app's teardown) propagates after the market data is
+    released."""
     global _STATUS
     runner: Runner | None = None
     failed = False
@@ -984,23 +1074,19 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
                 started = time.monotonic()
                 try:
                     await runner.pass_once()
-                except Exception:  # noqa: BLE001 - pass_once guards itself; belt and braces
+                except Exception as exc:  # noqa: BLE001 - pass_once guards itself; belt and braces
                     log.exception("fade1h.pass_failed")
+                    await _record_failure(
+                        f"A pass failed before it finished: {type(exc).__name__}: {exc}",
+                        time.time(), PASS_FAILED)
                 interval = await read_poll_interval()
                 await _sleep(stop_event, interval - (time.monotonic() - started))
     except Exception as exc:  # noqa: BLE001 - never raise out of the task
         failed = True
         log.exception("fade1h.loop_failed")
-        _STATUS = {**_STATUS, "last_error": f"The loop stopped: {type(exc).__name__}: {exc}",
-                   "last_error_ts": time.time()}
+        await _record_failure(f"The loop stopped: {type(exc).__name__}: {exc}", time.time(),
+                              STOPPED_ON_ERROR)
     finally:
         if runner is not None:
             runner.release()
-        else:
-            try:
-                from polymarket_exec.marketdata import hub as md_hub
-
-                md_hub.release(OWNER)
-            except Exception:  # noqa: BLE001
-                pass
-        _STATUS = {**_STATUS, "state": "stopped_on_error" if failed else "stopped"}
+        _STATUS = {**_STATUS, "state": STOPPED_ON_ERROR if failed else STOPPED}

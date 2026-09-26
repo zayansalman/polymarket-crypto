@@ -1,8 +1,10 @@
 """Sizing maths for Fade 1h Momentum on 15m (polymarket_bot/fade_1h_momentum_15m/sizing.py).
 
-Reproduces every number in the check table of tasks/2026-09-22-fade-1h-sizing-hedging.md and
+Reproduces every number in the check table of tasks/2026-09-22-fade-1h-sizing.md and
 pins the properties the spec relies on: the market anchor's limits, Kelly for one bet and for
-several bets that move together, fractional Kelly, the bid ladder and the resting hedge.
+several bets that move together (with their sides), fractional Kelly with shares already held,
+scaled passive limit orders (one parent order split into child orders at several price levels)
+and the resting sell that reduces a held position.
 """
 
 from __future__ import annotations
@@ -165,7 +167,7 @@ class TestFractionalKelly:
         with pytest.raises(ValueError):
             s.joint_kelly([(0.56, 0.5)], 0.6, k)
         with pytest.raises(ValueError):
-            s.ladder([(0.5, 0.5, 0.56)], 100.0, k)
+            s.scaled_limits([(0.5, 0.5, 0.56)], 100.0, k)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -345,37 +347,81 @@ class TestQuadrature:
 
 
 # ---------------------------------------------------------------------------------------------
-# Section 3: the ladder
+# Section 2: bets on opposite sides of coins that move together
 # ---------------------------------------------------------------------------------------------
 
 
-class TestLadder:
-    RUNGS = [(0.50, 0.60, 0.58), (0.48, 0.40, 0.47), (0.45, 0.20, 0.52)]
+class TestSides:
+    def test_opposite_sides_hedge_each_other(self) -> None:
+        # rho is learned on the coins' Up results, so an Up bet on one coin and a Down bet on
+        # another move against each other: each gets more than alone (0.12), not less.
+        same = s.joint_kelly([s.Bet(0.56, 0.5), s.Bet(0.56, 0.5)], 0.75, 1.0)
+        both_down = s.joint_kelly([s.Bet(0.56, 0.5, 1.0, "Down")] * 2, 0.75, 1.0)
+        mixed = s.joint_kelly([s.Bet(0.56, 0.5), s.Bet(0.56, 0.5, 1.0, "Down")], 0.75, 1.0)
+        assert same == pytest.approx([0.07765, 0.07765], abs=1e-4)
+        assert both_down == pytest.approx(same, abs=1e-12)  # two Down bets move together too
+        assert mixed == pytest.approx([0.24107, 0.24107], abs=1e-4)
+        assert min(mixed) > s.kelly_maker(0.56, 0.5) > max(same)
+        TestJointKelly._assert_optimal([s.Bet(0.56, 0.5), s.Bet(0.56, 0.5, 1.0, "Down")],
+                                       0.75, mixed)
 
-    def test_single_rung_is_plain_kelly_whatever_its_fill_chance(self) -> None:
+    def test_the_table_flips_the_shared_factor_for_down(self) -> None:
+        # Coin 1 Up at 0.56, coin 2 Down at 0.3 (so coin 2 Up at 0.7): "Up wins and Down wins"
+        # is "both coins' Up events go opposite ways", from the all-Up table.
+        rho = 0.6
+        up_table = s.outcome_probabilities([0.56, 0.7], rho)
+        mixed = s.outcome_probabilities([0.56, 0.3], rho, sides=["Up", "Down"])
+        assert mixed[(True, True)] == pytest.approx(up_table[(True, False)], abs=1e-12)
+        assert mixed[(False, False)] == pytest.approx(up_table[(False, True)], abs=1e-12)
+        assert math.fsum(mixed.values()) == pytest.approx(1.0, abs=1e-12)
+        assert math.fsum(p for k, p in mixed.items() if k[1]) == pytest.approx(0.3, abs=1e-10)
+
+    def test_perfectly_together_on_opposite_sides(self) -> None:
+        # Up at 0.56 and Down at 0.56 on coins that settle the same way: one of them always
+        # wins, and both win 12% of the time.
+        table = s.outcome_probabilities([0.56, 0.56], 1.0, sides=["Up", "Down"])
+        assert table[(True, True)] == pytest.approx(0.12)
+        assert table[(True, False)] == pytest.approx(0.44)
+        assert table[(False, True)] == pytest.approx(0.44)
+        assert (False, False) not in table
+
+    def test_rejects_a_side_that_is_not_up_or_down(self) -> None:
+        with pytest.raises(ValueError):
+            s.joint_kelly([s.Bet(0.56, 0.5, 1.0, "Sideways")], 0.5, 1.0)
+        with pytest.raises(ValueError):
+            s.outcome_probabilities([0.5, 0.5], 0.5, sides=["Up"])
+
+
+# ---------------------------------------------------------------------------------------------
+# Section 3: one parent order split into child orders at several price levels
+# ---------------------------------------------------------------------------------------------
+
+
+class TestScaledLimits:
+    LEVELS = [(0.50, 0.60, 0.58), (0.48, 0.40, 0.47), (0.45, 0.20, 0.52)]
+
+    def test_single_level_is_plain_kelly_whatever_its_fill_chance(self) -> None:
         for p_fill in (1.0, 0.3, 0.01):
-            assert s.ladder([(0.5, p_fill, 0.56)], 100.0, 1.0) == pytest.approx(
+            assert s.scaled_limits([(0.5, p_fill, 0.56)], 100.0, 1.0) == pytest.approx(
                 [12.0], abs=1e-7
             )
 
-    def test_rung_without_edge_gets_zero(self) -> None:
-        stakes = s.ladder(self.RUNGS, 100.0, 1.0)
-        assert stakes[1] == 0.0  # q 0.47 does not beat the 48c bid
+    def test_level_without_edge_gets_zero(self) -> None:
+        stakes = s.scaled_limits(self.LEVELS, 100.0, 1.0)
+        assert stakes[1] == 0.0  # q 0.47 does not beat the 48c level
         assert stakes[0] > 0.0
 
-    def test_shallow_rung_without_edge_leaves_room_for_a_deeper_one(self) -> None:
-        stakes = s.ladder([(0.50, 0.6, 0.49), (0.45, 0.3, 0.55)], 100.0, 1.0)
+    def test_near_level_without_edge_leaves_room_for_a_deeper_one(self) -> None:
+        stakes = s.scaled_limits([(0.50, 0.6, 0.49), (0.45, 0.3, 0.55)], 100.0, 1.0)
         assert stakes[0] == 0.0
         assert stakes[1] > 0.0
 
     def test_no_edge_anywhere_stakes_nothing(self) -> None:
-        rungs = [(0.50, 0.6, 0.50), (0.48, 0.4, 0.46), (0.45, 0.2, 0.44)]
-        assert s.ladder(rungs, 100.0, 1.0) == [0.0, 0.0, 0.0]
+        levels = [(0.50, 0.6, 0.50), (0.48, 0.4, 0.46), (0.45, 0.2, 0.44)]
+        assert s.scaled_limits(levels, 100.0, 1.0) == [0.0, 0.0, 0.0]
 
-    def test_ladder_optimum_satisfies_first_order_conditions(self) -> None:
-        rungs = [(0.52, 0.7, 0.57), (0.50, 0.5, 0.56), (0.47, 0.3, 0.55), (0.44, 0.1, 0.50)]
-        stakes = s.ladder(rungs, 100.0, 1.0)
-        assert sum(1 for x in stakes if x > 0.0) >= 2
+    @staticmethod
+    def _assert_optimal(levels, W: float, stakes: list[float], held: float = 0.0) -> None:  # noqa: ANN001
         h = 1e-4
         for i, x in enumerate(stakes):
             up = list(stakes)
@@ -383,130 +429,239 @@ class TestLadder:
             if x > 0.0:
                 down = list(stakes)
                 down[i] -= h
-                slope = s.ladder_log_growth(rungs, 100.0, up) - s.ladder_log_growth(
-                    rungs, 100.0, down
-                )
+                slope = (s.scaled_limits_log_growth(levels, W, up, held)
+                         - s.scaled_limits_log_growth(levels, W, down, held))
                 assert slope / (2 * h) == pytest.approx(0.0, abs=1e-8)
             else:
-                slope = s.ladder_log_growth(rungs, 100.0, up) - s.ladder_log_growth(
-                    rungs, 100.0, stakes
-                )
+                slope = (s.scaled_limits_log_growth(levels, W, up, held)
+                         - s.scaled_limits_log_growth(levels, W, stakes, held))
                 assert slope / h <= 1e-8
 
+    def test_optimum_satisfies_first_order_conditions(self) -> None:
+        levels = [(0.52, 0.7, 0.57), (0.50, 0.5, 0.56), (0.47, 0.3, 0.55), (0.44, 0.1, 0.50)]
+        stakes = s.scaled_limits(levels, 100.0, 1.0)
+        assert sum(1 for x in stakes if x > 0.0) >= 2
+        self._assert_optimal(levels, 100.0, stakes)
+
     def test_beats_random_nearby_stakes(self) -> None:
-        stakes = s.ladder(self.RUNGS, 100.0, 1.0)
-        best = s.ladder_log_growth(self.RUNGS, 100.0, stakes)
+        stakes = s.scaled_limits(self.LEVELS, 100.0, 1.0)
+        best = s.scaled_limits_log_growth(self.LEVELS, 100.0, stakes)
+        assert best > 0.0
         rng = random.Random(7)
         for _ in range(200):
             other = [max(0.0, x + rng.uniform(-3.0, 3.0)) for x in stakes]
-            assert s.ladder_log_growth(self.RUNGS, 100.0, other) <= best + 1e-15
+            assert s.scaled_limits_log_growth(self.LEVELS, 100.0, other) <= best + 1e-15
 
     def test_multiplier_and_bankroll_scale_the_stakes(self) -> None:
-        full = s.ladder(self.RUNGS, 100.0, 1.0)
-        assert s.ladder(self.RUNGS, 100.0, 0.5) == pytest.approx([x / 2 for x in full])
-        assert s.ladder(self.RUNGS, 250.0, 1.0) == pytest.approx([x * 2.5 for x in full])
+        full = s.scaled_limits(self.LEVELS, 100.0, 1.0)
+        assert s.scaled_limits(self.LEVELS, 100.0, 0.5) == pytest.approx([x / 2 for x in full])
+        assert s.scaled_limits(self.LEVELS, 250.0, 1.0) == pytest.approx([x * 2.5 for x in full])
 
     def test_input_order_does_not_matter(self) -> None:
-        rungs = [(0.52, 0.7, 0.57), (0.50, 0.5, 0.56), (0.47, 0.3, 0.55)]
-        stakes = s.ladder(rungs, 100.0, 1.0)
-        shuffled = [rungs[2], rungs[0], rungs[1]]
-        again = s.ladder(shuffled, 100.0, 1.0)
+        levels = [(0.52, 0.7, 0.57), (0.50, 0.5, 0.56), (0.47, 0.3, 0.55)]
+        stakes = s.scaled_limits(levels, 100.0, 1.0)
+        shuffled = [levels[2], levels[0], levels[1]]
+        again = s.scaled_limits(shuffled, 100.0, 1.0)
         assert again == pytest.approx([stakes[2], stakes[0], stakes[1]], abs=1e-9)
 
     def test_total_stays_below_the_bankroll(self) -> None:
-        rungs = [(0.30, 1.0, 0.99), (0.20, 0.9, 0.99)]
-        stakes = s.ladder(rungs, 100.0, 1.0)
+        levels = [(0.30, 1.0, 0.99), (0.20, 0.9, 0.99)]
+        stakes = s.scaled_limits(levels, 100.0, 1.0)
         assert 0.0 < sum(stakes) < 100.0
 
     def test_no_bankroll_no_stakes(self) -> None:
-        assert s.ladder(self.RUNGS, 0.0, 0.5) == [0.0, 0.0, 0.0]
-        assert s.ladder(self.RUNGS, -5.0, 0.5) == [0.0, 0.0, 0.0]
-        assert s.ladder([], 100.0, 0.5) == []
+        assert s.scaled_limits(self.LEVELS, 0.0, 0.5) == [0.0, 0.0, 0.0]
+        assert s.scaled_limits(self.LEVELS, -5.0, 0.5) == [0.0, 0.0, 0.0]
+        assert s.scaled_limits(self.LEVELS, 100.0, 0.0) == [0.0, 0.0, 0.0]
+        assert s.scaled_limits([], 100.0, 0.5) == []
 
-    def test_deeper_rung_filling_more_often_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="deeper rung"):
-            s.ladder([(0.50, 0.3, 0.56), (0.45, 0.5, 0.56)], 100.0, 0.5)
+    def test_deeper_level_filling_more_often_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="deeper price level"):
+            s.scaled_limits([(0.50, 0.3, 0.56), (0.45, 0.5, 0.56)], 100.0, 0.5)
 
     def test_inconsistent_win_chances_are_rejected(self) -> None:
-        # Both rungs fill together (P 0.5 each), so they must share one win chance.
+        # Both levels fill together (P 0.5 each), so they must share one win chance.
         with pytest.raises(ValueError, match="inconsistent"):
-            s.ladder([(0.50, 0.5, 0.40), (0.45, 0.5, 0.60)], 100.0, 0.5)
+            s.scaled_limits([(0.50, 0.5, 0.40), (0.45, 0.5, 0.60)], 100.0, 0.5)
 
 
-# ---------------------------------------------------------------------------------------------
-# Section 4: the hedge
-# ---------------------------------------------------------------------------------------------
+class TestSharesAlreadyHeld:
+    """Shares of the side already held count in the sizing: no re-betting the same outcome."""
+
+    @pytest.mark.parametrize("n", [0.0, 10.0, 30.0, 60.0, 400.0])
+    def test_one_level_matches_the_closed_form(self, n: float) -> None:
+        # max q ln(W + n + x(1-b)/b) + (1-q) ln(W - x): x* = [W(q - b) - (1 - q) b n] / (1 - b).
+        q, b, W = 0.6, 0.5, 100.0
+        x = s.scaled_limits([(b, 0.7, q)], W, 1.0, held=n, mark=0.5)[0]
+        assert x == pytest.approx(max(0.0, (W * (q - b) - (1 - q) * b * n) / (1 - b)), abs=1e-7)
+
+    def test_holding_more_buys_less(self) -> None:
+        levels = [(0.52, 0.7, 0.57), (0.50, 0.5, 0.56), (0.47, 0.3, 0.55)]
+        totals = [sum(s.scaled_limits(levels, 100.0, 1.0, held=n, mark=0.53))
+                  for n in (0.0, 10.0, 25.0, 60.0)]
+        assert totals == sorted(totals, reverse=True)
+        assert totals[0] > totals[1] > 0.0 and totals[-1] == 0.0
+
+    def test_the_optimum_with_shares_held_satisfies_first_order_conditions(self) -> None:
+        levels = [(0.52, 0.7, 0.60), (0.50, 0.5, 0.59), (0.47, 0.3, 0.58), (0.44, 0.1, 0.53)]
+        stakes = s.scaled_limits(levels, 100.0, 1.0, held=15.0, mark=0.53)
+        assert sum(stakes) > 0.0
+        TestScaledLimits._assert_optimal(levels, 100.0, stakes, held=15.0)
+
+    @pytest.mark.parametrize("k", [1.0, 0.5, 0.25])
+    def test_after_a_fill_at_unchanged_odds_nothing_more_is_bought(self, k: float) -> None:
+        # The old way (the full-Kelly stake times k, every pass) re-bet the same outcome
+        # after every fill and crept to full Kelly. Counting the shares held, the next pass
+        # at the same odds adds nothing.
+        q, b, W = 0.6, 0.5, 100.0
+        first = s.scaled_limits([(b, 0.7, q)], W, k)[0]
+        assert first == pytest.approx(k * W * (q - b) / (1 - b), abs=1e-7)
+        n = first / b
+        again = s.scaled_limits([(b, 0.7, q)], W - first, k, held=n, mark=b)[0]
+        assert again == pytest.approx(0.0, abs=1e-6)
+        # ... and multiplying the full-Kelly stake held-shares-aware by k would still add.
+        full_after = max(0.0, ((W - first) * (q - b) - (1 - q) * b * n) / (1 - b))
+        if k < 1.0:
+            assert k * full_after > 1.0
+
+    def test_the_multiplier_with_shares_held_uses_the_kelly_account(self) -> None:
+        q, b, W, n, mark, k = 0.62, 0.5, 100.0, 20.0, 0.52, 0.5
+        cash = s.kelly_cash(W, n, mark, k)
+        assert cash == pytest.approx(k * (W + n * mark) - n * mark)
+        x = s.scaled_limits([(b, 0.7, q)], W, k, held=n, mark=mark)[0]
+        assert x == pytest.approx((cash * (q - b) - (1 - q) * b * n) / (1 - b), abs=1e-7)
+
+    def test_growth_counts_the_shares_held(self) -> None:
+        # One level, x dollars: E ln W_end minus the same with no order, written out.
+        q, b, p_fill, W, n, x = 0.6, 0.5, 0.7, 100.0, 30.0, 5.0
+        want = p_fill * (q * math.log((W + n + x * (1 - b) / b) / (W + n))
+                         + (1 - q) * math.log((W - x) / W))
+        got = s.scaled_limits_log_growth([(b, p_fill, q)], W, [x], held=n)
+        assert got == pytest.approx(want, abs=1e-15)
 
 
-def _hedge_growth(h: float, p: float, b: float, W: float, n: float) -> float:
-    """Section 4's E ln W with h hedge shares, minus its value with no hedge (a constant), in
-    log1p form so the numerical maximiser is not limited by rounding in ln(W + n)."""
-    return p * math.log1p(-h * b / (W + n)) + (1 - p) * math.log1p(h * (1 - b) / W)
+class TestKellyCash:
+    def test_full_kelly_is_the_whole_cash(self) -> None:
+        assert s.kelly_cash(100.0, 40.0, 0.6, 1.0) == pytest.approx(100.0)
 
+    def test_nothing_held_is_the_multiplier_times_the_cash(self) -> None:
+        assert s.kelly_cash(100.0, 0.0, None, 0.5) == pytest.approx(50.0)
 
-class TestHedge:
-    @pytest.mark.parametrize(
-        "n,W,p,b,expected",
-        [
-            (20, 100, 0.30, 0.65, 43.52),
-            (20, 100, 0.45, 0.52, 33.17),
-            (20, 100, 0.60, 0.38, 29.54),
-            (40, 50, 0.20, 0.75, 56.00),
-        ],
-    )
-    def test_check_table(self, n: float, W: float, p: float, b: float, expected: float) -> None:
-        h = s.hedge_shares(p, b, W, n)
-        assert round(h, 2) == expected
-        numeric = _argmax(lambda x: _hedge_growth(x, p, b, W, n), 0.0, W / b)
-        assert h == pytest.approx(numeric, abs=5e-6)
-
-    def test_keeps_the_upside_when_hedging_does_not_pay(self) -> None:
-        # Table row: 20 Up + $100, Up 70%, Down bid 35c -> no hedge.
-        assert s.hedge_shares(0.70, 0.35, 100, 20) == 0.0
-
-    def test_hedges_more_as_the_odds_turn(self) -> None:
-        hs = [s.hedge_shares(p, 0.5, 100, 20) for p in (0.6, 0.5, 0.4, 0.3)]
-        assert hs == sorted(hs)
-
-    def test_never_bids_more_than_the_cash_buys(self) -> None:
-        h = s.hedge_shares(0.02, 0.5, 10.0, 100.0)
-        assert h == pytest.approx(20.0)  # $10 at 50c; the unconstrained answer is 215.2
-        numeric = _argmax(lambda x: _hedge_growth(x, 0.02, 0.5, 10.0, 100.0), 0.0, 20.0)
-        assert numeric == pytest.approx(20.0, abs=1e-6)
-
-    def test_with_nothing_held_it_is_kelly_on_the_other_side(self) -> None:
-        h = s.hedge_shares(0.35, 0.5, 100.0, 0.0)
-        assert h * 0.5 / 100.0 == pytest.approx(s.kelly_maker(0.65, 0.5), abs=1e-12)
-
-    def test_no_cash_no_hedge(self) -> None:
-        assert s.hedge_shares(0.1, 0.5, 0.0, 50.0) == 0.0
-
-    def test_fill_conditional_variant(self) -> None:
-        # A resting hedge may not fill; the no-fill branch does not depend on h, so the best
-        # h uses the chance our side wins GIVEN the hedge fills.
-        p_fill, p_if_fill, p_if_not = 0.4, 0.35, 0.75
-        W, n, b = 100.0, 20.0, 0.55
-
-        def growth(h: float) -> float:
-            filled = _hedge_growth(h, p_if_fill, b, W, n)
-            unfilled = _hedge_growth(0.0, p_if_not, b, W, n)  # no fill: h changes nothing
-            return p_fill * filled + (1 - p_fill) * unfilled
-
-        h = s.hedge_shares_given_fill(p_if_fill, b, W, n)
-        assert h == pytest.approx(s.hedge_shares(p_if_fill, b, W, n))
-        assert h == pytest.approx(_argmax(growth, 0.0, W / b), abs=5e-6)
-        assert h > 0.0
-        # Using the unconditional chance instead would size a different (here: no) hedge.
-        p_unconditional = p_fill * p_if_fill + (1 - p_fill) * p_if_not
-        assert s.hedge_shares(p_unconditional, b, W, n) != pytest.approx(h, abs=1.0)
+    def test_a_position_worth_more_than_its_share_leaves_the_account_at_the_floor(self) -> None:
+        cash = s.kelly_cash(100.0, 250.0, 0.6, 0.5)  # 150 held against a 125 account
+        assert 0.0 < cash <= s.KELLY_CASH_FLOOR * 250.0
 
     def test_rejects_bad_inputs(self) -> None:
         with pytest.raises(ValueError):
-            s.hedge_shares(0.3, 1.0, 100, 20)
+            s.kelly_cash(100.0, 10.0, None, 0.5)  # shares held need a mark
         with pytest.raises(ValueError):
-            s.hedge_shares(0.3, 0.5, 100, -1)
+            s.kelly_cash(100.0, -1.0, 0.5, 0.5)
         with pytest.raises(ValueError):
-            s.hedge_shares(1.3, 0.5, 100, 20)
+            s.kelly_cash(100.0, 1.0, 0.5, 1.5)
+
+
+# ---------------------------------------------------------------------------------------------
+# Section 4: reduce a held position with a resting sell (never buy the other side)
+# ---------------------------------------------------------------------------------------------
+
+
+def _sale_growth(x: float, p: float, sell: float, W: float, n: float) -> float:
+    """p ln(W + n - x(1 - s)) + (1 - p) ln(W + x s), minus its value at x = 0."""
+    return p * math.log1p(-x * (1 - sell) / (W + n)) + (1 - p) * math.log1p(x * sell / W)
+
+
+def _spec_hedge(p: float, b_o: float, W: float, n: float) -> float:
+    """Section 4's hedge formula, unclipped: ((1-p)(1-b)(W+n) - p b W) / (b (1-b))."""
+    return ((1 - p) * (1 - b_o) * (W + n) - p * b_o * W) / (b_o * (1 - b_o))
+
+
+class TestReducePosition:
+    @pytest.mark.parametrize(
+        "p,sell,W,n",
+        [(0.70, 0.65, 100.0, 100.0), (0.55, 0.52, 100.0, 80.0), (0.66, 0.64, 50.0, 60.0),
+         (0.80, 0.78, 40.0, 30.0)],
+    )
+    def test_formula_is_the_log_optimum(self, p: float, sell: float, W: float, n: float) -> None:
+        x = s.reduce_position(p, sell, W, n)
+        assert 0.0 < x < n
+        assert x == pytest.approx(((1 - p) * sell * (W + n) - p * (1 - sell) * W)
+                                  / (sell * (1 - sell)), abs=1e-9)
+        assert x == pytest.approx(_argmax(lambda y: _sale_growth(y, p, sell, W, n), 0.0, n),
+                                  abs=5e-6)
+        # It is section 4's hedge formula with the other side's price 1 - s.
+        assert x == pytest.approx(_spec_hedge(p, 1 - sell, W, n), abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "n,W,p,b_o,hedge",
+        [(20, 100, 0.30, 0.65, 43.52), (20, 100, 0.45, 0.52, 33.17),
+         (20, 100, 0.60, 0.38, 29.54), (40, 50, 0.20, 0.75, 56.00)],
+    )
+    def test_check_table_now_sells_what_is_held_and_never_flips(
+            self, n: float, W: float, p: float, b_o: float, hedge: float) -> None:
+        # The spec's check table asked for more "hedge" than the position: bought as the other
+        # side, that would hold both sides. Sold instead, it is capped at the shares held.
+        assert round(_spec_hedge(p, b_o, W, n), 2) == hedge
+        assert s.reduce_position(p, 1 - b_o, W, n) == n
+        numeric = _argmax(lambda y: _sale_growth(y, p, 1 - b_o, W, n), 0.0, n)
+        assert numeric == pytest.approx(n, abs=1e-5)
+
+    def test_keeps_the_upside_when_selling_does_not_pay(self) -> None:
+        # Table row: 20 Up + $100, Up 70%, the sale at 65c pays less than keeping: sell none.
+        assert s.reduce_position(0.70, 0.65, 100, 20) == 0.0
+
+    def test_sells_more_as_the_odds_turn(self) -> None:
+        xs = [s.reduce_position(p, 0.5, 100, 200) for p in (0.80, 0.72, 0.68, 0.64)]
+        assert xs == sorted(xs)
+        assert xs[0] == 0.0 and xs[-1] > 0.0
+
+    def test_sells_more_the_more_is_held(self) -> None:
+        xs = [s.reduce_position(0.5, 0.52, 100, n) for n in (60, 120, 240)]
+        assert xs == sorted(xs) and xs[0] > 0.0
+
+    def test_nothing_held_nothing_to_sell(self) -> None:
+        assert s.reduce_position(0.1, 0.5, 100.0, 0.0) == 0.0
+
+    def test_no_cash_sells_to_leave_something_either_way(self) -> None:
+        # With no cash a loss would take everything, so the log sells part of it anyway.
+        x = s.reduce_position(0.9, 0.6, 0.0, 100.0)
+        assert x == pytest.approx(0.1 * 100.0 / 0.4)
+
+    def test_fill_conditional_chance(self) -> None:
+        # A resting sell may not fill; the no-fill branch does not depend on x, so the best x
+        # uses the chance the held side wins GIVEN the sale fills.
+        p_fill, p_if_fill, p_if_not = 0.4, 0.75, 0.35
+        W, n, sell = 100.0, 120.0, 0.72
+
+        def growth(x: float) -> float:
+            return p_fill * _sale_growth(x, p_if_fill, sell, W, n)  # no fill: 0
+
+        x = s.reduce_position(p_if_fill, sell, W, n)
+        assert x == pytest.approx(_argmax(growth, 0.0, n), abs=5e-6)
+        assert 0.0 < x < n
+        p_unconditional = p_fill * p_if_fill + (1 - p_fill) * p_if_not
+        assert s.reduce_position(p_unconditional, sell, W, n) != pytest.approx(x, abs=1.0)
+
+    def test_sale_growth(self) -> None:
+        p, sell, W, n = 0.55, 0.52, 100.0, 80.0
+        x = s.reduce_position(p, sell, W, n)
+        got = s.sale_log_growth(p, sell, W, n, x)
+        assert got == pytest.approx(_sale_growth(x, p, sell, W, n), abs=1e-15)
+        assert got > 0.0
+        assert s.sale_log_growth(p, sell, W, n, 0.0) == 0.0
+        for y in (0.5 * x, 0.9 * x, min(n, 1.1 * x)):
+            assert s.sale_log_growth(p, sell, W, n, y) <= got
+
+    def test_rejects_bad_inputs(self) -> None:
+        with pytest.raises(ValueError):
+            s.reduce_position(0.3, 1.0, 100, 20)
+        with pytest.raises(ValueError):
+            s.reduce_position(0.3, 0.5, 100, -1)
+        with pytest.raises(ValueError):
+            s.reduce_position(1.3, 0.5, 100, 20)
+        with pytest.raises(ValueError):
+            s.sale_log_growth(0.3, 0.5, 100, 20, 21)  # more than is held
+        with pytest.raises(ValueError):
+            s.sale_log_growth(0.3, 0.5, 0.0, 20, 5)
 
 
 # ---------------------------------------------------------------------------------------------

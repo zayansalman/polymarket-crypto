@@ -25,7 +25,11 @@ Where each input comes from
   still a live book (a max age would read it as missing).
 - Prices now: Chainlink TWAP-60s, Chainlink and Binance from the hub's RTDS stream. Each must
   have been observed within ``PRICE_MAX_AGE_S`` (5 s; Chainlink prints arrive ~2 s late).
-  ``twap60`` is the current TWAP-60s print, the stream the 15m market settles on.
+  The price now is the live Chainlink price (``chainlink``; Binance to compare). ``twap60`` is
+  the current TWAP-60s print: the stream the 15m market settles on, and a 60 s average that
+  runs about 30 s behind the price, so it is recorded for information and never used as the
+  price now. Only the settlement's two ends come from it: the start reference below, and the
+  closing minute's average.
 - How a 15m window settles (verified on the live markets 2026-09-22): Up iff the TWAP-60s
   print at the window's close (the average of the Chainlink price over the last 60 s) is >=
   the TWAP-60s print at the open. Gamma's ``priceToBeat`` for the window (its event's
@@ -50,15 +54,17 @@ Where each input comes from
   TWAP-60s print at the close averages that minute), held from the print at or before
   ``window_end - 60``. None earlier in the window.
 - The TWAP-60s stream's realised average over the window so far (``window_avg``; recorded for
-  the model, not what settles), kept from the stream's prints across passes
+  information only: it is not what settles and nothing decides on it), kept from the stream's
+  prints across passes
   in ``InputMemory`` (the hub only holds ~15 minutes). Exactly: v(s) for each whole second s
   from the window start ``s0`` to ``s_last``, the observation second of the newest print held
   for this window, is the print observed at s if there is one, else v(s - 1) (the stream's
   value is held until the next print). v(s0) is the print at s0, or the start reference when
   there is none. ``value`` = mean of v(s) over those N = s_last - s0 + 1 seconds, i.e. the
   time-weighted average of the stream's step path over [s0, s_last + 1); ``log_value`` = mean
-  of ln v(s). A hole of more than ``MAX_AVG_GAP_S`` seconds (a late start or a long feed drop;
-  RTDS reconnects after 30 s of silence and backfills ~68 s) makes it a Problem.
+  of ln v(s). A hole in the prints (a late start or a long feed drop; RTDS reconnects after
+  30 s of silence and backfills ~68 s) is recorded as ``longest_gap_s`` and never blocks a
+  decision.
 - Binance history, over REST at ``config.BINANCE_API_BASE`` ``/api/v3/klines``. Each request
   asks for completed candles only (``startTime`` + ``limit``) and any row that is still forming
   (closes less than ``KLINE_SETTLE_S`` ago, which allows for clock skew) is dropped as well:
@@ -77,10 +83,13 @@ Problem codes
 no_hub, market_unavailable, window_unknown, window_rolling, condition_id_unknown,
 book_not_live, book_one_sided, book_crossed, hour_market_unknown, hour_mismatch,
 hour_book_not_live, hour_book_one_sided, price_missing, price_invalid, price_stale,
-start_ref_pending, start_ref_missing, average_incomplete, klines_failed, klines_incomplete,
-hour_open_missing, internal_error. A coin with several problems reports the first as its code
-and the rest in ``also``. Non-fatal trouble (a failed database write, a default tick size) is
-listed in ``notes``.
+start_ref_pending, start_ref_missing, average_incomplete (the closing minute's prints only),
+klines_failed, klines_incomplete, hour_open_missing, internal_error. A coin with several
+problems reports the first as its code and the rest in ``also``. Trouble that does not stop the
+coin comes in two lists, both recorded and shown on the card: ``warnings`` for a failure (a
+database read or write that failed: an unsaved window row means that window cannot be settled
+or learned from until a later pass saves it), which the runner also reports as an error of the
+pass; ``notes`` for plain facts (the books carried no tick size, so the standard one is used).
 
 Stdlib only; nothing here decides, sizes or places anything.
 """
@@ -117,7 +126,7 @@ SOURCE_NAMES: Mapping[str, str] = MappingProxyType(
 
 PRICE_MAX_AGE_S = 5.0  # a price older than this (by observation time) is stale
 START_MATCH_S = 5  # how far from the open second a stand-in start print may be
-MAX_AVG_GAP_S = 30  # longest hole in the window's TWAP-60s prints the average tolerates
+MAX_AVG_GAP_S = 30  # longest hole in the closing minute's Chainlink prints its average takes
 KLINE_SETTLE_S = 2.0  # a candle counts as complete this long after it closes (clock skew)
 MINUTE_RETURNS = 60
 R15_CANDLES = 12
@@ -180,15 +189,20 @@ class Book:
         return self.best_ask - self.best_bid
 
     def depth_ahead(self, price: float) -> float:
-        """Shares bid at ``price`` or better: the queue a new bid at ``price`` joins behind."""
+        """Shares bid at ``price`` or better: the depth a new buy order there joins behind."""
         return sum(size for px, size in self.bids if px >= price - _EPS)
+
+    def ask_depth_ahead(self, price: float) -> float:
+        """Shares offered at ``price`` or better: the depth a new sell order there joins
+        behind."""
+        return sum(size for px, size in self.asks if px <= price + _EPS)
 
 
 @dataclass(frozen=True)
 class WindowAverage:
     """The TWAP-60s stream's realised average over the window so far (module docstring)."""
 
-    value: float  # mean of v(s), s = window start .. through_s
+    value: float  # mean of v(s), s = start .. through_s
     log_value: float  # mean of ln v(s)
     through_s: int  # the last second included: the newest print's observation second
     seconds: int  # N = through_s - window start + 1
@@ -224,7 +238,8 @@ class Inputs:
     twap60: PriceNow
     chainlink: PriceNow
     binance: PriceNow
-    # The window's start reference (its priceToBeat) and the settlement stream's average so far.
+    # The window's start reference (its priceToBeat) and, for information only, the settlement
+    # stream's average over the window so far.
     start_ref: float
     start_ref_source: str
     window_avg: WindowAverage
@@ -236,6 +251,8 @@ class Inputs:
     # The part of the closing 60 s average already known (Chainlink prints from
     # window_end - 60 on); None before the window's last 60 s.
     close_avg: WindowAverage | None = None
+    # Failures that did not stop this coin (a database read or write); module docstring.
+    warnings: tuple[str, ...] = ()
 
     # Definitions from the research doc's notation (tasks/2026-09-21-fade-1h-momentum-on-15m.md).
 
@@ -276,12 +293,20 @@ class Inputs:
 
     @property
     def d(self) -> float:
-        """The settlement stream now, in log terms, measured from the start reference."""
-        return math.log(self.twap60.value / self.start_ref)
+        """The price now (the live Chainlink price), in log terms, measured from the start
+        reference. Not the TWAP-60s print now, which lags the price by about 30 s."""
+        return math.log(self.chainlink.value / self.start_ref)
+
+    @property
+    def d_binance(self) -> float:
+        """The same on Binance's price: what the model reads as the price now when the operator
+        picks Binance (the ``fade1h_spot_feed`` Setting); recorded to compare either way."""
+        return math.log(self.binance.value / self.start_ref)
 
     @property
     def abar(self) -> float:
-        """The realised average of the log settlement stream so far, minus ln(start_ref)."""
+        """The realised average of the log settlement stream so far, minus ln(start_ref)
+        (information only)."""
         return self.window_avg.log_value - math.log(self.start_ref)
 
     @property
@@ -318,8 +343,8 @@ class Inputs:
             return {"value": p.value, "obs_s": p.obs_s, "age_s": p.age_s}
 
         derived: dict[str, Any] = {}
-        for name in ("market_up", "hour_up", "quarter", "t", "tau", "h", "x", "d", "abar",
-                     "close_abar", "sigma", "mu_l"):
+        for name in ("market_up", "hour_up", "quarter", "t", "tau", "h", "x", "d", "d_binance",
+                     "abar", "close_abar", "sigma", "mu_l"):
             try:
                 derived[name] = getattr(self, name)
             except (ValueError, ZeroDivisionError, OverflowError):
@@ -355,6 +380,7 @@ class Inputs:
             "r15": list(self.r15),
             "derived": derived,
             "notes": list(self.notes),
+            "warnings": list(self.warnings),
         }
 
 
@@ -370,6 +396,7 @@ class Problem:
     also: tuple[tuple[str, str], ...] = ()  # (code, message) of further problems this pass
     known: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     notes: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()  # failures that did not decide the problem (a database write)
 
     @property
     def codes(self) -> tuple[str, ...]:
@@ -382,6 +409,7 @@ class Problem:
             "window_slug": self.window_slug, "code": self.code, "message": self.message,
             "also": [{"code": c, "message": m} for c, m in self.also],
             "known": dict(self.known), "notes": list(self.notes),
+            "warnings": list(self.warnings),
         }
 
 
@@ -527,13 +555,14 @@ class _Missing(Exception):
 
 
 class _Pass:
-    """One coin's pass: the problems, notes and facts found so far."""
+    """One coin's pass: the problems, notes, warnings and facts found so far."""
 
     def __init__(self, asset: str, now: float) -> None:
         self.asset = asset
         self.now = now
         self.problems: list[tuple[str, str]] = []
         self.notes: list[str] = []
+        self.warnings: list[str] = []
         self.known: dict[str, Any] = {}
         self.window_slug: str | None = None
 
@@ -544,7 +573,8 @@ class _Pass:
         (code, message), *rest = self.problems
         return Problem(asset=self.asset, code=code, message=message, ts=self.now,
                        window_slug=self.window_slug, also=tuple(rest),
-                       known=MappingProxyType(dict(self.known)), notes=tuple(self.notes))
+                       known=MappingProxyType(dict(self.known)), notes=tuple(self.notes),
+                       warnings=tuple(self.warnings))
 
 
 class _Hour(NamedTuple):
@@ -656,7 +686,7 @@ async def _gather_one(hub: Any, client: httpx.AsyncClient | None, asset: str, no
         hour_open=hour_open, twap60=twap60, chainlink=chainlink, binance=binance,
         start_ref=start_ref[0], start_ref_source=start_ref[1], window_avg=avg,
         minute_returns=minute[1], minute_returns_end=float(minute[0]), r15=r15,
-        notes=tuple(run.notes), close_avg=close,
+        notes=tuple(run.notes), close_avg=close, warnings=tuple(run.warnings),
     )
 
 
@@ -837,8 +867,8 @@ async def _start_ref(hub: Any, client: httpx.AsyncClient | None, asset: str, ref
         try:
             row = await _ledger.get_window(slug)
         except Exception as exc:  # noqa: BLE001 — the hub may still have it
-            run.notes.append(f"Could not read this window's stored start reference: "
-                             f"{type(exc).__name__}: {exc}")
+            run.warnings.append(f"Could not read this window's stored start reference: "
+                                f"{type(exc).__name__}: {exc}")
         else:
             memory.db_checked.add(slug)
             if row is not None and _positive(row.get("start_ref_price")) is not None:
@@ -970,12 +1000,10 @@ def _window_avg(hub: Any, asset: str, ref: Any, start_ref: tuple[float, str] | N
     if start_ref is None:
         return None
     avg = window_average(held, s0, start_ref[0])
+    # Information only: the window settles on the print at its close, not on this average, so
+    # a hole here (after a restart, or a feed drop) is recorded, never a reason to stop.
     run.known["window_avg"] = {"value": avg.value, "seconds": avg.seconds,
                                "printed": avg.printed, "longest_gap_s": avg.longest_gap_s}
-    if avg.longest_gap_s > MAX_AVG_GAP_S:
-        run.problem("average_incomplete", f"The TWAP-60s prints held for this window have a "
-                                          f"{avg.longest_gap_s} s hole (a late start or a feed "
-                                          f"drop), so its average so far is not known.")
     return avg
 
 
@@ -997,7 +1025,9 @@ async def _save_window(ref: Any, hour_start: int, cid: str | None,
             hour_slug=facts[4], hour_condition_id=facts[5],
         )
     except Exception as exc:  # noqa: BLE001 — retried next pass; shown on the card
-        run.notes.append(f"Could not save this window's row: {type(exc).__name__}: {exc}")
+        run.warnings.append(f"Could not save this window's row, so it cannot be settled or "
+                            f"learned from until a later pass saves it: "
+                            f"{type(exc).__name__}: {exc}")
         return
     memory.saved[ref.slug] = facts
 

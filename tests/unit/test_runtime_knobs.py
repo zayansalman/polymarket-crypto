@@ -66,6 +66,18 @@ async def test_set_rejects_invalid_enum_choice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_stored_choice_no_longer_offered_reads_as_the_default() -> None:
+    # A value an earlier build stored (the fade strategy's old "chainlink_twap60" price feed)
+    # is not a choice any more, so the default applies instead of the raw text.
+    knob = _knobs.KNOBS["fade1h_spot_feed"]
+    await _db.set_config(knob.key, "chainlink_twap60")
+    assert await _knobs.get_override("fade1h_spot_feed") is None
+    assert await _knobs.get("fade1h_spot_feed") == knob.default == "chainlink"
+    await _knobs.set("fade1h_spot_feed", "binance")
+    assert await _knobs.get("fade1h_spot_feed") == "binance"
+
+
+@pytest.mark.asyncio
 async def test_bool_knob_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     # No bool knob is registered since the auto-pause knobs were archived with
     # the v0 strategy; register a throwaway one to keep the kind covered.

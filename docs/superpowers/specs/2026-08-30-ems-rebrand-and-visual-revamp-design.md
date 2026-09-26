@@ -135,7 +135,7 @@ All numeric values (prices, sizes, PnL, percentages, timestamps) use
 - No box-shadow anywhere.
 - Panes/sections separated by border lines (`border-right`/`border-bottom`),
   not by background elevation steps — avoid the "page bg / card bg / alt
-  bg" soft-layering pattern common to consumer dashboards.
+  bg" stacked-surface pattern common to consumer dashboards.
 - Column headers: `10px`, uppercase, `letter-spacing: 0.06–0.07em`,
   `color: var(--label)`.
 - Zebra striping on table body rows (`nth-child(even)` → `--bg-alt`) for

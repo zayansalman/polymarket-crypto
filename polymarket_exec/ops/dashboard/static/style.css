@@ -605,11 +605,13 @@ body {
 .fade-strip { display: flex; flex-wrap: wrap; gap: 12px 24px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .fade-state { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .fade-state .warn { color: var(--warn); }
+.fade-state .down { color: var(--neg); }
+.fade-state .fade-err { padding-left: 12px; }
 .fade-coin { border-top: 1px solid var(--border-strong); padding: 10px 0 6px; }
 .fade-coin-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .fade-coin-h b { color: var(--text); font-size: 12.5px; letter-spacing: .6px; }
 .fade-left { color: var(--text); }
-.fade-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 6px; }
+.fade-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr); gap: 12px; margin-bottom: 6px; }
 .fade-kv { display: flex; flex-direction: column; gap: 6px; }
 .fade-kv > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; align-items: baseline; }
 .fade-kv > div > span { color: var(--label); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
@@ -626,8 +628,12 @@ body {
 .fade-wf-bar.down { background: var(--neg); }
 .fade-wf-v, .fade-wf-c, .fade-wf-head span:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
 .fade-wf-total { border-top: 1px solid var(--border); padding-top: 3px; }
-.fade-rungs { margin-bottom: 6px; }
-.fade-rungs td, .fade-rungs th { padding: 3px 6px; }
+.fade-choice { padding: 0 0 6px; font-size: 12px; line-height: 1.45; color: var(--text); }
+.fade-orders { margin-bottom: 6px; }
+.fade-orders td, .fade-orders th { padding: 3px 6px; }
+.fade-orders td:nth-child(n+2), .fade-orders th:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
+.fade-orders td:last-child, .fade-orders th:last-child { text-align: left; }
+.fade-orders span[title] { cursor: help; border-bottom: 1px dotted var(--muted); }
 .fade-story { padding: 4px 0; font-size: 12px; line-height: 1.5; color: var(--text); }
 .fade-reason { padding: 2px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .fade-reason.warn { color: var(--warn); }

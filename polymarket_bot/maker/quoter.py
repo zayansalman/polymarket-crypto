@@ -139,11 +139,11 @@ async def book(client: httpx.AsyncClient, token_id: str) -> Book | None:
         raw = r.json()
     except Exception:  # noqa: BLE001
         return None
-    def rungs(key: str, reverse: bool) -> list[tuple[float, float]]:
+    def levels(key: str, reverse: bool) -> list[tuple[float, float]]:
         vals = [(float(x["price"]), float(x["size"]))
                 for x in (raw.get(key) or []) if float(x.get("size") or 0) > 0]
         return sorted(vals, key=lambda r: r[0], reverse=reverse)
-    return Book(bids=rungs("bids", True), asks=rungs("asks", False))
+    return Book(bids=levels("bids", True), asks=levels("asks", False))
 
 
 @dataclass(frozen=True)

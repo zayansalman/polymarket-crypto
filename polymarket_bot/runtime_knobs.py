@@ -95,6 +95,9 @@ KNOBS: dict[str, Knob] = {
     # Paper only. Side, price and size come out of the maths; these are the
     # operator's preferences and caps around it, read fresh every pass. The
     # Kelly multiplier is the one preference inside the sizing (spec section 2).
+    # Each order is a scaled passive limit order: one parent order split into
+    # child orders resting at several price levels on the passive side of the
+    # touch (buys at or under the best bid, sells at or over the best ask).
     "fade1h_poll_interval_seconds": Knob(
         "runtime.fade_1h.poll_interval_seconds", 60.0, "float",
         "Pass interval", 10.0, 600.0, unit="s", group="Fade 1h Momentum on 15m",
@@ -110,29 +113,35 @@ KNOBS: dict[str, Knob] = {
     ),
     "fade1h_max_order_usd": Knob(
         "runtime.fade_1h.max_order_usd", 25.0, "float",
-        "Largest single bid", 1.0, 100_000.0, unit="USD", group="Fade 1h Momentum on 15m",
-    ),
-    "fade1h_ladder_lo_cents": Knob(
-        "runtime.fade_1h.ladder_lo_cents", 1.0, "float",
-        "Ladder: nearest rung under the ask", 0.0, 50.0, unit="c",
+        "Largest single child order (buys)", 1.0, 100_000.0, unit="USD",
         group="Fade 1h Momentum on 15m",
     ),
-    "fade1h_ladder_hi_cents": Knob(
-        "runtime.fade_1h.ladder_hi_cents", 15.0, "float",
-        "Ladder: deepest rung under the ask", 1.0, 50.0, unit="c",
+    # 0 joins the best bid (a sell: the best ask); the maths sizes every level.
+    "fade1h_levels_near_cents": Knob(
+        "runtime.fade_1h.levels_near_cents", 0.0, "float",
+        "Price range for child orders: nearest level below the best bid (sells: above "
+        "the best ask), cents", 0.0, 50.0, unit="c",
         group="Fade 1h Momentum on 15m",
     ),
-    "fade1h_hedge_enabled": Knob(
-        "runtime.fade_1h.hedge_enabled", True, "bool",
-        "Hedge held positions (resting bid on the other side)",
+    "fade1h_levels_far_cents": Knob(
+        "runtime.fade_1h.levels_far_cents", 15.0, "float",
+        "Price range for child orders: deepest level below the best bid (sells: above "
+        "the best ask), cents", 0.0, 50.0, unit="c",
         group="Fade 1h Momentum on 15m",
     ),
-    # The 15m market settles on the Chainlink TWAP-60s stream; the other two
-    # are there to compare what the model makes of each feed.
+    "fade1h_reduce_positions": Knob(
+        "runtime.fade_1h.reduce_positions", True, "bool",
+        "Reduce a held position with a resting sell",
+        group="Fade 1h Momentum on 15m",
+    ),
+    # The price now for the model. The 15m market settles on the Chainlink
+    # TWAP-60s print, which is a 60 s average running about 30 s behind, so it
+    # is only the settlement's reference, never the price now. Binance is there
+    # to compare what the model makes of another feed.
     "fade1h_spot_feed": Knob(
-        "runtime.fade_1h.spot_feed", "chainlink_twap60", "enum",
-        "Spot feed for the model's inputs",
-        choices=("chainlink_twap60", "chainlink", "binance"),
+        "runtime.fade_1h.spot_feed", "chainlink", "enum",
+        "Price now for the model",
+        choices=("chainlink", "binance"),
         group="Fade 1h Momentum on 15m",
     ),
     "fade1h_trade_btc": Knob(
@@ -280,9 +289,14 @@ async def get_override(name: str) -> Any | None:
     if raw is None or raw.strip() == "":
         return None
     try:
-        return _decode(raw, knob.kind)
+        value = _decode(raw, knob.kind)
     except ValueError:
         return None
+    # A stored choice the knob no longer offers (a value from an earlier build) is invalid:
+    # the default applies, and the Settings page shows the same value the code reads.
+    if knob.kind == "enum" and knob.choices and value not in knob.choices:
+        return None
+    return value
 
 
 async def set(name: str, value: Any) -> Any:

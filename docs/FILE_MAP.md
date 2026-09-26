@@ -20,13 +20,13 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/daily/types.py` | WIRED | 3 | Shared data contracts for the daily altcoin scanner. |
 | `polymarket_bot/fade_1h_momentum_15m/__init__.py` | pkg | 6 | Fade 1h Momentum on 15m: a paper-only strategy on the 15-minute crypto Up/Down markets. |
 | `polymarket_bot/fade_1h_momentum_15m/decide.py` | WIRED | 2 | The model hook for Fade 1h Momentum on 15m: one coin's inputs in, a :class:`Decision` out. |
-| `polymarket_bot/fade_1h_momentum_15m/executor.py` | WIRED | 1 | Order execution for Fade 1h Momentum on 15m: paper resting bids, their fills, settlement. |
+| `polymarket_bot/fade_1h_momentum_15m/executor.py` | WIRED | 1 | Order execution for Fade 1h Momentum on 15m: paper child orders, their fills, settlement. |
 | `polymarket_bot/fade_1h_momentum_15m/inputs.py` | WIRED | 2 | Live inputs for Fade 1h Momentum on 15m: one read of everything the maths needs, per coin. |
 | `polymarket_bot/fade_1h_momentum_15m/learner.py` | WIRED | 1 | Live learning for Fade 1h Momentum on 15m: the dials move with every settled window. |
 | `polymarket_bot/fade_1h_momentum_15m/ledger.py` | WIRED | 5 | Paper ledger for Fade 1h Momentum on 15m. |
 | `polymarket_bot/fade_1h_momentum_15m/model.py` | WIRED | 2 | The Fade 1h Momentum on 15m model, standard library only: the chance a 15m window settles Up. |
-| `polymarket_bot/fade_1h_momentum_15m/runner.py` | WIRED | 2 | The Fade 1h Momentum on 15m loop: bookkeeping, inputs, the model hook, sizing and bids. |
-| `polymarket_bot/fade_1h_momentum_15m/sizing.py` | WIRED | 3 | Sizing maths for Fade 1h Momentum on 15m: market anchor, Kelly stakes, bid ladder and hedge. |
+| `polymarket_bot/fade_1h_momentum_15m/runner.py` | WIRED | 2 | The Fade 1h Momentum on 15m loop: bookkeeping, inputs, the model hook, sizing and orders. |
+| `polymarket_bot/fade_1h_momentum_15m/sizing.py` | WIRED | 3 | Sizing maths for Fade 1h Momentum on 15m: market anchor, Kelly stakes, scaled passive limit |
 | `polymarket_bot/fees.py` | WIRED | 3 | Canonical Polymarket taker-fee math. |
 | `polymarket_bot/inventory.py` | WIRED | 5 | Every strategy family in this repo, including the ones that do nothing. |
 | `polymarket_bot/maker/__init__.py` | pkg | 3 | (needs docstring) |

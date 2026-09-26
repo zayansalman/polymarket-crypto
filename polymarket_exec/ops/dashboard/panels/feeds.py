@@ -49,7 +49,11 @@ LIVE_EXECUTOR = "live executor"
 FEEDS_CHECK = "FEEDS check"  # the feed monitor itself: connected and checked, loop or not
 FLOW_RECORDER = "flow recorder"
 MACRO_RECORDER = "macro recorder"
-PRICES_USED_BY = "none yet (kept warm)"  # the hub keeps price history for strategies
+FADE_1H = "Fade 1h Momentum on 15m"
+# The hub keeps price history for strategies. Fade 1h Momentum on 15m reads all three: the
+# Chainlink price as the price now, the TWAP-60s prints for the price to beat and the closing
+# minute, and Binance to compare.
+PRICES_USED_BY = FADE_1H
 NO_OWNER = "none"
 
 

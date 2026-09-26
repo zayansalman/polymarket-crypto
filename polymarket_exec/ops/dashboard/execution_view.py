@@ -56,12 +56,33 @@ async def market_selector_html() -> str:
     )
 
 
+def fade_1h_status(memory: dict[str, Any], saved: Any) -> dict[str, Any]:
+    """The runner's status for the card: this process's own, with the copy saved by an
+    earlier run lending only its last pass for context.
+
+    Before this process has run a pass, the earlier run's last pass (its time, its coins and
+    their orders, its bankroll) is shown, marked as from an earlier run. The loop's state and
+    any error always come from this process: a loop that died before its first pass must not
+    be shown as the earlier run's clean "running".
+    """
+    if memory.get("last_pass_ts") or not isinstance(saved, dict) or not saved.get(
+            "last_pass_ts"):
+        return memory
+    status = {**saved, "from_earlier_run": True,
+              "state": memory.get("state") or "not_started"}
+    if memory.get("last_error"):
+        status.update(last_error=memory["last_error"],
+                      last_error_ts=memory.get("last_error_ts"),
+                      errors=list(memory.get("errors") or [memory["last_error"]]))
+    return status
+
+
 async def fade_1h_data() -> dict[str, Any]:
     """Everything the FADE 1H MOMENTUM ON 15M card shows, as ``fade_1h_panel.render`` kwargs.
 
-    The runner's status comes from memory; before its first pass in this process, from the
-    copy it saved last time (marked as such). A failed read is returned as ``load_error`` so
-    the card shows it: it never blanks the page, and it is never silent.
+    The runner's status comes from memory (``fade_1h_status``: before this process's first
+    pass, the copy an earlier run saved lends its last pass). A failed read is returned as
+    ``load_error`` so the card shows it: it never blanks the page, and it is never silent.
     """
     from polymarket_bot.fade_1h_momentum_15m import ledger as _fade_ledger
     from polymarket_bot.fade_1h_momentum_15m import runner as _fade_runner
@@ -71,12 +92,16 @@ async def fade_1h_data() -> dict[str, Any]:
     if not status.get("last_pass_ts"):
         try:
             saved = json.loads(await get_config(_fade_runner.STATUS_KEY) or "null")
-            if isinstance(saved, dict) and saved.get("last_pass_ts"):
-                status = {**saved, "from_earlier_run": True}
         except Exception as exc:  # noqa: BLE001 — shown on the card
             errors.append(f"the saved status ({type(exc).__name__}: {exc})")
+        else:
+            status = fade_1h_status(status, saved)
     out: dict[str, Any] = {"status": status, "summary": {}, "decisions": [], "orders": [],
-                           "positions": [], "dials": None}
+                           "positions": [], "dials": None, "poll_s": None}
+    try:
+        out["poll_s"] = float(await _knobs.get("fade1h_poll_interval_seconds"))
+    except Exception:  # noqa: BLE001 — the card falls back to the default interval
+        out["poll_s"] = None
     try:
         out["summary"] = await _fade_ledger.summary()
         # A few recent rows as well as the newest per coin: a refusal row only names the

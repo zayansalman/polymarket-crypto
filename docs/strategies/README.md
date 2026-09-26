@@ -27,6 +27,15 @@ That refreshes the block and adds a dated changelog entry. Update the prose in t
 A new family needs `python tools/strategy_docs.py new <key>` and every section filled in.
 `python tools/strategy_docs.py check` lists anything out of step.
 
+## Wording
+
+Plain English for the operator, and standard market terms only, never coined ones. An order
+split across prices is a scaled passive limit order: a parent order split into child orders
+resting at price levels below the touch (above it for a sell), with partial fills and the depth
+ahead in the queue. Cutting a position means selling shares held, never buying the other side.
+Explain real decisions in trader language, factor by factor, from the strategy's own maths.
+Report measured accuracy and the model's logic; never dismiss a result as luck.
+
 ## Sourcing
 
 Every claim traces to a source: a commit, issue, script, dataset, paper or URL. An idea from
