@@ -9,6 +9,7 @@
 | Concern | Edit here |
 |---|---|
 | The strategy (inputs, model, sizing, decision, paper execution, ledger, learner, loop) | `ems/fade_1h_momentum_15m/` |
+| The execution layer every strategy shares: fill model, trade tape and result reads, PAPER/LIVE mode, kill switch, never-cross check | `ems/execution/` (`queue.py`, `tape.py`, `controls.py`) |
 | Live Polymarket books, trades, resolutions and reference prices | `ems/marketdata/` (`hub.py` is the public API) |
 | Top-of-book REST read of an Up/Down window (used by the hub) | `ems/connectors/updown_quote.py` |
 | Dashboard app, routes, SSE stream | `ems/dashboard/app.py` |
@@ -26,7 +27,8 @@
 | The model's maths (chance a window settles Up) | `ems/fade_1h_momentum_15m/model.py` |
 | What the strategy reads each pass | `ems/fade_1h_momentum_15m/inputs.py` |
 | Side, stakes, price levels | `ems/fade_1h_momentum_15m/sizing.py`, `decide.py` |
-| How paper orders fill and settle | `ems/fade_1h_momentum_15m/executor.py` |
+| How a paper order fills from the trade tape (every strategy) | `ems/execution/queue.py` (`allocate_fills`), reads in `ems/execution/tape.py` |
+| Fade's order cursors, expiry and settlement | `ems/fade_1h_momentum_15m/executor.py` |
 | The loop's cadence, states, status report | `ems/fade_1h_momentum_15m/runner.py` |
 | How the dials learn from settled windows | `ems/fade_1h_momentum_15m/learner.py` |
 | A runtime knob (shown on SETTINGS, applied next pass) | `ems/runtime_knobs.py` `KNOBS` |
@@ -65,9 +67,9 @@ kill switch file exists; paper orders already filled keep settling in every stat
 > are normal, not dead.
 
 <!-- BEGIN GENERATED:summary -->
-- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
+- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `execution/` = the execution layer every strategy shares (fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategy.
-- **Tests:** 958.
+- **Tests:** 971.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->
 
@@ -90,6 +92,10 @@ kill switch file exists; paper orders already filled keep settling in every stat
 | `ems/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
 | `ems/db.py` | WIRED | 8 | SQLite storage for the local Polymarket crypto trading lab. |
+| `ems/execution/__init__.py` | pkg | 1 | The execution layer every strategy shares: how a resting order meets the venue. |
+| `ems/execution/controls.py` | WIRED | 1 | What every placement checks first: the operator's mode, the kill switch and the spread. |
+| `ems/execution/queue.py` | WIRED | 3 | Queue maths for resting orders: the depth ahead of an order, and how the taker tape fills it. |
+| `ems/execution/tape.py` | WIRED | 2 | Reads from the venue that every strategy's fills and results rest on. |
 | `ems/fade_1h_momentum_15m/__init__.py` | pkg | 6 | Fade 1h Momentum on 15m: a paper-only strategy on the 15-minute crypto Up/Down markets. |
 | `ems/fade_1h_momentum_15m/decide.py` | WIRED | 2 | The model hook for Fade 1h Momentum on 15m: one coin's inputs in, a :class:`Decision` out. |
 | `ems/fade_1h_momentum_15m/executor.py` | WIRED | 2 | Order execution for Fade 1h Momentum on 15m: paper child orders, their fills, settlement. |

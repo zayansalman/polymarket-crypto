@@ -17,34 +17,14 @@ Every fill is a passive fill at our own price, with no fee.
 
 How a paper order fills
 -----------------------
-The authority is the venue's public trade tape (``data-api /trades?market=<id>&takerOnly=
-true``): one record per taker order. Checked live on 2026-09-22:
-
-- A taker order that sweeps several price levels is ONE record at its average price.
-- The venue's book for one outcome already contains the mirror of the other (an Up bid at 0.14
-  is also shown as a Down ask at 0.86). A taker BUYING the other outcome at q is therefore a
-  sale into our outcome's bids at 1 - q, and a taker SELLING our outcome at p is a sale at p
-  (the crossed-volume rule). Every record is a sale into the
-  bids of exactly one outcome. By the same mirror, our resting SELL of a token at s is a bid
-  for the other outcome at 1 - s: it fills when a taker buys our token at s or more, or sells
-  the other token at 1 - s or less.
-- The tape runs minutes behind (2-5 minutes seen, arriving in batches), and replies can come
-  from copies at different points in time.
+By the venue's public taker trade tape, through the depth that was ahead of the order price
+level by level. That fill model, the tape reader, the result lookup, the never-cross check and
+the kill switch are shared by every strategy and live in ``ems/execution/`` (``queue.py``,
+``tape.py``, ``controls.py``); this module keeps each order's cursor and settles the windows.
 
 For each order the tape is read from where its last read stopped (its cursor, first its
 placement) up to when it stopped resting (its cancel, else its window end), and never past what
 the tape can vouch for (see "How far the tape is trusted" below).
-
-The depth ahead of an order is kept price level by price level: what was displayed at its
-price or better when it was placed (bids for a buy, asks for a sell). A record at price q
-first uses up the depth still displayed at q or better, best level first. Only a record that
-gets down to our price reaches our own level; what is left of it after the depth there is
-ours, up to the order's size. So trades above our price move us up the queue by using up the
-levels above us, and never fill us. When several of our own orders sit on one outcome's bids,
-a record reaches the highest first and a lower one sees only what the higher ones did not
-take: our paper orders are not in the real book, so one record must not fill two of them
-beyond its size (:func:`allocate_fills`). The fill is stamped with the time of the record that
-reached it, not the time we noticed.
 
 Time
 ----
@@ -92,11 +72,29 @@ from typing import Any, Protocol, runtime_checkable
 
 import structlog
 
-from ems import config as _config  # type: ignore[import-untyped]
-from ems import db as _db  # type: ignore[import-untyped]
+from ems.execution import controls as _controls
+from ems.execution.controls import PlacementRefused, requested_mode
+from ems.execution.queue import QueuedOrder, allocate_fills, book_terms, own_terms
+from ems.execution.tape import (
+    HttpClient,
+    MarketUnavailable,
+    TapeRead,
+    TapeUnavailable,
+    market_outcome,
+    read_taker_tape,
+    tape_newest_ts,
+)
+# Moved to ems/execution/ (shared by every strategy); still importable from here.
+from ems.execution.controls import MODE_KEY as MODE_KEY
+from ems.execution.queue import TapePrint as TapePrint
+from ems.execution.queue import queue_ahead as queue_ahead
+from ems.execution.tape import CLOB as CLOB
+from ems.execution.tape import DATA_API as DATA_API
+from ems.execution.tape import FRESHNESS_PAGE as FRESHNESS_PAGE
+from ems.execution.tape import TAPE_PAGE as TAPE_PAGE
+from ems.execution.tape import TAPE_PAGE_OVERLAP as TAPE_PAGE_OVERLAP
 from ems.fade_1h_momentum_15m import ledger as _ledger
 from ems.fade_1h_momentum_15m.ledger import (
-    SIDES,
     FlowUpdate,
     NewOrder,
     PendingFlow,
@@ -104,30 +102,8 @@ from ems.fade_1h_momentum_15m.ledger import (
     Settlement,
 )
 
-# Browser-like headers for Polymarket's public REST endpoints, which answer a
-# bare client with a Cloudflare 403.
-BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-    "Accept": "application/json",
-}
-
 log = structlog.get_logger(__name__)
 
-DATA_API = "https://data-api.polymarket.com"
-CLOB = "https://clob.polymarket.com"
-# The operator's PAPER/LIVE choice, written by the dashboard (controller.set_mode). Read
-# directly: importing the controller would pull in the BTC loop and the live executor.
-MODE_KEY = "polymarket_bot.requested_mode"
-
-TAPE_PAGE = 500
-# Consecutive pages overlap by this many records. A page that shares none of them with the
-# pages before it means the tape shifted under us (a reply from an older copy), so the read is
-# thrown away rather than risk a gap.
-TAPE_PAGE_OVERLAP = 50
-TAPE_MAX_OFFSET = 5000
-# Records asked for when a market's tape is read only to see how far the tape has got.
-FRESHNESS_PAGE = 20
 DEFAULT_MAX_TAPE_LAG_S = 900
 DEFAULT_FORCE_SETTLE_AFTER_S = 3600
 DEFAULT_MAX_SETTLE_PER_PASS = 40
@@ -138,7 +114,6 @@ SETTLE_RETRY_BASE_S = 60.0
 SETTLE_RETRY_MAX_S = 1800.0
 # Plain-English lists on the card name at most this many windows.
 MAX_SLUGS_NAMED = 3
-HTTP_TIMEOUT_S = 10.0
 # The venue takes sizes in hundredths of a share, and no order under 5 shares on these markets.
 SHARE_STEP = 0.01
 MIN_ORDER_SHARES = 5.0
@@ -150,7 +125,6 @@ KILL_STATE = "kill_switch"
 UNKNOWN_MODE_STATE = "mode_unknown"
 RESTART_REASON = "restart"
 
-_PRICE_EPS = 1e-9
 _SHARES_EPS = 1e-9
 
 Clock = Callable[[], float]
@@ -159,22 +133,6 @@ Clock = Callable[[], float]
 # ---------------------------------------------------------------------------
 # Errors and reports
 # ---------------------------------------------------------------------------
-
-
-class PlacementRefused(RuntimeError):
-    """Orders were not placed, and nothing was written. ``reason`` is a short code."""
-
-    def __init__(self, reason: str, message: str) -> None:
-        super().__init__(message)
-        self.reason = reason
-
-
-class TapeUnavailable(RuntimeError):
-    """The trade tape could not be read in full this time. Nothing was moved."""
-
-
-class MarketUnavailable(RuntimeError):
-    """The venue's order-book service could not say how a market resolved."""
 
 
 @dataclass(frozen=True)
@@ -242,19 +200,6 @@ class Reconciled:
 # ---------------------------------------------------------------------------
 
 
-class HttpClient(Protocol):
-    """The slice of ``httpx.AsyncClient`` used here."""
-
-    async def get(
-        self,
-        url: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-        headers: Mapping[str, str] | None = None,
-        timeout: float | None = None,
-    ) -> Any: ...
-
-
 @runtime_checkable
 class Executor(Protocol):
     """Where the strategy's orders go. Paper is the only implementation.
@@ -306,157 +251,8 @@ class Executor(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Queue maths (pure)
+# Bringing resting orders in line with the plan (pure)
 # ---------------------------------------------------------------------------
-
-
-def queue_ahead(levels: Iterable[tuple[float, float]], price: float,
-                order_side: str = "BUY") -> float:
-    """Displayed shares at ``price`` or better: the depth a new order there joins behind.
-    ``levels`` are (price, shares) pairs from the side it rests on (bids for a buy, asks for a
-    sell)."""
-    return sum(size for _, size in _ledger.ahead_of(order_side, price, levels))
-
-
-@dataclass(frozen=True)
-class TapePrint:
-    """One taker trade: the outcome whose token was traded, and the taker's side."""
-
-    ts: int
-    outcome: str
-    side: str
-    size: float
-    price: float
-
-    def hits(self) -> tuple[str, float]:
-        """The outcome whose bids this trade sold into, and the price for that outcome.
-
-        A taker selling an outcome at p sells into its bids at p. A taker buying the other
-        outcome at q is the same sale at 1 - q: the two outcomes share one book.
-        """
-        if self.side == "SELL":
-            return self.outcome, self.price
-        return _other(self.outcome), 1.0 - self.price
-
-
-@dataclass(frozen=True)
-class QueuedOrder:
-    """One resting order as the fill allocation sees it, in the terms of the book it sits in.
-
-    A buy of an outcome sits among that outcome's bids at its own price. A sell of an outcome
-    at s sits among the OTHER outcome's bids at 1 - s (the mirror). ``levels`` is the displayed
-    depth still ahead of it in those terms, best (highest) first, the last usually at its own
-    price. ``crossed`` is the volume that has reached its price level since it was placed and
-    ``filled`` its shares so far. The stretch of tape it reads now is [flow_from, flow_to).
-    """
-
-    order_id: int
-    side: str
-    price: float
-    shares: float
-    flow_from: int
-    flow_to: int
-    levels: tuple[tuple[float, float], ...] = ()
-    crossed: float = 0.0
-    filled: float = 0.0
-    placed_ts: int = 0
-
-
-@dataclass(frozen=True)
-class OrderFlow:
-    """Where one order stands after a read. ``added`` shares came from this read, the first
-    of them at ``fill_ts``; ``levels`` is the depth still ahead (book terms)."""
-
-    order_id: int
-    crossed: float
-    filled: float
-    added: float
-    fill_ts: int | None
-    levels: tuple[tuple[float, float], ...]
-
-
-def allocate_fills(prints: Sequence[TapePrint],
-                   orders: Sequence[QueuedOrder]) -> dict[int, OrderFlow]:
-    """Run the tape through our resting orders, oldest record first.
-
-    Each record sells into one outcome's bids at price q. For each of our orders there, best
-    price first: the record uses up the depth still displayed ahead of the order at q or
-    better, best level first. If q is at or below the order's price, what is left reaches its
-    level, works through the depth there, and the rest is the order's, up to its size; what it
-    takes is gone before our next order down sees the record. A record counts only inside an
-    order's own stretch of tape.
-    """
-    levels = {o.order_id: [[float(px), float(size)] for px, size in o.levels] for o in orders}
-    crossed = {o.order_id: float(o.crossed) for o in orders}
-    filled = {o.order_id: float(o.filled) for o in orders}
-    fill_ts: dict[int, int] = {}
-    books: dict[str, list[QueuedOrder]] = {side: [] for side in SIDES}
-    for o in orders:
-        if o.side not in books:
-            raise ValueError(f"order {o.order_id}: side must be one of {SIDES}")
-        books[o.side].append(o)
-    for book in books.values():
-        book.sort(key=lambda o: (-o.price, o.placed_ts, o.order_id))
-
-    for p in sorted(prints, key=lambda t: t.ts):
-        outcome, px = p.hits()
-        available = float(p.size)
-        for o in books.get(outcome, ()):
-            if available <= _SHARES_EPS:
-                break
-            if not o.flow_from <= p.ts < o.flow_to:
-                continue
-            ahead = levels[o.order_id]
-            reach = available
-            # The levels above our price that the record traded at or through.
-            for level in ahead:
-                if level[0] <= o.price + _PRICE_EPS or level[0] < px - _PRICE_EPS:
-                    break
-                used = min(reach, level[1])
-                level[1] -= used
-                reach -= used
-            if px > o.price + _PRICE_EPS:
-                continue  # it never got down to our price
-            crossed[o.order_id] += reach
-            # The depth at our own price, then us.
-            for level in ahead:
-                if level[0] > o.price + _PRICE_EPS:
-                    continue
-                used = min(reach, level[1])
-                level[1] -= used
-                reach -= used
-            take = min(reach, max(0.0, float(o.shares) - filled[o.order_id]))
-            if take > _SHARES_EPS:
-                filled[o.order_id] += take
-                fill_ts.setdefault(o.order_id, p.ts)
-                available -= take
-
-    return {
-        o.order_id: OrderFlow(
-            order_id=o.order_id,
-            crossed=crossed[o.order_id],
-            filled=filled[o.order_id],
-            added=max(0.0, filled[o.order_id] - float(o.filled)),
-            fill_ts=fill_ts.get(o.order_id),
-            levels=tuple((px, max(0.0, size)) for px, size in levels[o.order_id]),
-        )
-        for o in orders
-    }
-
-
-def _book_terms(order_side: str, side: str, price: float,
-                levels: Iterable[tuple[float, float]]) -> tuple[str, float, tuple]:
-    """An order's outcome, price and depth ahead in the terms of the bids it sits among."""
-    if order_side == "SELL":
-        return (_other(side), 1.0 - price,
-                tuple((1.0 - float(px), float(size)) for px, size in levels))
-    return side, price, tuple((float(px), float(size)) for px, size in levels)
-
-
-def _own_terms(order_side: str, levels: Iterable[tuple[float, float]]) -> tuple:
-    if order_side == "SELL":
-        return tuple((round(1.0 - px, 6), size) for px, size in levels)
-    return tuple((round(px, 6), size) for px, size in levels)
 
 
 def reconcile_orders(
@@ -528,10 +324,6 @@ def _round_down(shares: float, step: float) -> float:
     return round(math.floor(shares / step + 1e-9) * step, 6)
 
 
-def _other(side: str) -> str:
-    return "Down" if side == "Up" else "Up"
-
-
 def _count_windows(slugs: Sequence[str]) -> str:
     return "1 window" if len(slugs) == 1 else f"{len(slugs)} windows"
 
@@ -549,216 +341,6 @@ def _duration(seconds: float) -> str:
         return f"{seconds} s"
     minutes, rest = divmod(seconds, 60)
     return f"{minutes} min" if not rest else f"{minutes} min {rest} s"
-
-
-# ---------------------------------------------------------------------------
-# Reading the venue
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class TapeRead:
-    """The tape for one market from ``since`` on, oldest first."""
-
-    prints: tuple[TapePrint, ...]
-    newest_ts: int | None  # the newest record in the reply, however old
-    skipped: int  # records that could not be read or were not for this market
-
-
-def _float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def _record_key(rec: Any) -> tuple | None:
-    """A record's identity, from parsed numbers (the tape writes 10 and 10.0 alike)."""
-    if not isinstance(rec, Mapping):
-        return None
-    ts = _float(rec.get("timestamp"))
-    size = _float(rec.get("size"))
-    price = _float(rec.get("price"))
-    if ts is None or size is None or price is None:
-        return None
-    return (
-        int(ts), str(rec.get("transactionHash") or ""), str(rec.get("proxyWallet") or ""),
-        str(rec.get("asset") or ""), str(rec.get("outcomeIndex")), str(rec.get("side") or ""),
-        size, price,
-    )
-
-
-def _outcome_of(
-    rec: Mapping[str, Any], up_token: str | None, down_token: str | None
-) -> str | None:
-    """The outcome whose token a record traded: by token id when the window's tokens are
-    known, else by the record's own outcome label, else by its outcome index."""
-    asset = str(rec.get("asset") or "")
-    if asset and up_token and down_token:
-        return "Up" if asset == up_token else "Down" if asset == down_token else None
-    label = rec.get("outcome")
-    if label in SIDES:
-        return str(label)
-    index = rec.get("outcomeIndex")
-    if index in (0, 1) and not isinstance(index, bool):
-        return SIDES[int(index)]  # Up/Down markets list their outcomes as ["Up", "Down"]
-    return None
-
-
-def _same_market(rec: Mapping[str, Any], condition_id: str) -> bool:
-    cid = rec.get("conditionId")
-    return not cid or str(cid).lower() == condition_id.lower()
-
-
-def _print_of(
-    rec: Mapping[str, Any], key: tuple, *, up_token: str | None, down_token: str | None
-) -> TapePrint | None:
-    side = str(rec.get("side") or "").upper()
-    outcome = _outcome_of(rec, up_token, down_token)
-    ts, size, price = key[0], key[6], key[7]
-    if side not in ("BUY", "SELL") or outcome is None or size <= 0 or not 0.0 <= price <= 1.0:
-        return None
-    return TapePrint(ts=ts, outcome=outcome, side=side, size=size, price=price)
-
-
-def _status(exc: BaseException) -> str:
-    response = getattr(exc, "response", None)
-    code = getattr(response, "status_code", None)
-    return f"HTTP {code}" if code else type(exc).__name__
-
-
-async def read_taker_tape(
-    client: HttpClient,
-    condition_id: str,
-    *,
-    since: int,
-    up_token: str | None = None,
-    down_token: str | None = None,
-) -> TapeRead:
-    """Every taker record for a market from ``since`` on (newest-first pages, overlapping).
-
-    Raises ``TapeUnavailable`` if any page fails, the pages shift under us, a reply holds
-    another market's trades, or ``since`` is deeper than the tape can be paged: a partial or
-    wrong read would skip trades.
-    """
-    keys: set[tuple] = set()
-    prints: list[TapePrint] = []
-    newest: int | None = None
-    skipped = 0
-    offset = 0
-    while True:
-        try:
-            resp = await client.get(
-                f"{DATA_API}/trades",
-                params={"market": condition_id, "limit": TAPE_PAGE, "offset": offset,
-                        "takerOnly": "true"},
-                headers=BROWSER_HEADERS, timeout=HTTP_TIMEOUT_S,
-            )
-            resp.raise_for_status()
-            feed = resp.json()
-        except Exception as exc:  # noqa: BLE001 - any failure means the read is incomplete
-            raise TapeUnavailable(f"could not read the trade tape ({_status(exc)})") from exc
-        if not isinstance(feed, list):
-            raise TapeUnavailable("the trade tape answered in an unexpected shape")
-        overlapped = reached = False
-        for rec in feed:
-            key = _record_key(rec)
-            if key is None:
-                skipped += 1
-                continue
-            if key in keys:
-                overlapped = True
-                continue
-            keys.add(key)
-            if not _same_market(rec, condition_id):
-                raise TapeUnavailable("the trade tape answered with another market's trades")
-            ts = key[0]
-            newest = ts if newest is None else max(newest, ts)
-            if ts < since:
-                reached = True
-                continue
-            tape_print = _print_of(rec, key, up_token=up_token, down_token=down_token)
-            if tape_print is None:
-                skipped += 1
-            else:
-                prints.append(tape_print)
-        if offset > 0 and not overlapped:
-            raise TapeUnavailable("the trade tape shifted while it was being read")
-        if reached or len(feed) < TAPE_PAGE:
-            break
-        offset += TAPE_PAGE - TAPE_PAGE_OVERLAP
-        if offset > TAPE_MAX_OFFSET:
-            raise TapeUnavailable("the trade tape is too long to read back that far")
-    prints.reverse()  # pages come newest first; keep the feed's order within one second
-    prints.sort(key=lambda t: t.ts)
-    return TapeRead(prints=tuple(prints), newest_ts=newest, skipped=skipped)
-
-
-async def market_outcome(
-    client: HttpClient,
-    condition_id: str,
-    *,
-    up_token: str | None = None,
-    down_token: str | None = None,
-) -> str | None:
-    """How a market resolved, from the venue's order-book service: "Up", "Down", or None while
-    it has not. Never Gamma: Gamma drops ended 15m markets. Raises ``MarketUnavailable``."""
-    try:
-        resp = await client.get(
-            f"{CLOB}/markets/{condition_id}", headers=BROWSER_HEADERS, timeout=HTTP_TIMEOUT_S
-        )
-        if getattr(resp, "status_code", 200) == 404:
-            raise MarketUnavailable("the order-book service does not know this market")
-        resp.raise_for_status()
-        market = resp.json()
-    except MarketUnavailable:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise MarketUnavailable(f"could not look up the result ({_status(exc)})") from exc
-    if not isinstance(market, Mapping):
-        raise MarketUnavailable("the order-book service answered in an unexpected shape")
-    if not market.get("closed"):
-        return None
-    winners: set[str] = set()
-    for token in market.get("tokens") or []:
-        if not isinstance(token, Mapping) or token.get("winner") is not True:
-            continue
-        tid = str(token.get("token_id") or "")
-        if up_token and tid == up_token:
-            winners.add("Up")
-        elif down_token and tid == down_token:
-            winners.add("Down")
-        elif token.get("outcome") in SIDES:
-            winners.add(str(token["outcome"]))
-    if len(winners) > 1:
-        raise MarketUnavailable("the order-book service marks both outcomes as winners")
-    return winners.pop() if winners else None
-
-
-async def tape_newest_ts(client: HttpClient, condition_id: str) -> int | None:
-    """The time of the newest taker record on a market's tape (None if it has none). Raises
-    ``TapeUnavailable`` if the tape cannot be read."""
-    try:
-        resp = await client.get(
-            f"{DATA_API}/trades",
-            params={"market": condition_id, "limit": FRESHNESS_PAGE, "offset": 0,
-                    "takerOnly": "true"},
-            headers=BROWSER_HEADERS, timeout=HTTP_TIMEOUT_S,
-        )
-        resp.raise_for_status()
-        feed = resp.json()
-    except Exception as exc:  # noqa: BLE001
-        raise TapeUnavailable(f"could not read the trade tape ({_status(exc)})") from exc
-    if not isinstance(feed, list):
-        raise TapeUnavailable("the trade tape answered in an unexpected shape")
-    newest: int | None = None
-    for rec in feed:
-        key = _record_key(rec)
-        if key is None or not _same_market(rec, condition_id):
-            continue
-        newest = key[0] if newest is None else max(newest, key[0])
-    return newest
 
 
 # ---------------------------------------------------------------------------
@@ -917,7 +499,7 @@ class PaperBookkeeper:
         by_id: dict[int, dict] = {}
         for r in rows:
             order_side = str(r.get("order_side") or "BUY")
-            side, price, levels = _book_terms(order_side, str(r["side"]), float(r["price"]),
+            side, price, levels = book_terms(order_side, str(r["side"]), float(r["price"]),
                                               _ledger.load_levels(r))
             by_id[int(r["id"])] = r
             queued.append(QueuedOrder(
@@ -937,7 +519,7 @@ class PaperBookkeeper:
             updates.append(FlowUpdate(
                 order_id=q.order_id, cursor_ts=q.flow_to, crossed=flow.crossed,
                 add_shares=flow.added, fill_ts=flow.fill_ts,
-                levels_ahead=_own_terms(order_side, flow.levels),
+                levels_ahead=own_terms(order_side, flow.levels),
             ))
         result = await _ledger.record_flow(updates)
         report.orders_updated += result.updated
@@ -1084,10 +666,6 @@ class PaperBookkeeper:
 # ---------------------------------------------------------------------------
 
 
-def _kill_path(path: Path | str | None) -> Path:
-    return Path(path) if path is not None else Path(_config.KILL_SWITCH_PATH)
-
-
 class PaperExecutor:
     """Paper child orders: written to the ledger, filled only by the real trade tape."""
 
@@ -1107,7 +685,7 @@ class PaperExecutor:
 
     def _kill_active(self) -> bool:
         try:
-            return _kill_path(self._kill_switch_path).exists()
+            return _controls.kill_switch_path(self._kill_switch_path).exists()
         except OSError:
             return True  # cannot tell: place nothing
 
@@ -1181,7 +759,7 @@ class PaperExecutor:
             for order in batch:
                 if not isinstance(order, NewOrder):
                     raise PlacementRefused("bad_order", "Only NewOrder orders can be placed.")
-                _check_passive(order, asks, bids)
+                _controls.check_passive(order, asks, bids)
             for slug in dict.fromkeys(order.window_slug for order in batch):
                 window = await _ledger.get_window(slug)
                 # A window's market id is only ever added, never removed, so this check
@@ -1233,39 +811,6 @@ class PaperExecutor:
         return await self.bookkeeper.settle(now=now)
 
 
-def _check_passive(order: NewOrder, best_asks: Mapping[str, float | None],
-                   best_bids: Mapping[str, float | None]) -> None:
-    """Refuse an order that would cross: a buy at or above the best ask, a sell at or below
-    the best bid."""
-    sell = order.order_side == "SELL"
-    book, name = (best_bids, "bid") if sell else (best_asks, "ask")
-    if order.token_id not in book:
-        raise PlacementRefused(
-            f"no_{name}", f"No best {name} was given for token {order.token_id}, so the "
-            f"{'sale' if sell else 'bid'} cannot be checked against the spread."
-        )
-    quote = book[order.token_id]
-    if quote is None:
-        return  # that side of the book is empty: nothing to cross
-    value = _float(quote)
-    if value is None or not 0.0 <= value <= 1.0:
-        raise PlacementRefused(
-            f"bad_{name}", f"The best {name} {quote!r} for token {order.token_id} is not a price."
-        )
-    if sell and order.price <= value + _PRICE_EPS:
-        raise PlacementRefused(
-            "would_cross",
-            f"A sale at {order.price:.3f} would meet the bid at {value:.3f}; sales only ever "
-            "rest above the bid.",
-        )
-    if not sell and order.price >= value - _PRICE_EPS:
-        raise PlacementRefused(
-            "would_cross",
-            f"A bid at {order.price:.3f} would meet the ask at {value:.3f}; bids only ever rest "
-            "below the ask.",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Choosing the executor from the requested mode
 # ---------------------------------------------------------------------------
@@ -1285,12 +830,6 @@ class ExecutorChoice:
     @property
     def can_place(self) -> bool:
         return self.executor is not None
-
-
-async def requested_mode() -> str:
-    """The operator's PAPER/LIVE selection (the dashboard's toggle), lower case."""
-    raw = await _db.get_config(MODE_KEY, _config.BOT_MODE)
-    return str(raw or "paper").strip().lower()
 
 
 async def choose_executor(
@@ -1322,7 +861,7 @@ async def choose_executor(
             f"Could not read the PAPER/LIVE selection ({type(exc).__name__}), so no new orders "
             "are placed this pass. Orders already filled keep settling.", None, keeper,
         )
-    path = _kill_path(kill_switch_path)
+    path = _controls.kill_switch_path(kill_switch_path)
     try:
         killed = path.exists()
     except OSError:

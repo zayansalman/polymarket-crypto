@@ -27,6 +27,9 @@ module status in [FILE_MAP.md](FILE_MAP.md).
 - **`ems/fade_1h_momentum_15m/`** is the one strategy. Its maths (`model.py`, `sizing.py`,
   `decide.py`) is pure; `runner.py` does the I/O; `executor.py` fills paper orders from the
   real trade tape; `ledger.py` is the only writer of the `fade_*` tables.
+- **`ems/execution/`** is the execution layer every strategy shares: the fill model
+  (`queue.py`), the trade tape and result reads (`tape.py`), and the checks every placement
+  makes first: PAPER/LIVE mode, kill switch, never cross the spread (`controls.py`).
 - **`ems/dashboard/`** reads the ledger and the hub snapshot and renders cards. Every card
   is a pure `render(...) -> str`; `execution_view.py` loads the data once.
 - **Foundation:** `config.py` (env), `db.py` (schema + additive migrations),
@@ -43,6 +46,7 @@ the runner, and replayed by the research scripts under `tools/fade_1h_momentum_1
 A paper order rests at a price level and fills only when the CLOB trade stream prints a
 trade through it, with the depth ahead of it in the queue accounted for. No fill is invented
 from a mid price, so the paper ledger is a lower bound on what a real order would have done.
+Every strategy uses the same fill model (`ems/execution/queue.py:allocate_fills`).
 
 ### One executor interface
 `runner.py` asks an `Executor` to rest, cancel and settle. Paper is the only implementation.

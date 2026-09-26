@@ -8,7 +8,9 @@
 - **Where to make what change:** read **[docs/CODE_MAP.md](docs/CODE_MAP.md)**
   first. It is the routing doc: "I want to change X → edit Y".
 - **One package, `ems/`.** One paper strategy (`ems/fade_1h_momentum_15m/`),
-  the WebSocket market-data hub it reads (`ems/marketdata/`), the FastAPI
+  the execution layer every strategy shares (`ems/execution/`: the fill model,
+  the trade tape and result reads, the mode and kill switch checks), the
+  WebSocket market-data hub it reads (`ems/marketdata/`), the FastAPI
   operator dashboard (`ems/dashboard/`) and the foundation (`ems/config.py`,
   `ems/db.py`, `ems/logging_setup.py`). `main.py` is the only entry point.
 - **Machine-generated facts** (module inventory, wired-vs-dead status, test
@@ -107,8 +109,8 @@ http://127.0.0.1:7860
 ## Live module status (generated)
 
 <!-- BEGIN GENERATED:summary -->
-- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
+- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `execution/` = the execution layer every strategy shares (fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategy.
-- **Tests:** 958.
+- **Tests:** 971.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->

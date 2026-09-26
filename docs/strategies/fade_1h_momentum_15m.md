@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
 | Code | `ems/fade_1h_momentum_15m/` — 9 files |
-| Code fingerprint | `5b51c3681fa1` |
+| Code fingerprint | `a0c549de8d0d` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -83,7 +83,7 @@ Fitted on Binance data before 2026-09-17: $\theta = -0.043$ (a very slight fade)
 - Full derivation and the pre-registered historical test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`
 - Sizing, scaled passive limit orders, cutting a position and the market anchor: `tasks/2026-09-22-fade-1h-sizing.md`
 - One side plus cash, never both: `tasks/2026-09-22-kelly-horse-race-research.md` (branch `research/1h-direction-vol-15m`, PR #280)
-- Code in the app: `ems/fade_1h_momentum_15m/` (the model hook is `decide.py`)
+- Code in the app: `ems/fade_1h_momentum_15m/` (the model hook is `decide.py`); the fill model, tape reads and placement checks it shares with every strategy: `ems/execution/`
 - Scripts: `tools/fade_1h_momentum_15m/manual_trades_flip.py`, `threshold_scan.py`, `validate_math.py`
 - Binaries as options on Brownian motion: Taleb, *Quantitative Finance* 2019, [arXiv 1703.06351](https://arxiv.org/abs/1703.06351)
 - 15m reversal in crypto: Kitron & Wengrowicz 2026, [arXiv 2608.21888](https://arxiv.org/abs/2608.21888)
@@ -1004,6 +1004,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-26 · `a0c549de8d0d` · The tape reader, fill allocation, result lookup, never-cross check, kill switch and PAPER/LIVE read moved to ems/execution/ (queue.py, tape.py, controls.py), shared with every strategy; the executor re-exports what callers used. Behaviour unchanged.
 - 2026-09-26 · `5b51c3681fa1` · executor docstring: dropped the citation of the deleted maker filler; the crossed-volume rule is stated inline
 - 2026-09-26 · `07696b37f565` · Moved into the single ems/ package (ems/fade_1h_momentum_15m/); imports only, behaviour unchanged.
 - 2026-09-26 · `0bc09fea343c` · Every other strategy family was deleted (BTC Up/Down loop and its live executor, maker, daily altcoin scanner). The browser headers the executor borrowed from the maker now live in executor.py; behaviour unchanged.

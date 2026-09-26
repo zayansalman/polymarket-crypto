@@ -22,6 +22,10 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `ems/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
 | `ems/db.py` | WIRED | 8 | SQLite storage for the local Polymarket crypto trading lab. |
+| `ems/execution/__init__.py` | pkg | 1 | The execution layer every strategy shares: how a resting order meets the venue. |
+| `ems/execution/controls.py` | WIRED | 1 | What every placement checks first: the operator's mode, the kill switch and the spread. |
+| `ems/execution/queue.py` | WIRED | 3 | Queue maths for resting orders: the depth ahead of an order, and how the taker tape fills it. |
+| `ems/execution/tape.py` | WIRED | 2 | Reads from the venue that every strategy's fills and results rest on. |
 | `ems/fade_1h_momentum_15m/__init__.py` | pkg | 6 | Fade 1h Momentum on 15m: a paper-only strategy on the 15-minute crypto Up/Down markets. |
 | `ems/fade_1h_momentum_15m/decide.py` | WIRED | 2 | The model hook for Fade 1h Momentum on 15m: one coin's inputs in, a :class:`Decision` out. |
 | `ems/fade_1h_momentum_15m/executor.py` | WIRED | 2 | Order execution for Fade 1h Momentum on 15m: paper child orders, their fills, settlement. |
