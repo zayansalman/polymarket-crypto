@@ -74,13 +74,13 @@ def render(*, values: dict[str, Any], knobs: dict[str, Knob]) -> str:
         )
 
     return (
-        "<section class='card wide'>"
-        "<div class='card-h'>SETTINGS"
-        "<span class='win'>runtime · no restart · applies on the next tick</span></div>"
+        "<details class='card wide fold' data-fold='settings' open>"
+        "<summary class='card-h'><span class='fold-title'>SETTINGS</span>"
+        "<span class='win'>runtime · no restart · applies on the next tick</span></summary>"
         "<div class='gr-toggle-hint' style='margin-bottom:10px'>"
         "every control here used to be a .env value — changes take effect immediately, "
         "no restart, and are logged to the activity feed."
         "</div>"
         f"{sections}"
-        "</section>"
+        "</details>"
     )

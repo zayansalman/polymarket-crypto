@@ -113,16 +113,16 @@ def render(
         )
 
     return (
-        "<section class='card strategies-card'>"
-        f"<div class='card-h'>MY STRATEGIES<span class='win'>{on} of "
+        "<details class='card strategies-card fold' data-fold='strategies' open>"
+        f"<summary class='card-h'><span class='fold-title'>MY STRATEGIES</span><span class='win'>{on} of "
         f"{len(switchable)} switchable on &middot; "
         f"{len(_inv.FAMILIES)} in the tree &middot; "
         "<a class='strategy-doc-link' href='/strategy-docs' target='_blank' rel='noopener'>all docs</a>"
-        "</span></div>"
+        "</span></summary>"
         "<div class='gr-toggle-hint' style='margin-bottom:10px'>"
         "off stops NEW entries only — open positions still settle. Everything "
         "in the tree is listed, working or not, so nothing rots unseen."
         "</div>"
         f"{sections}"
-        "</section>"
+        "</details>"
     )

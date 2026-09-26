@@ -171,6 +171,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategy.
-- **Tests:** 957.
+- **Tests:** 958.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->

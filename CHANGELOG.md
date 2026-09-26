@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — one package, every dashboard card folds (2026-09-26)
+
+- Changed: the tree is one package, `ems/`, with `main.py` as the only entry
+  point. `polymarket_bot/`, `connectors/` and `dashboard/` moved under it; the
+  `sys.path` bootstrap, the `polymarket_bot.*` import names and the empty
+  packages left by the strategy removal are gone. SQLite config keys keep
+  their `polymarket_bot.*` names so existing databases still read.
+- Changed: every dashboard card (FEEDS, MY STRATEGIES, STRATEGY, the fade
+  card, SETTINGS) is a collapsible fold. Click the header to collapse or
+  expand it; the browser remembers each card's state across refreshes and
+  reloads.
+
 ## Unreleased — Fade 1h Momentum on 15m is the only strategy (2026-09-26)
 
 Everything but Fade 1h Momentum on 15m was removed at the operator's request:

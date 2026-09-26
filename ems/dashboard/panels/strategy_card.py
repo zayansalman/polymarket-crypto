@@ -79,16 +79,16 @@ def render(*, entries: list[tuple[_inv.Family, dict[str, str]]]) -> str:
 def _render(frozen: tuple[tuple[_inv.Family, tuple[tuple[str, str], ...]], ...]) -> str:
     entries = [(fam, dict(parts)) for fam, parts in frozen]
     head = (
-        "<section class='card strategy-card' data-static='strategy-card'>"
-        "<div class='card-h'>STRATEGY"
-        f"<span class='win'>{len(entries)} with a summary</span></div>"
+        "<details class='card strategy-card fold' data-fold='strategy' data-static='strategy-card' open>"
+        "<summary class='card-h'><span class='fold-title'>STRATEGY</span>"
+        f"<span class='win'>{len(entries)} with a summary</span></summary>"
     )
     if not entries:
         return (
             head
             + "<div class='gr-toggle-hint'>No strategy doc has an At a glance "
             "section yet. Add one under docs/strategies/ and it appears here.</div>"
-            "</section>"
+            "</details>"
         )
     first = entries[0][0].key
     return (
@@ -102,5 +102,5 @@ def _render(frozen: tuple[tuple[_inv.Family, tuple[tuple[str, str], ...]], ...])
         "target='_blank' rel='noopener' title='The full doc, in a new tab'>Docs</a>"
         "</div>"
         + "".join(_body_html(fam, parts, fam.key == first) for fam, parts in entries)
-        + "</section>"
+        + "</details>"
     )

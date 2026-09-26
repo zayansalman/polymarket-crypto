@@ -63,6 +63,15 @@ class TestDashboardPage:
         text = client.get("/").text
         assert "ACTIVITY LOG" in text
 
+    def test_every_card_folds_and_remembers_its_state(self, client: TestClient):
+        # Each card is a <details> fold; dashboard.js stores open/closed by
+        # data-fold and re-applies it after every refresh swaps the HTML.
+        text = client.get("/").text
+        for key in ("feeds", "strategies", "strategy", "fade-1h", "settings"):
+            assert f"data-fold='{key}'" in text, key
+        assert "<section class='card" not in text
+        assert text.count("<summary class='card-h'>") == 5
+
 
 class TestStaticFiles:
     def test_css_served(self, client: TestClient):

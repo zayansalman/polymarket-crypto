@@ -568,9 +568,9 @@ body {
 .doc-body a { color: var(--text); }
 .strategy-doc-link { font-size: 10.5px; margin-left: 8px; font-weight: normal; }
 
-/* ── FEEDS fold ── */
-/* Closed, it shrinks to its header instead of holding the row open. */
-.execution-grid .feeds-card.fold { align-self: start; margin-bottom: 0; }
+/* ── every card folds ── */
+/* Closed, a card shrinks to its header instead of holding the row open. */
+.execution-grid .card.fold { align-self: start; margin-bottom: 0; }
 
 /* ── the column beside FEEDS: ORDER SIZE over STRATEGY ── */
 .grid-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; align-self: start; }
@@ -600,7 +600,6 @@ body {
 .strategy-status.st-running { color: var(--pos); background: rgba(27, 122, 67, .08); }
 
 /* ── FADE 1H MOMENTUM ON 15M: profit first, then one block per coin ── */
-.execution-grid .fade-card.fold { margin-bottom: 0; }
 .fade-pills { display: inline-flex; align-items: center; gap: 6px; }
 .fade-strip { display: flex; flex-wrap: wrap; gap: 12px 24px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .fade-state { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
