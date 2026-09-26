@@ -7,8 +7,8 @@
 | Key | `fade_1h_momentum_15m` |
 | Status | running now |
 | Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
-| Code | `polymarket_bot/fade_1h_momentum_15m/` — 9 files |
-| Code fingerprint | `a0649b0d0711` |
+| Code | `ems/fade_1h_momentum_15m/` — 9 files |
+| Code fingerprint | `5b51c3681fa1` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -83,7 +83,7 @@ Fitted on Binance data before 2026-09-17: $\theta = -0.043$ (a very slight fade)
 - Full derivation and the pre-registered historical test: `tasks/2026-09-21-fade-1h-momentum-on-15m.md`
 - Sizing, scaled passive limit orders, cutting a position and the market anchor: `tasks/2026-09-22-fade-1h-sizing.md`
 - One side plus cash, never both: `tasks/2026-09-22-kelly-horse-race-research.md` (branch `research/1h-direction-vol-15m`, PR #280)
-- Code in the app: `polymarket_bot/fade_1h_momentum_15m/` (the model hook is `decide.py`)
+- Code in the app: `ems/fade_1h_momentum_15m/` (the model hook is `decide.py`)
 - Scripts: `tools/fade_1h_momentum_15m/manual_trades_flip.py`, `threshold_scan.py`, `validate_math.py`
 - Binaries as options on Brownian motion: Taleb, *Quantitative Finance* 2019, [arXiv 1703.06351](https://arxiv.org/abs/1703.06351)
 - 15m reversal in crypto: Kitron & Wengrowicz 2026, [arXiv 2608.21888](https://arxiv.org/abs/2608.21888)
@@ -1004,10 +1004,13 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-26 · `5b51c3681fa1` · executor docstring: dropped the citation of the deleted maker filler; the crossed-volume rule is stated inline
+- 2026-09-26 · `07696b37f565` · Moved into the single ems/ package (ems/fade_1h_momentum_15m/); imports only, behaviour unchanged.
+- 2026-09-26 · `0bc09fea343c` · Every other strategy family was deleted (BTC Up/Down loop and its live executor, maker, daily altcoin scanner). The browser headers the executor borrowed from the maker now live in executor.py; behaviour unchanged.
 - 2026-09-26 · `a0649b0d0711` · Merged the historical test, worked examples and TWAP settlement research from develop; the doc now describes the paper strategy running in the app.
 - 2026-09-26 · `e97d1c0c4462` · Review fixes. Both sides are priced and the one adding the most expected log growth is rested as scaled passive limit orders: a parent order split into child orders at price levels at or under the best bid, none at or across its own book. A losing position is reduced by a resting passive sell of the shares held, never by buying the other side. Paper orders are stamped when written, fill from the real tape through the depth ahead level by level, and keep their queue place across passes. Joint sizing accounts for each bet's side. The price now is the live Chainlink price. The learner holds the price-process fit as a fixed prior. The card shows every error of a pass, input warnings, and a dead or stopped loop. Standard terms throughout.
 - 2026-09-22 · `32a1484ce579` · The model is plugged in, so it now bids on paper. decide.py prices each window with model.py, a standard-library port of the research model for the TWAP-60s settlement (checked against the research code to 1e-9 on 197 cases), follows the market with fitted anchor weights, and gets the fill and win chances at each price level, and the quotes for hedging on the other side (replaced on 2026-09-26 by a resting sell of the shares held), from 2,000 simulated paths. Starting dials (version 1) fitted on the Sep 17-20 tape: w_M 0.45, w_S 0.57, rho 0.75. learner.py moves every dial one bounded step after each settled window (recursive maximum likelihood, about two days of memory).
-- 2026-09-22 · `47989d06aa7c` · Wired into the app as a running paper strategy (switch fade_1h_momentum_15m; Settings group Fade 1h Momentum on 15m): each minute it records every coin's inputs, checks fills and settles every window; the model hook returns nothing yet, so no bids are placed. Code moved to polymarket_bot/fade_1h_momentum_15m/. Start reference is now the window's priceToBeat (TWAP-60s print at the open), per the verified settlement rule.
+- 2026-09-22 · `47989d06aa7c` · Wired into the app as a running paper strategy (switch fade_1h_momentum_15m; Settings group Fade 1h Momentum on 15m): each minute it records every coin's inputs, checks fills and settles every window; the model hook returns nothing yet, so no bids are placed. Code moved to ems/fade_1h_momentum_15m/. Start reference is now the window's priceToBeat (TWAP-60s print at the open), per the verified settlement rule.
 - 2026-09-22 · `096e99578fbf` · Settlement correction (Zayan): the 15m market settles on a Chainlink TWAP, not on the close. Added the average-price probability with one switch between the two rules (task doc section 1b), checked by simulation (52 checks, largest |z| 2.43). On the tape, the real resolutions follow the TWAP-60s value at the close against its value before the open (96.8% of 1,136 markets) far better than a 15-minute average (85.2%). Nothing refitted; the maths on this page still describes the close.
 - 2026-09-22 · `4a7e98a879d9` · Added the test code (data, model, steps 0-2, explain, examples) and five worked examples in a trader's words; corrected the text to what the test found: the snap-back grows through the hour, the 1h momentum adds almost nothing, no price rules anywhere.
 - 2026-09-22 · `a5c0e596af30` · Historical test results added (Step 0-2 evidence, fitted parameters, updated weaknesses): at minute 2 the market's price scored better than the model (log-loss +0.0072, t 0.87), the taker made +1.4c/share (n 355, t 0.44) and the maker -2.7c/quote (n 521, t -1.08); the martingale on the same rows made -0.9c and -2.3c.

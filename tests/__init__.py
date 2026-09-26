@@ -1,1 +1,1 @@
-"""Test suite for polymarket_exec."""
+"""Test suite for the ems package."""

@@ -14,10 +14,10 @@ import websockets
 from websockets.exceptions import ConnectionClosedOK
 from websockets.frames import Close
 
-from polymarket_exec.marketdata import clob_messages as cm
-from polymarket_exec.marketdata import clob_shard as sh
-from polymarket_exec.marketdata import clob_stream as cs
-from polymarket_exec.marketdata import rtds_stream as rs
+from ems.marketdata import clob_messages as cm
+from ems.marketdata import clob_shard as sh
+from ems.marketdata import clob_stream as cs
+from ems.marketdata import rtds_stream as rs
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
 

@@ -1,6 +1,6 @@
 # Strategy docs
 
-One document per strategy family in `polymarket_bot/inventory.py`, at `docs/strategies/<key>.md`.
+One document per strategy family in `ems/inventory.py`, at `docs/strategies/<key>.md`.
 The dashboard serves them at `/strategy-docs`; each row on the MY STRATEGIES card links to its doc.
 
 Every doc has the same sections: **What it does**, **How it was formed** (who proposed it, when,

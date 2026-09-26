@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from logging_setup import _redact_processor, redact_secrets
+from ems.logging_setup import _redact_processor, redact_secrets
 
 FAKE_KEY = "0x" + "a" * 64
 OTHER_HASH = "0x" + "b" * 64  # a legit order id / tx hash — must survive

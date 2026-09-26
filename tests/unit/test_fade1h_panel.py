@@ -15,14 +15,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import config as _config
-import db as _db
-from polymarket_bot.fade_1h_momentum_15m import executor as ex
-from polymarket_bot.fade_1h_momentum_15m import ledger
-from polymarket_bot.fade_1h_momentum_15m import runner as rn
-from polymarket_bot.fade_1h_momentum_15m.inputs import Problem
-from polymarket_exec.ops.dashboard import execution_view as ev
-from polymarket_exec.ops.dashboard.panels import fade_1h as panel
+from ems import config as _config
+from ems import db as _db
+from ems.fade_1h_momentum_15m import executor as ex
+from ems.fade_1h_momentum_15m import ledger
+from ems.fade_1h_momentum_15m import runner as rn
+from ems.fade_1h_momentum_15m.inputs import Problem
+from ems.dashboard import execution_view as ev
+from ems.dashboard.panels import fade_1h as panel
 from tests.unit.test_fade1h_runner import (
     END,
     NOW,
@@ -612,9 +612,9 @@ def test_no_dialogs_no_coin_flip_language_and_standard_terms_only() -> None:
     assert "Edge band" not in html and "AUTO-PAUSE" not in html.upper()
     sources = {
         "the card": html,
-        "the panel": (ROOT / "polymarket_exec/ops/dashboard/panels/fade_1h.py").read_text(),
-        "the stylesheet": (ROOT / "polymarket_exec/ops/dashboard/static/style.css").read_text(),
-        "the loader": (ROOT / "polymarket_exec/ops/dashboard/execution_view.py").read_text(),
+        "the panel": (ROOT / "ems/dashboard/panels/fade_1h.py").read_text(),
+        "the stylesheet": (ROOT / "ems/dashboard/static/style.css").read_text(),
+        "the loader": (ROOT / "ems/dashboard/execution_view.py").read_text(),
     }
     for where, text in sources.items():
         for word in COINED:
@@ -695,7 +695,7 @@ async def fade_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_the_card_reads_a_real_pass(fade_db, monkeypatch: pytest.MonkeyPatch) -> None:
-    from polymarket_bot.fade_1h_momentum_15m import inputs as _inputs
+    from ems.fade_1h_momentum_15m import inputs as _inputs
 
     await save_window("btc")
     others = {a: Problem(asset=a, code="no_hub", ts=NOW, message="No market data hub.")
@@ -752,7 +752,7 @@ async def test_a_loop_that_died_reaches_the_card_through_the_loader(
 async def test_the_card_sits_under_my_strategies_and_survives_a_bad_read(
         fade_db, monkeypatch: pytest.MonkeyPatch) -> None:
     page = await ev.execution_view_html()
-    where = [page.index(x) for x in ("MY STRATEGIES", panel.TITLE, "LIVE MARKET")]
+    where = [page.index(x) for x in ("MY STRATEGIES", panel.TITLE, "SETTINGS")]
     assert where == sorted(where)
 
     async def _broken() -> dict:
@@ -762,4 +762,4 @@ async def test_the_card_sits_under_my_strategies_and_survives_a_bad_read(
     page = await ev.execution_view_html()
     assert "Could not read this strategy's records: the ledger (RuntimeError: no such " \
            "table: fade_orders)" in page
-    assert "MY STRATEGIES" in page and "LIVE MARKET" in page
+    assert "MY STRATEGIES" in page and "SETTINGS" in page

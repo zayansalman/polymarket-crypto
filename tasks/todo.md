@@ -1,3 +1,10 @@
+# Update — one strategy, one package (2026-09-26)
+
+Everything but Fade 1h Momentum on 15m was removed and the tree merged into one
+package, `ems/` (see CHANGELOG). Every item below this header refers to code
+that no longer exists and is kept as history. Current state: AGENTS.md,
+docs/CODE_MAP.md and the strategy doc.
+
 # Update — copy-trade removed (2026-09-21)
 
 All copy-trade code is gone from the app (see CHANGELOG). Every open copy-trade

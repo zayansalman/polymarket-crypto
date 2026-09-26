@@ -17,11 +17,11 @@ import httpx
 import pytest
 import pytest_asyncio
 
-import config as _config
-import db as _db
-from polymarket_bot.fade_1h_momentum_15m import inputs as fi
-from polymarket_bot.fade_1h_momentum_15m import ledger
-from polymarket_bot.fade_1h_momentum_15m.inputs import (
+from ems import config as _config
+from ems import db as _db
+from ems.fade_1h_momentum_15m import inputs as fi
+from ems.fade_1h_momentum_15m import ledger
+from ems.fade_1h_momentum_15m.inputs import (
     ASSETS,
     OWNER,
     InputMemory,
@@ -31,10 +31,10 @@ from polymarket_bot.fade_1h_momentum_15m.inputs import (
     start_reference,
     window_average,
 )
-from polymarket_exec.marketdata.hub import MarketQuote
-from polymarket_exec.marketdata.order_book import TopOfBook
-from polymarket_exec.marketdata.rtds_stream import PricePoint
-from polymarket_exec.marketdata.universe import MarketRef
+from ems.marketdata.hub import MarketQuote
+from ems.marketdata.order_book import TopOfBook
+from ems.marketdata.rtds_stream import PricePoint
+from ems.marketdata.universe import MarketRef
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 S0 = HOUR + 900  # the hour's second quarter

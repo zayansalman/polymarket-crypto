@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from polymarket_bot.fees import (
+from ems.fees import (
     breakeven_winrate,
     net_pnl_per_share,
     taker_fee_per_share,

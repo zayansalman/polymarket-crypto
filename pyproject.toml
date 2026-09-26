@@ -8,19 +8,16 @@ version = "0.2.0"
 description = "Local research and shadow/paper execution stack for Polymarket crypto binary markets"
 requires-python = ">=3.11"
 dependencies = [
-    # http2 extra (h2) is REQUIRED, not optional: the Polymarket crypto-price
-    # reference endpoint is Cloudflare-protected and 403s HTTP/1.1 requests, so
-    # the settlement client must speak HTTP/2 (#120).
-    "httpx[http2]>=0.27",
+    "httpx>=0.27",
     "aiosqlite>=0.20",
     "python-dotenv>=1.0",
     "structlog>=24.1",
     "fastapi>=0.110",
     "jinja2>=3.1",
     "uvicorn>=0.29",
-    "py-clob-client-v2>=1.0",
     "websockets>=12",
-    # IANA zones for zoneinfo (US Eastern release times); slim images lack system tzdata.
+    # IANA zones for zoneinfo (Up/Down windows are named in US Eastern time);
+    # slim images lack system tzdata.
     "tzdata>=2024.1",
     # Renders docs/strategies/*.md at /docs in the dashboard.
     "markdown-it-py>=3.0",
@@ -33,27 +30,21 @@ dependencies = [
 # no longer exists in the tree — only stale .pyc files remained.)
 test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
-# One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
-# Day-to-day trading uses py-clob-client-v2, a core dependency.
-setup = ["polymarket-client"]
 
 [tool.setuptools]
-packages = ["polymarket_exec", "polymarket_bot"]
-# "dashboard" dropped 2026-09-21: the top-level Gradio dashboard.py was a dead
-# fallback branch (HAS_NEW_DASHBOARD was always true) and has been removed.
-py-modules = ["db", "config", "logging_setup", "main"]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["ems*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
-# E402 (module-import-not-at-top): these modules insert the project root into
-# sys.path before importing top-level modules (config, db, logging_setup) or
-# the package itself, so those imports intentionally follow the sys.path
-# bootstrap and cannot be hoisted to the top of the file.
-"polymarket_exec/execution/live.py" = ["E402"]
-"polymarket_exec/ops/dashboard/app.py" = ["E402"]
+# E402 (module-import-not-at-top): these tests insert the project root into
+# sys.path before importing the package, so those imports intentionally follow
+# the sys.path bootstrap and cannot be hoisted to the top of the file.
 "tests/e2e/test_dashboard_flow.py" = ["E402"]
 "tests/unit/test_dashboard.py" = ["E402"]
 

@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased — one package, every dashboard card folds (2026-09-26)
+
+- Changed: the tree is one package, `ems/`, with `main.py` as the only entry
+  point. `polymarket_bot/`, `connectors/` and `dashboard/` moved under it; the
+  `sys.path` bootstrap, the `polymarket_bot.*` import names and the empty
+  packages left by the strategy removal are gone. SQLite config keys keep
+  their `polymarket_bot.*` names so existing databases still read.
+- Changed: every dashboard card (FEEDS, MY STRATEGIES, STRATEGY, the fade
+  card, SETTINGS) is a collapsible fold. Click the header to collapse or
+  expand it; the browser remembers each card's state across refreshes and
+  reloads.
+- Docs: AGENTS.md, README.md, docs/CODE_MAP.md, docs/ARCHITECTURE.md and
+  docs/OPERATIONS_RUNBOOK.md describe the one-package, one-strategy app.
+  docs/ROADMAP.md, docs/RESEARCH_LOOP.md and docs/CHRONOS_INTEGRATION.md moved
+  to docs/archive/ (they describe removed lines). The `.claude` doc-gen hooks,
+  paused for the rebuild, are back on.
+- Removed: the `py-clob-client-v2` dependency, the `httpx[http2]` extra and the
+  `setup` extra (`polymarket-client`). They backed the deleted live executor
+  and wallet tool; nothing in the tree imports them.
+
+## Unreleased — Fade 1h Momentum on 15m is the only strategy (2026-09-26)
+
+Everything but Fade 1h Momentum on 15m was removed at the operator's request:
+the BTC Up/Down loop (with its Start/Stop controller, market selector, order
+ticket, live CLOB executor and risk gate), the maker, the daily altcoin
+scanner, the venue flow and macro recorders and the feed monitor, plus the
+dashboard cards, tables, knobs, tools, tests and docs that existed only for
+them. The dashboard keeps the FEEDS card (the market-data hub's rows), MY
+STRATEGIES, the fade card, the STRATEGY card, SETTINGS (fade's knobs), the
+activity log and the strategy docs. Paper only: no live order path exists.
+`config.py` keeps the data/dashboard settings, `BOT_MODE` (paper) and the
+kill switch; `db.py` keeps `config`, `notification_feed` and the `fade_*`
+tables. Existing databases keep their old tables untouched.
+
 ## Unreleased — Fade 1h Momentum on 15m runs as a paper strategy (2026-09-26)
 
 A new paper strategy for the BTC, ETH, SOL and XRP 15-minute Up/Down windows,

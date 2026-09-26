@@ -183,7 +183,7 @@ def test_collect_env_knobs_canonical_and_sorted(tmp_path):
         'lowercase = "btc_not_upper"\n'
     )
     (tmp_path / "config.py").write_text(cfg)
-    knobs = gd.collect_env_knobs(tmp_path)
+    knobs = gd.collect_env_knobs(tmp_path, config_rel="config.py")
     assert "TRADE_MAX_USD" in knobs
     assert "LIVE_MAX_USD" in knobs
     assert "PATH" not in knobs
@@ -205,12 +205,10 @@ def test_real_tree_wiring_truth():
     mods = gd.collect_modules(gd.REPO)
     gd.annotate_importers(gd.REPO, mods)
     by = {m.path: m for m in mods}
-    # The live loop and its signal math are WIRED.
-    assert by["polymarket_bot/paper.py"].status == "WIRED"
-    assert by["polymarket_bot/strategy.py"].status == "WIRED"
-    # The live risk gate + executor are WIRED.
-    assert by["polymarket_exec/execution/gate.py"].status == "WIRED"
-    assert by["polymarket_exec/execution/live.py"].status == "WIRED"
+    # The one strategy and the hub it reads are WIRED.
+    assert by["ems/fade_1h_momentum_15m/runner.py"].status == "WIRED"
+    assert by["ems/marketdata/hub.py"].status == "WIRED"
+    assert by["ems/dashboard/app.py"].status == "WIRED"
 
 
 def test_test_count_is_positive_int():
@@ -219,7 +217,7 @@ def test_test_count_is_positive_int():
 
 
 def test_entrypoint_importable():
-    assert gd.entrypoint_ok(gd.REPO) is True  # polymarket_exec.ops.dashboard.app imports
+    assert gd.entrypoint_ok(gd.REPO) is True  # ems.dashboard.app imports
 
 
 def test_replace_block_is_idempotent():
@@ -277,3 +275,29 @@ def test_existing_test_count_extracts_digits():
     assert gd._existing_test_count("blah\n- **Tests:** 42.\nmore") == "42"
     assert gd._existing_test_count("- **Tests:** (see FILE_MAP).") is None
     assert gd._existing_test_count("no count here") is None
+
+
+def test_import_graph_resolves_relative_imports(tmp_path):
+    """`from . import x` / `from .x import y` count as importers.
+
+    This was the blind spot that flagged a live dashboard helper as DEAD?.
+    """
+    root = tmp_path
+    pkg = root / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "alpha.py").write_text('"""A."""\nX = 1\n')
+    (pkg / "beta.py").write_text('"""B."""\nY = 2\n')
+    (pkg / "gamma.py").write_text('"""G."""\nfrom . import alpha\nfrom .beta import Y\n')
+    sub = pkg / "sub"
+    sub.mkdir()
+    (sub / "__init__.py").write_text("")
+    (sub / "delta.py").write_text('"""D."""\nfrom ..gamma import alpha\n')
+
+    mods = gd.collect_modules(root, source_roots=["pkg"], toplevel=[])
+    gd.annotate_importers(root, mods, test_dirs=["tests"])
+    by = {m.path: m for m in mods}
+    assert by["pkg/alpha.py"].status == "WIRED"   # `from . import alpha`
+    assert by["pkg/beta.py"].status == "WIRED"    # `from .beta import Y`
+    assert by["pkg/gamma.py"].status == "WIRED"   # `from ..gamma import` in sub/
+    assert by["pkg/sub/delta.py"].status == "DEAD?"

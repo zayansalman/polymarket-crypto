@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from polymarket_bot.fade_1h_momentum_15m import model as m
+from ems.fade_1h_momentum_15m import model as m
 
 FIXTURES = json.loads(
     (Path(__file__).resolve().parents[1] / "fixtures" / "fade1h_model_cases.json").read_text()

@@ -14,12 +14,11 @@ import httpx
 import pytest
 import pytest_asyncio
 
-import config as _config
-import db as _db
-from polymarket_bot.fade_1h_momentum_15m import executor as ex
-from polymarket_bot.fade_1h_momentum_15m import ledger
-from polymarket_bot.fade_1h_momentum_15m.ledger import NewOrder
-from polymarket_bot.maker import filler as maker_filler
+from ems import config as _config
+from ems import db as _db
+from ems.fade_1h_momentum_15m import executor as ex
+from ems.fade_1h_momentum_15m import ledger
+from ems.fade_1h_momentum_15m.ledger import NewOrder
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 START = HOUR + 900  # the hour's second quarter
@@ -214,6 +213,19 @@ def test_queue_ahead_is_everything_at_our_price_or_better() -> None:
     assert ex.queue_ahead(asks, 0.60, "SELL") == pytest.approx(5.0)
 
 
+def _crossed_volume(flow, our_index: int, our_price: float) -> float:
+    """The maker rule: a taker SELL on our outcome at or under our price, or a taker BUY
+    of the other outcome at or above 1 - our price (the same sale, mirrored), is flow
+    that reached a bid resting at our price. The two outcomes share one book."""
+    total = 0.0
+    for _ts, index, side, size, price in flow:
+        if side == "SELL" and index == our_index and price <= our_price + 1e-9:
+            total += size
+        elif side == "BUY" and index != our_index and 1.0 - price <= our_price + 1e-9:
+            total += size
+    return total
+
+
 def test_each_record_sells_into_exactly_one_outcome_like_the_maker_rule() -> None:
     records = [
         ex.TapePrint(1, "Up", "SELL", 5.0, 0.40), ex.TapePrint(2, "Up", "SELL", 3.0, 0.45),
@@ -227,7 +239,7 @@ def test_each_record_sells_into_exactly_one_outcome_like_the_maker_rule() -> Non
             ours = sum(p.size for p in records
                        if p.hits()[0] == side and p.hits()[1] <= price + 1e-9)
             assert ours == pytest.approx(
-                maker_filler.crossed_volume(flow, our_index=index, our_price=price)
+                _crossed_volume(flow, our_index=index, our_price=price)
             ), (side, price)
 
 

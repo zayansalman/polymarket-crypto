@@ -17,21 +17,21 @@ import httpx
 import pytest
 import pytest_asyncio
 
-import config as _config
-import db as _db
-from polymarket_bot import runtime_knobs as _knobs
-from polymarket_bot import strategies as _strategies
-from polymarket_bot.fade_1h_momentum_15m import decide as _decide
-from polymarket_bot.fade_1h_momentum_15m import executor as ex
-from polymarket_bot.fade_1h_momentum_15m import inputs as _inputs
-from polymarket_bot.fade_1h_momentum_15m import ledger
-from polymarket_bot.fade_1h_momentum_15m import runner as rn
-from polymarket_bot.fade_1h_momentum_15m import sizing
-from polymarket_bot.fade_1h_momentum_15m.decide import ChildOrder, Decision, ParentOrder
-from polymarket_bot.fade_1h_momentum_15m.inputs import (
+from ems import config as _config
+from ems import db as _db
+from ems import runtime_knobs as _knobs
+from ems import strategies as _strategies
+from ems.fade_1h_momentum_15m import decide as _decide
+from ems.fade_1h_momentum_15m import executor as ex
+from ems.fade_1h_momentum_15m import inputs as _inputs
+from ems.fade_1h_momentum_15m import ledger
+from ems.fade_1h_momentum_15m import runner as rn
+from ems.fade_1h_momentum_15m import sizing
+from ems.fade_1h_momentum_15m.decide import ChildOrder, Decision, ParentOrder
+from ems.fade_1h_momentum_15m.inputs import (
     Book, Inputs, PriceNow, Problem, WindowAverage,
 )
-from polymarket_bot.fade_1h_momentum_15m.ledger import NewOrder
+from ems.fade_1h_momentum_15m.ledger import NewOrder
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 START = HOUR + 900  # the hour's second quarter
@@ -306,7 +306,7 @@ def test_the_settings_are_registered_in_their_own_group_in_standard_terms() -> N
 
 def test_the_app_starts_the_runner_after_the_hub_and_stops_it() -> None:
     text = (Path(__file__).resolve().parents[2]
-            / "polymarket_exec/ops/dashboard/app.py").read_text()
+            / "ems/dashboard/app.py").read_text()
     assert text.index("_marketdata_hub.set_current(market_data)") < text.index("_run_fade(")
     assert "(fade_stop_event, fade_task)" in text
 
@@ -1057,7 +1057,7 @@ async def test_the_loop_never_raises_even_if_it_cannot_start(real_loop, monkeypa
     assert "no sockets" in stored["last_error"] and stored["state"] == "stopped_on_error"
 
     # The card shows this process's dead loop, never the earlier run's clean status.
-    from polymarket_exec.ops.dashboard import execution_view
+    from ems.dashboard import execution_view
 
     card = (await execution_view.fade_1h_data())["status"]
     assert card["state"] == "stopped_on_error" and "no sockets" in card["last_error"]
@@ -1067,6 +1067,6 @@ def test_the_runner_speaks_in_standard_terms() -> None:
     for module in (rn, _inputs, ledger, ex):
         source = Path(module.__file__).read_text().lower()
         assert not any(word in source for word in COINED), module.__name__
-    from polymarket_bot.fade_1h_momentum_15m import learner
+    from ems.fade_1h_momentum_15m import learner
 
     assert not any(word in Path(learner.__file__).read_text().lower() for word in COINED)
