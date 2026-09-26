@@ -25,12 +25,17 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 
-from ems.config import DASHBOARD_SERVER_PORT  # type: ignore[import-untyped]
+from ems.config import (  # type: ignore[import-untyped]
+    DASHBOARD_ALLOWED_HOSTS,
+    DASHBOARD_SERVER_NAME,
+    DASHBOARD_SERVER_PORT,
+)
 from ems.db import connect, init_db, notify  # type: ignore[import-untyped]
 from ems.logging_setup import get_logger  # type: ignore[import-untyped]
 from ems import runtime_knobs as _knobs
@@ -101,15 +106,23 @@ dashboard_dir = Path(__file__).parent
 app = FastAPI(title="Polymarket Crypto Trading Lab", lifespan=_lifespan)
 
 # Same-origin dashboard: no wildcard CORS.
+_LOCAL_ORIGINS = frozenset({
+    f"http://127.0.0.1:{DASHBOARD_SERVER_PORT}",
+    f"http://localhost:{DASHBOARD_SERVER_PORT}",
+})
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        f"http://127.0.0.1:{DASHBOARD_SERVER_PORT}",
-        f"http://localhost:{DASHBOARD_SERVER_PORT}",
-    ],
+    allow_origins=sorted(_LOCAL_ORIGINS),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "X-Dashboard-Token"],
+)
+# Answer only to local host names: a page on another name that rebinds its DNS to 127.0.0.1
+# must not be served the dashboard (or its token).
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=sorted({"127.0.0.1", "localhost", *DASHBOARD_ALLOWED_HOSTS}
+                         | ({DASHBOARD_SERVER_NAME} - {"", "0.0.0.0", "::"})),
 )
 
 # A new token each process, put in the page it serves. Only a click on that page carries it,
@@ -120,6 +133,22 @@ _DASHBOARD_TOKEN = secrets.token_urlsafe(32)
 def _has_dashboard_token(request: Request) -> bool:
     return secrets.compare_digest(request.headers.get("x-dashboard-token", ""),
                                   _DASHBOARD_TOKEN)
+
+
+def _refusal(request: Request) -> str | None:
+    """Why a state-changing request is refused, or None. Every one must come from this
+    process's page: a local origin (when the browser names one), a JSON body (a cross-site
+    page cannot send one without a CORS check, which fails), and the page's token. The switch,
+    the knobs (the live risk caps among them) and PAPER/LIVE all go through here."""
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in _LOCAL_ORIGINS:
+        return "Refused: the request did not come from this dashboard."
+    kind = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if kind != "application/json":
+        return "Refused: the request must be JSON."
+    if not _has_dashboard_token(request):
+        return "Refused: the dashboard token is missing or old. Reload the page and try again."
+    return None
 
 
 async def _mode_context() -> dict[str, Any]:
@@ -252,9 +281,14 @@ async def dashboard(request: Request) -> Any:
 
 @app.post("/api/mode")
 async def api_mode(request: Request) -> dict[str, Any]:
-    """Select PAPER or LIVE. LIVE needs the token only this process's page carries, so it is
-    selected only by the operator's click here; PAPER is always allowed (it sends nothing).
-    Audited to the activity feed."""
+    """Select PAPER or LIVE, only from this process's page (``_refusal``: its token, a JSON
+    body, a local origin), so LIVE is selected only by the operator's click here. Audited to
+    the activity feed."""
+    refused = _refusal(request)
+    if refused:
+        log.warning("mode_refused", reason=refused)
+        return {"status": "error",
+                "detail": f"{refused} LIVE can only be selected by clicking LIVE in the dashboard."}
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -262,9 +296,6 @@ async def api_mode(request: Request) -> dict[str, Any]:
     mode = str((body or {}).get("mode", "")).strip().lower()
     if mode not in ("paper", "live"):
         return {"status": "error", "detail": "mode must be paper or live"}
-    if mode == "live" and not _has_dashboard_token(request):
-        return {"status": "error",
-                "detail": "LIVE can only be selected by clicking LIVE in the dashboard."}
     await _live_control.select_mode(mode, clicked=True)
     status = await _live_control.live_status()
     await notify("mode", f"Operator selected {mode.upper()}. {status.message}",
@@ -278,7 +309,11 @@ async def api_mode(request: Request) -> dict[str, Any]:
 async def api_runtime_config(request: Request) -> dict[str, Any]:
     """Set a strategy switch (``key="strategy"``) or a SETTINGS knob (any name in
     ``runtime_knobs.KNOBS``). Validated, persisted, read by the strategy on its
-    next pass, and audited to ``notification_feed``."""
+    next pass, and audited to ``notification_feed``. Only from this page (``_refusal``)."""
+    refused = _refusal(request)
+    if refused:
+        log.warning("runtime_config_refused", reason=refused)
+        return {"status": "error", "detail": refused}
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001

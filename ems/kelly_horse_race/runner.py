@@ -6,6 +6,9 @@ after the market-data hub). Every pass, in the order that keeps the record hones
 1. Setup, once per process: give the risk gate today's settled P&L again (counted once), in
    case the last run stopped between settling a window and telling the gate.
 2. Bookkeeping, whatever the switch or the mode says, each step guarded on its own:
+   - look for any order sent with no reply (``unknown``) among its venue's open orders: found,
+     it is followed as placed; still missing at its window's stop, it is closed and the card
+     says to check Polymarket. While one is open, no new order goes to that venue;
    - bring every open order's fills up to date from its venue (``venue.fills``) and mirror
      what the venue reports; an order the venue can fill no more gives its unfilled notional
      back to its gate leg;
@@ -49,10 +52,10 @@ from ems import db as _db  # type: ignore[import-untyped]
 from ems import runtime_knobs as _knobs
 from ems import strategies as _strategies
 from ems.execution import endpoints as _endpoints
-from ems.execution.live_control import LiveVenueHolder
-from ems.execution.controls import PlacementRefused
+from ems.execution.controls import OutcomeUnknown, PlacementRefused
 from ems.execution.gate import MODES, RiskGate
-from ems.execution.resting import PaperRestingVenue, PlaceRequest, RestingVenue
+from ems.execution.live_control import LiveVenueHolder
+from ems.execution.resting import GTD_STOP_S, PaperRestingVenue, PlaceRequest, RestingVenue
 from ems.execution.tape import MarketUnavailable, market_outcome
 from ems.kelly_horse_race import inputs as _inputs
 from ems.kelly_horse_race import ledger as _ledger
@@ -234,7 +237,8 @@ class Runner:
             report.fail("Setup", exc)
 
     async def _bookkeeping(self, report: PassReport) -> None:
-        for step, fn in (("Checking fills", self._sync_fills),
+        for step, fn in (("Looking for orders sent with no reply", self._resolve_unknown),
+                         ("Checking fills", self._sync_fills),
                          ("Giving unfilled notional back to the gate", self._credit),
                          ("Cancelling at the window end", self._cancel_ending),
                          ("Settling", self._settle)):
@@ -242,6 +246,46 @@ class Runner:
                 await fn(report)
             except Exception as exc:  # noqa: BLE001 - each step on its own
                 report.fail(step, exc)
+
+    async def _resolve_unknown(self, report: PassReport) -> None:
+        """Each order sent with no reply: adopt it if its venue lists it, else close it once
+        its window has stopped (it can no longer rest there)."""
+        now = self._now()
+        for row in await _ledger.unknown_orders():
+            mode, slug = row["mode"], row["window_slug"]
+            if now >= int(row["window_end_ts"]) - GTD_STOP_S:
+                reason = ("never found among the exchange's open orders before its window "
+                          "stopped. If it rested and filled, the position is not in this "
+                          "ledger: check your Polymarket orders.")
+                if await _ledger.give_up(int(row["id"]), reason=reason, ts=now):
+                    report.errors.append(f"{mode}: the order for {slug} was {reason}")
+                    log.error("kelly.unknown_given_up", mode=mode, window=slug)
+                continue
+            find = getattr(self.venues.get(mode), "find_order", None)
+            if find is None:
+                report.errors.append(f"{mode}: the order for {slug} was sent with no reply; "
+                                     "its venue is not open yet to look for it.")
+                continue
+            try:
+                found = await find(token_id=row["token_id"], price=float(row["price"]),
+                                   size=float(row["size"]), expires_ts=int(row["window_end_ts"]))
+            except Exception as exc:  # noqa: BLE001 - looked for again next pass
+                report.errors.append(f"{mode}: the order for {slug} was sent with no reply and "
+                                     f"the exchange could not be searched ({exc}); no new "
+                                     "order until it is found.")
+                continue
+            if found is None:
+                report.errors.append(f"{mode}: the order for {slug} was sent with no reply and "
+                                     "is not among the exchange's open orders yet.")
+                continue
+            if await _ledger.adopt(int(row["id"]), venue_order_id=found,
+                                   placed_ts=int(math.floor(now))):
+                await self.gates[mode].commit(
+                    strategy=STRATEGY, order_ref=order_ref(row["id"]),
+                    notional_usd=float(row["notional_usd"]), now=now)
+                report.errors.append(f"{mode}: the order for {slug} sent with no reply was "
+                                     f"found resting on the exchange ({found}).")
+                log.warning("kelly.unknown_found", mode=mode, window=slug, order=found)
 
     async def _sync_fills(self, report: PassReport) -> None:
         for mode in list(self.venues):
@@ -254,8 +298,7 @@ class Runner:
         if venue is None or not rows:
             return
         views = await venue.fills([r["venue_order_id"] for r in rows], now=self._now())
-        for error in getattr(venue, "last_errors", []) or []:
-            report.errors.append(f"{mode}: {error}")
+        _drain_errors(mode, venue, report)
         for row in rows:
             view = views.get(row["venue_order_id"])
             if view is None:
@@ -300,6 +343,7 @@ class Runner:
                 continue
             report.cancelled += await venue.cancel([r["venue_order_id"] for r in group],
                                                    reason=reason, now=self._now())
+            _drain_errors(mode, venue, report)
             await self._refresh(mode, group, report)
 
     async def _settle(self, report: PassReport) -> None:
@@ -464,12 +508,19 @@ class Runner:
             size=size.shares, expires_ts=win.end, tick_size=book.tick_size,
             queue_ahead=float(book.bid_size or 0.0), best_ask=book.best_ask,
         )
+        try:
+            still_on = await _strategies.enabled(STRATEGY)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            report.fail("Reading the strategy switch again", exc)
+            still_on = False
         for point in points.values():
             if point.active:
-                await self._send(point, request, decision_id, win, now, report)
+                await self._send(point, request, decision_id, win, now, report,
+                                 switch_on=still_on)
 
     async def _send(self, point: _endpoints.Endpoint, request: PlaceRequest, decision_id: int,
-                    win: _inputs.Window, now: float, report: PassReport) -> None:
+                    win: _inputs.Window, now: float, report: PassReport, *,
+                    switch_on: bool = True) -> None:
         common = dict(decision_id=decision_id, window_slug=win.slug, mode=point.mode,
                       token_id=request.token_id, outcome=request.outcome, price=request.price,
                       size=request.size, queue_ahead=request.queue_ahead,
@@ -477,6 +528,18 @@ class Runner:
         # The leg's lock spans check, place and commit, so another strategy's order checked at
         # the same moment cannot also fit under a cap that has room for one.
         async with point.gate.lock:
+            # The decision's reads can take a while: the switch, the kill switch and LIVE are
+            # checked again right before the order goes.
+            gone = ("switched_off: the strategy was switched off during the decision"
+                    if not switch_on else
+                    await _endpoints.still_active(point, kill_switch_path=self._kill_switch_path))
+            if not gone and await _ledger.unknown_orders(point.mode):
+                gone = (f"outcome_unknown: an earlier {point.mode} order was sent with no reply "
+                        "and is not found yet, so nothing new goes there until it is.")
+            if gone:
+                await _ledger.record_order(**common, state="blocked", reason=gone)
+                log.info("kelly.not_sent", mode=point.mode, reason=gone)
+                return
             verdict = await point.gate.check(request.notional_usd, now=now)
             if not verdict.allowed:
                 await _ledger.record_order(**common, state="blocked",
@@ -485,6 +548,12 @@ class Runner:
                 return
             try:
                 placed = await point.venue.place(request, now=now)  # type: ignore[union-attr]
+            except OutcomeUnknown as exc:
+                await _ledger.record_order(**common, state=_ledger.UNKNOWN_STATE,
+                                           reason=f"{exc.reason}: {exc}")
+                report.errors.append(f"{point.mode}: {exc} It is looked for every pass.")
+                log.error("kelly.outcome_unknown", mode=point.mode, window=win.slug)
+                return
             except PlacementRefused as exc:
                 await _ledger.record_order(**common, state="rejected",
                                            reason=f"{exc.reason}: {exc}")
@@ -495,11 +564,33 @@ class Runner:
                                            reason=f"error: {type(exc).__name__}: {exc}")
                 report.fail(f"Placing on {point.mode}", exc)
                 return
-            row_id = await _ledger.record_order(**common, state="resting",
-                                                venue_order_id=placed.order_id,
-                                                placed_ts=placed.placed_ts)
+            _drain_errors(point.mode, point.venue, report)
+            try:
+                row_id = await _ledger.record_order(**common, state="resting",
+                                                    venue_order_id=placed.order_id,
+                                                    placed_ts=placed.placed_ts)
+            except Exception as exc:  # noqa: BLE001 - an order this ledger cannot follow
+                report.fail(f"Recording the {point.mode} order", exc)
+                await self._cancel_unrecorded(point, placed.order_id, report)
+                return
             await point.gate.commit(strategy=STRATEGY, order_ref=order_ref(row_id),
                                     notional_usd=request.notional_usd, now=now)
+
+    async def _cancel_unrecorded(self, point: _endpoints.Endpoint, order_id: str,
+                                 report: PassReport) -> None:
+        """An order was placed but could not be written down: take it off the venue, since
+        nothing here would follow or settle it."""
+        log.error("kelly.unrecorded_order", mode=point.mode, order=order_id)
+        try:
+            done = await point.venue.cancel([order_id], reason="not_recorded",  # type: ignore[union-attr]
+                                            now=self._now())
+        except Exception as exc:  # noqa: BLE001 - said below
+            report.fail(f"Cancelling the unrecorded {point.mode} order", exc)
+            done = 0
+        _drain_errors(point.mode, point.venue, report)
+        if not done:
+            report.errors.append(f"{point.mode}: order {order_id} was placed but could not be "
+                                 "recorded or cancelled: cancel it on Polymarket.")
 
     async def _not_ready(self, win: _inputs.Window, now: float, exc: _inputs.NotReady,
                          report: PassReport) -> None:
@@ -565,6 +656,14 @@ class Runner:
                 hub.release(OWNER)
             except Exception as exc:  # noqa: BLE001
                 log.warning("kelly.release_failed", error=str(exc))
+
+
+def _drain_errors(mode: str, venue: Any, report: PassReport) -> None:
+    """Move what the venue reported going wrong onto the pass report, and clear it."""
+    errors = getattr(venue, "last_errors", None)
+    if errors:
+        report.errors.extend(f"{mode}: {error}" for error in errors)
+        errors.clear()
 
 
 def _current_hub() -> Any:

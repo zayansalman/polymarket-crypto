@@ -8,11 +8,16 @@ Up/Down, Kelly horse-race, armed by the operator. Nothing here decides whether L
 - ``place``: one limit BUY, ``OrderType.GTD`` with ``post_only=True`` (the exchange refuses an
   order that would cross, so it can only ever rest) and ``expiration`` the request's expiry
   (the window end; the exchange stops it 60 s before). The kill switch file blocks it, and
-  :func:`validate_request` checks it, before anything is sent.
+  :func:`validate_request` checks it, before anything is sent. When the send fails with no
+  reply, the order may still have reached the exchange: its open orders are searched for it
+  (:meth:`ClobRestingVenue.find_order`); found, it is followed as placed; not searchable,
+  ``OutcomeUnknown`` says so and the strategy keeps looking.
 - ``fills``: ``get_order`` per order: ``size_matched`` is the shares filled and ``status``
-  says whether it still rests (``live``) or is done (``matched``, ``canceled``).
+  says whether it still rests (``live``) or is done (``matched``, ``canceled``). An empty
+  reply is a miss, not an end: the order is left out until it has been gone long enough.
 - ``cancel``: by order id (``cancel_orders``), never "cancel all": the account may hold
-  orders this app did not place.
+  orders this app did not place. A cancel that fails or is refused goes to ``last_errors``.
+- ``last_errors``: what went wrong since the caller last read it; the caller clears it.
 - Every placement and cancel, refused and failed ones included, is journaled to
   ``live_orders`` (``journal.py``) with the strategy in its details.
 
@@ -29,7 +34,7 @@ import importlib
 import importlib.util
 import math
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -40,6 +45,7 @@ from ems import config as _config  # type: ignore[import-untyped]
 from ems import logging_setup as _logging
 from ems.execution import controls as _controls
 from ems.execution import journal as _journal
+from ems.execution.controls import OutcomeUnknown as OutcomeUnknown
 from ems.execution.controls import PlacementRefused
 from ems.execution.resting import (
     CANCELLED,
@@ -65,8 +71,16 @@ TERMINAL = {"matched": FILLED, "canceled": CANCELLED, "cancelled": CANCELLED,
 # An order the exchange still reports open this long after its GTD stop is taken as closed
 # (flagged forced), so its window can settle; the log says so.
 STUCK_AFTER_STOP_S = 120
+# An order whose status reply comes back empty is taken as gone only after its stop plus
+# STUCK_AFTER_STOP_S, or, when its expiry is not known, after this many empty replies in a row.
+MISSES_BEFORE_GONE = 60
+# After a send with no reply: how many times the open orders are searched, and the wait
+# between searches (the exchange can take a moment to list a new order).
+LOOKUPS = 3
+LOOKUP_WAIT_S = 1.0
 
 Clock = Callable[[], float]
+Sleep = Callable[[float], Awaitable[Any]]
 
 
 class LiveUnavailable(RuntimeError):
@@ -143,14 +157,17 @@ class ClobRestingVenue:
     mode = LIVE
 
     def __init__(self, client: Any, *, clock: Clock = time.time,
-                 kill_switch_path: Path | str | None = None, api: Any = None) -> None:
+                 kill_switch_path: Path | str | None = None, api: Any = None,
+                 sleep: Sleep = asyncio.sleep) -> None:
         self._client = client
         self.clock = clock
         self._kill_switch_path = kill_switch_path
         self._api = api
+        self._sleep = sleep
         self._cancelled: dict[str, int] = {}  # our own cancels: id -> the second written
         self._expiry: dict[str, int] = {}  # id -> the expiry it was sent with
         self._last: dict[str, OrderView] = {}  # the last view of each order
+        self._misses: dict[str, int] = {}  # id -> empty status replies in a row
         self.last_errors: list[str] = []
 
     def _time(self, now: float | None) -> float:
@@ -160,12 +177,17 @@ class ClobRestingVenue:
         if self._api is None:
             lib = _library()
             self._api = SimpleNamespace(OrderArgs=lib.OrderArgs, OrderType=lib.OrderType,
-                                        PartialCreateOrderOptions=lib.PartialCreateOrderOptions)
+                                        PartialCreateOrderOptions=lib.PartialCreateOrderOptions,
+                                        OpenOrderParams=lib.OpenOrderParams)
         return self._api
+
+    def _error(self, message: str) -> None:
+        self.last_errors.append(_logging.redact_secrets(message))
 
     async def place(self, request: PlaceRequest, *, now: float | None = None) -> Placed:
         """Send one post-only GTD limit BUY. Raises ``PlacementRefused`` when it is not sent
-        or the exchange refuses it; every outcome is journaled."""
+        or the exchange refuses it, and ``OutcomeUnknown`` when the send failed and the open
+        orders could not be searched; every outcome is journaled."""
         t = self._time(now)
         where = dict(window_slug=None, token_id=request.token_id, price=request.price,
                      size=request.size, order_type=ORDER_TYPE)
@@ -190,13 +212,8 @@ class ClobRestingVenue:
         try:
             raw = await asyncio.to_thread(self._client.create_and_post_order, args, options,
                                           api.OrderType.GTD, True)
-        except Exception as exc:  # noqa: BLE001 - journaled and refused, never retried blind
-            error = _logging.redact_secrets(f"{type(exc).__name__}: {exc}")
-            await _journal.journal_live_order(intent=_journal.ENTRY, side="BUY",
-                                              status=_journal.ERROR, error=error,
-                                              details=details, **where)
-            log.warning("clob_venue.place_failed", error=error)
-            raise PlacementRefused("venue_error", f"The order could not be sent: {error}") from exc
+        except Exception as exc:  # noqa: BLE001 - never retried blind: searched for instead
+            return await self._after_lost_reply(request, exc, details, where, t)
         response = raw if isinstance(raw, Mapping) else {}
         order_id = str(response.get("orderID") or response.get("orderId") or "")
         ok = bool(response.get("success", bool(order_id))) and bool(order_id)
@@ -207,14 +224,88 @@ class ClobRestingVenue:
                                               details={**details, "response": response}, **where)
             log.warning("clob_venue.rejected", error=error)
             raise PlacementRefused("venue_rejected", f"The exchange refused the order: {error}")
-        await _journal.journal_live_order(intent=_journal.ENTRY, side="BUY",
-                                          status=_journal.SUBMITTED, clob_order_id=order_id,
-                                          details={**details, "response": response}, **where)
         self._expiry[order_id] = int(request.expires_ts)
+        await self._journal_submitted(order_id, {**details, "response": response}, where)
         log.info("clob_venue.placed", strategy=request.strategy, order=order_id,
                  outcome=request.outcome, price=request.price, size=request.size,
                  status=response.get("status"))
         return Placed(order_id=order_id, placed_ts=int(math.floor(t)))
+
+    async def _journal_submitted(self, order_id: str, details: Mapping[str, Any],
+                                 where: Mapping[str, Any]) -> None:
+        """Journal an order the exchange took. A journal failure is logged and kept in
+        ``last_errors``, never turned into a refusal: the order rests either way."""
+        try:
+            await _journal.journal_live_order(intent=_journal.ENTRY, side="BUY",
+                                              status=_journal.SUBMITTED, clob_order_id=order_id,
+                                              details=dict(details), **where)
+        except Exception as exc:  # noqa: BLE001 - the order is placed; say the journal missed it
+            error = _logging.redact_secrets(f"{type(exc).__name__}: {exc}")
+            self._error(f"order {order_id[:12]} was placed but not journaled: {error}")
+            log.error("clob_venue.journal_failed", order=order_id, error=error)
+
+    async def _after_lost_reply(self, request: PlaceRequest, exc: Exception,
+                                details: Mapping[str, Any], where: Mapping[str, Any],
+                                t: float) -> Placed:
+        """The send raised, so the exchange may or may not have the order. Search its open
+        orders for it; never send it again blind."""
+        error = _logging.redact_secrets(f"{type(exc).__name__}: {exc}")
+        log.warning("clob_venue.place_failed", error=error)
+        asked = False
+        for attempt in range(LOOKUPS):
+            if attempt:
+                await self._sleep(LOOKUP_WAIT_S)
+            try:
+                found = await self.find_order(token_id=request.token_id, price=request.price,
+                                              size=request.size, expires_ts=request.expires_ts)
+            except Exception as lookup_exc:  # noqa: BLE001 - tried again, then reported
+                log.warning("clob_venue.lookup_failed",
+                            error=_logging.redact_secrets(f"{type(lookup_exc).__name__}"))
+                continue
+            asked = True
+            if found is not None:
+                self._expiry[found] = int(request.expires_ts)
+                await self._journal_submitted(
+                    found, {**details, "recovered": f"the send failed ({error}) but the order "
+                            "was found among the open orders"}, where)
+                log.warning("clob_venue.recovered", order=found)
+                return Placed(order_id=found, placed_ts=int(math.floor(t)))
+        if asked:
+            await _journal.journal_live_order(
+                intent=_journal.ENTRY, side="BUY", status=_journal.ERROR,
+                error=f"{error}; not among the open orders", details=dict(details), **where)
+            raise PlacementRefused("venue_error", f"The order could not be sent ({error}) and "
+                                   "is not among the exchange's open orders.") from exc
+        await _journal.journal_live_order(
+            intent=_journal.ENTRY, side="BUY", status=_journal.ERROR,
+            error=f"{error}; outcome unknown: the open orders could not be read",
+            details=dict(details), **where)
+        raise OutcomeUnknown(f"The send failed ({error}) and the exchange's open orders could "
+                             "not be read, so whether the order rests there is not known "
+                             "yet.") from exc
+
+    async def find_order(self, *, token_id: str, price: float, size: float,
+                         expires_ts: int) -> str | None:
+        """The id of an open BUY on ``token_id`` with this price, size and expiry that this
+        venue does not already follow, or None. Raises when the open orders cannot be read."""
+        api = self._types()
+        params_type = getattr(api, "OpenOrderParams", None) or SimpleNamespace
+        raw = await asyncio.to_thread(self._client.get_open_orders,
+                                      params_type(asset_id=str(token_id)))
+        known = set(self._expiry) | set(self._last)
+        for order in raw if isinstance(raw, list) else []:
+            if not isinstance(order, Mapping):
+                continue
+            order_id = str(order.get("id") or "")
+            if (not order_id or order_id in known
+                    or str(order.get("side") or "").upper() != "BUY"
+                    or str(order.get("asset_id") or token_id) != str(token_id)):
+                continue
+            if (abs((_float(order.get("price")) or -1.0) - float(price)) <= 1e-9
+                    and abs((_float(order.get("original_size")) or -1.0) - float(size)) <= 1e-6
+                    and int(_float(order.get("expiration")) or 0) == int(expires_ts)):
+                return order_id
+        return None
 
     async def cancel(self, order_ids: Iterable[str], *, reason: str,
                      now: float | None = None) -> int:
@@ -248,43 +339,67 @@ class ClobRestingVenue:
                                                   details={"reason": reason})
             else:
                 why = refused.get(order_id) if isinstance(refused, Mapping) else None
+                error = str(why or "not confirmed cancelled")
                 await _journal.journal_live_order(intent=_journal.CANCEL, side="-",
                                                   status=_journal.ERROR, clob_order_id=order_id,
-                                                  error=str(why or "not confirmed cancelled"),
-                                                  details={"reason": reason})
+                                                  error=error, details={"reason": reason})
+                self._error(f"order {order_id[:12]}: the cancel was refused ({error})")
+                log.warning("clob_venue.cancel_refused", order=order_id, error=error)
         return count
 
     async def fills(self, order_ids: Iterable[str], *,
                     now: float | None = None) -> dict[str, OrderView]:
-        """Each order as the exchange reports it. An order the exchange no longer returns
-        (pruned once done) keeps its last view, made final."""
+        """Each order as the exchange reports it. An order whose read fails, or whose reply is
+        empty, is left out (``last_errors`` says so) and asked again next pass; one the
+        exchange has stopped returning for long enough (pruned once done) keeps its last
+        view, made final."""
         t = self._time(now)
-        self.last_errors = []
         out: dict[str, OrderView] = {}
         for order_id in [str(i) for i in order_ids if i]:
             try:
                 raw = await asyncio.to_thread(self._client.get_order, order_id)
             except Exception as exc:  # noqa: BLE001 - asked again next pass
-                self.last_errors.append(_logging.redact_secrets(
-                    f"order {order_id[:12]}: the status read failed ({type(exc).__name__})"))
+                self._error(f"order {order_id[:12]}: the status read failed "
+                            f"({type(exc).__name__})")
                 continue
             view = self._view(order_id, raw, t)
+            if view is None:
+                self._error(f"order {order_id[:12]}: the exchange returned no status; asked "
+                            "again next pass")
+                continue
             self._last[order_id] = view
             out[order_id] = view
         return out
 
-    def _view(self, order_id: str, raw: Any, t: float) -> OrderView:
-        if not isinstance(raw, Mapping):
+    def _gone(self, order_id: str, t: float) -> bool:
+        """Whether an order with an empty status reply has been missing long enough to be
+        taken as gone: past its stop plus STUCK_AFTER_STOP_S, or, with no known expiry, after
+        MISSES_BEFORE_GONE empty replies in a row."""
+        misses = self._misses[order_id] = self._misses.get(order_id, 0) + 1
+        expiry = self._expiry.get(order_id)
+        if expiry:
+            return t >= expiry - GTD_STOP_S + STUCK_AFTER_STOP_S
+        return misses >= MISSES_BEFORE_GONE
+
+    def _view(self, order_id: str, raw: Any, t: float) -> OrderView | None:
+        if not isinstance(raw, Mapping) or not raw:
+            if not self._gone(order_id, t):
+                return None
+            log.warning("clob_venue.order_gone", order=order_id)
             last = self._last.get(order_id)
             if last is not None:
                 return OrderView(order_id, last.state if last.closed else EXPIRED, last.size,
-                                 last.filled_size, last.closed_ts or int(t), True)
+                                 last.filled_size, last.closed_ts or int(t), True,
+                                 forced=not last.closed)
             return OrderView(order_id, EXPIRED, 0.0, 0.0, int(t), True, forced=True)
+        self._misses.pop(order_id, None)
         size = _float(raw.get("original_size")) or _float(raw.get("size")) or 0.0
         matched = min(size, _float(raw.get("size_matched")) or 0.0) if size else (
             _float(raw.get("size_matched")) or 0.0)
         status = str(raw.get("status") or "").lower()
         expiry = self._expiry.get(order_id) or int(_float(raw.get("expiration")) or 0) or None
+        if expiry:
+            self._expiry[order_id] = expiry
         stop = expiry - GTD_STOP_S if expiry else None
         if status in TERMINAL:
             state = TERMINAL[status]

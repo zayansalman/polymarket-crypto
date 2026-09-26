@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `kelly_horse_race` on the MY STRATEGIES card |
 | Code | `ems/kelly_horse_race/` — 14 files (`ems/execution/clob.py`, `ems/execution/controls.py`, `ems/execution/endpoints.py`, `ems/execution/gate.py`, `ems/execution/journal.py`, `ems/execution/live_control.py`, `ems/execution/queue.py`, `ems/execution/resting.py`, `ems/execution/tape.py` shared) |
-| Code fingerprint | `422daf624a50` |
+| Code fingerprint | `69daf64caa7a` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -94,6 +94,7 @@ The same order goes to every endpoint that is on when the decision is made:
 
 - **Paper** is always on unless the kill switch file exists. A paper order fills only from the real taker trade tape, once the shares that were ahead of it have traded: for this one order, filled $= \min(\text{size}, \max(0, \text{crossed} - \text{queue ahead}))$.
 - **Live** is on only while the operator has armed it (AGENTS.md, "Live trading"): LIVE selected and clicked in the dashboard in this process (a saved LIVE or `BOT_MODE=live` is never consent), a wallet config that passes, and this strategy's switch on. The order goes to the exchange as a post-only good-till-date limit buy expiring at the window end (the exchange refuses it rather than let it cross), cancelled by id, and journaled to `live_orders`. Its fills are the exchange's `size_matched`. Selecting PAPER again cancels whatever still rests live; fills and settlement of live orders are still followed. The card says which condition is missing.
+- **A live send with no reply** may still have reached the exchange, so it is never sent again. The exchange's open orders are searched for it at once and then every pass. Found, it is followed like any placed order. Not searchable yet, it is recorded as `unknown`, and no new live order goes out while it is. Still not found when its window stops, it is closed as `unknown` and the card says to check the Polymarket orders page. A placed order that cannot be written to the ledger is cancelled straight away.
 
 Each endpoint has its own risk gate leg (kill switch, daily loss halt, per-trade cap, daily notional cap; the "Risk" knobs in SETTINGS). A blocked order is recorded against its mode with the reason. The live per-trade cap starts at \$3, below this strategy's \$5 notional cap, so on live every draw above \$3 is blocked, and recorded as blocked, until the operator raises it.
 
@@ -153,6 +154,7 @@ The size at a bid of 0.53 with a 5-share minimum and the \$5 cap: from 5.00 to 9
 
 ## Changelog
 
+- 2026-09-26 · `69daf64caa7a` · Live safety: the switch, the kill switch and LIVE are checked again right before an order goes; a live send with no reply is searched for on the exchange and recorded as unknown until found, holding new live orders; an empty status reply is a miss, not an end; failed cancels reach the card; an order that cannot be recorded is cancelled.
 - 2026-09-26 · `422daf624a50` · Live venue: an order the exchange reports expired or invalid, or still open two minutes past its GTD stop, is taken as closed (the stuck case flagged forced), so its window can settle.
 - 2026-09-26 · `ef4bc244bf1a` · The live leg: the order also goes to the exchange as a post-only GTD buy while the operator has armed LIVE (selected and clicked in this process, a wallet that passes, the switch on); PAPER again cancels resting live orders; fills from size_matched; every live placement and cancel journaled.
 - 2026-09-26 · `ffd0d90d7706` · First build: the maths, the inputs, the ledger and the runner, on the shared resting-order layer; paper always, live not built yet.

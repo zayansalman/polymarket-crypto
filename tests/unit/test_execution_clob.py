@@ -41,8 +41,16 @@ class Options:
     tick_size: str | None = None
 
 
+@dataclass
+class OpenParams:
+    id: str | None = None
+    market: str | None = None
+    asset_id: str | None = None
+
+
 TYPES = SimpleNamespace(OrderArgs=Args, PartialCreateOrderOptions=Options,
-                        OrderType=SimpleNamespace(GTD="GTD", GTC="GTC"))
+                        OrderType=SimpleNamespace(GTD="GTD", GTC="GTC"),
+                        OpenOrderParams=OpenParams)
 
 
 class FakeClob:
@@ -54,6 +62,9 @@ class FakeClob:
         self.post_reply: Any = {"success": True, "orderID": "0xORDER1", "status": "live",
                                 "errorMsg": ""}
         self.post_error: Exception | None = None
+        self.open_orders: list[dict[str, Any]] = []
+        self.open_errors: list[Exception] = []  # raised by the next open-order reads, in turn
+        self.open_calls: list[Any] = []
 
     def create_and_post_order(self, order_args, options=None, order_type="GTC",
                               post_only=False, defer_exec=False):
@@ -74,6 +85,13 @@ class FakeClob:
     def get_order(self, order_id: str):
         return self.orders.get(order_id)
 
+    def get_open_orders(self, params=None, only_first_page=False, next_cursor=None) -> list:
+        self.open_calls.append(params)
+        if self.open_errors:
+            raise self.open_errors.pop(0)
+        return [o for o in self.open_orders
+                if params is None or o.get("asset_id") == params.asset_id]
+
 
 @pytest_asyncio.fixture
 async def live_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -91,8 +109,20 @@ def request(**kw) -> resting.PlaceRequest:
     return resting.PlaceRequest(**base)
 
 
+async def _no_wait(seconds: float) -> None:
+    return None
+
+
 def venue(fake: FakeClob) -> clob.ClobRestingVenue:
-    return clob.ClobRestingVenue(fake, api=TYPES, clock=lambda: NOW)
+    return clob.ClobRestingVenue(fake, api=TYPES, clock=lambda: NOW, sleep=_no_wait)
+
+
+def open_order(order_id: str, **kw) -> dict[str, Any]:
+    """One open order as the exchange lists it (the request() defaults)."""
+    base = {"id": order_id, "status": "LIVE", "side": "BUY", "asset_id": UP, "price": "0.5",
+            "original_size": "7.5", "size_matched": "0", "expiration": str(END)}
+    base.update(kw)
+    return base
 
 
 async def test_a_post_only_gtd_buy_expiring_at_the_window_end(live_db) -> None:
@@ -145,8 +175,57 @@ async def test_a_failed_send_is_journaled_without_the_key(live_db, monkeypatch) 
     with pytest.raises(PlacementRefused) as refused:
         await venue(fake).place(request(), now=NOW)
     assert refused.value.reason == "venue_error" and KEY not in str(refused.value)
+    assert "not among" in str(refused.value)
     (row,) = await journal.journal_rows()
     assert row["status"] == "ERROR" and KEY not in row["error"] and "<redacted" in row["error"]
+
+
+async def test_a_lost_reply_finds_the_order_on_the_exchange(live_db) -> None:
+    """The send raised, but the exchange took the order: it is found and followed."""
+    fake = FakeClob()
+    fake.post_error = TimeoutError("read timed out")
+    fake.open_orders = [open_order("0xMINE_ALREADY"), open_order("0xOTHER", price="0.49"),
+                        open_order("0xLOST")]
+    v = venue(fake)
+    v._expiry["0xMINE_ALREADY"] = END  # one this venue already follows is never adopted
+    placed = await v.place(request(), now=NOW)
+    assert placed.order_id == "0xLOST" and fake.open_calls[0].asset_id == UP
+    (row,) = await journal.journal_rows()
+    assert row["status"] == "SUBMITTED" and row["clob_order_id"] == "0xLOST"
+    assert "found among the open orders" in row["details_json"]
+
+
+async def test_a_lost_reply_with_unreadable_open_orders_is_unknown(live_db) -> None:
+    fake = FakeClob()
+    fake.post_error = TimeoutError("read timed out")
+    fake.open_errors = [ConnectionError("down")] * clob.LOOKUPS
+    with pytest.raises(clob.OutcomeUnknown) as unknown:
+        await venue(fake).place(request(), now=NOW)
+    assert unknown.value.reason == "outcome_unknown" and len(fake.open_calls) == clob.LOOKUPS
+    (row,) = await journal.journal_rows()
+    assert row["status"] == "ERROR" and "outcome unknown" in row["error"]
+
+
+async def test_a_second_lookup_can_find_it(live_db) -> None:
+    fake = FakeClob()
+    fake.post_error = TimeoutError("read timed out")
+    fake.open_errors = [ConnectionError("down")]
+    fake.open_orders = [open_order("0xLOST")]
+    assert (await venue(fake).place(request(), now=NOW)).order_id == "0xLOST"
+
+
+async def test_a_journal_failure_after_the_exchange_took_it_still_places(
+        live_db, monkeypatch) -> None:
+    fake = FakeClob()
+    v = venue(fake)
+
+    async def broken(**kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(journal, "journal_live_order", broken)
+    placed = await v.place(request(), now=NOW)
+    assert placed.order_id == "0xORDER1"
+    assert v.last_errors and "not journaled" in v.last_errors[0]
 
 
 async def test_cancel_by_id_never_cancel_all(live_db) -> None:
@@ -190,11 +269,44 @@ async def test_our_cancel_is_cancelled_and_the_venues_stop_is_expired(live_db) -
 async def test_a_pruned_order_keeps_its_last_view_made_final(live_db) -> None:
     fake = FakeClob()
     v = venue(fake)
-    fake.orders["0xA"] = {"status": "live", "original_size": "5", "size_matched": "3"}
+    fake.orders["0xA"] = {"status": "live", "original_size": "5", "size_matched": "3",
+                          "expiration": str(END)}
     await v.fills(["0xA"], now=NOW)
     del fake.orders["0xA"]
     view = (await v.fills(["0xA"], now=END + 600))["0xA"]
     assert view.final and view.filled_size == 3.0
+
+
+async def test_an_empty_reply_before_the_stop_is_not_an_end(live_db) -> None:
+    """One empty status reply while the order can still trade is a miss, asked again."""
+    fake = FakeClob()
+    v = venue(fake)
+    fake.orders["0xA"] = {"status": "live", "original_size": "5", "size_matched": "1",
+                          "expiration": str(END)}
+    await v.fills(["0xA"], now=NOW)
+    fake.orders["0xA"] = None
+    assert await v.fills(["0xA"], now=NOW + 5) == {}
+    assert v.last_errors and "no status" in v.last_errors[-1]
+    fake.orders["0xA"] = {"status": "live", "original_size": "5", "size_matched": "2",
+                          "expiration": str(END)}
+    view = (await v.fills(["0xA"], now=NOW + 10))["0xA"]
+    assert (view.state, view.filled_size, view.final) == ("resting", 2.0, False)
+
+
+async def test_an_order_never_seen_is_gone_after_enough_misses(live_db) -> None:
+    fake = FakeClob()
+    v = venue(fake)
+    for i in range(clob.MISSES_BEFORE_GONE - 1):
+        assert await v.fills(["0xNEVER"], now=NOW + i) == {}
+    view = (await v.fills(["0xNEVER"], now=NOW + 99))["0xNEVER"]
+    assert view.final and view.forced and view.filled_size == 0.0
+
+
+async def test_a_refused_cancel_reaches_last_errors(live_db) -> None:
+    fake = FakeClob()
+    v = venue(fake)
+    await v.cancel(["0xGONE"], reason="window_end", now=NOW)
+    assert v.last_errors and "0xGONE" in v.last_errors[0] and "refused" in v.last_errors[0]
 
 
 async def test_the_venue_meets_the_protocol() -> None:

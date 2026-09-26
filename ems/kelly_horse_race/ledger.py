@@ -6,6 +6,8 @@
   including the ones the risk gate blocked or the venue refused, each with its reason. The
   row mirrors what the venue reports: state, shares filled, when it closed, whether it can
   still fill (``final``), and whether its unfilled notional was given back to the gate.
+  An ``unknown`` order is a live send that failed with no reply: it may rest on the exchange.
+  It stays open until found there (``adopt``: it rests) or its window stops (``give_up``).
 
 The tables are created by ``db.init_db`` (``ems/db.py`` SCHEMA), so they exist before the
 runner starts and the dashboard never meets a missing table. Timestamps are integer epoch
@@ -30,6 +32,8 @@ from ems.execution.resting import OrderView
 MODES = ("paper", "live")
 OUTCOME_INDEX = {"Up": 0, "Down": 1}
 OPEN_STATE = "resting"
+UNKNOWN_STATE = "unknown"
+OPEN_STATES = (OPEN_STATE, UNKNOWN_STATE)
 
 DECISION_FIELDS = (
     "window_slug", "condition_id", "up_token", "down_token", "window_start", "window_end", "ts",
@@ -95,10 +99,11 @@ async def record_order(*, decision_id: int, window_slug: str, mode: str, token_i
                        window_end_ts: int, state: str, reason: str | None = None,
                        venue_order_id: str | None = None,
                        placed_ts: int | None = None) -> int:
-    """Write one order for one mode: placed (``resting``), ``blocked`` or ``rejected``."""
+    """Write one order for one mode: placed (``resting``), ``unknown`` (sent, no reply),
+    ``blocked`` or ``rejected``."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
-    final = 0 if state == OPEN_STATE else 1
+    final = 0 if state in OPEN_STATES else 1
     async with _db.connect() as conn:
         cur = await conn.execute(
             """
@@ -132,6 +137,48 @@ async def resting_orders() -> list[dict[str, Any]]:
     return await _rows(
         "SELECT * FROM kelly_horse_race_orders WHERE state = 'resting' ORDER BY id"
     )
+
+
+async def unknown_orders(mode: str | None = None) -> list[dict[str, Any]]:
+    """Open orders whose send got no reply, oldest first."""
+    rows = await _rows(
+        "SELECT * FROM kelly_horse_race_orders WHERE state = ? AND final = 0 ORDER BY id",
+        (UNKNOWN_STATE,),
+    )
+    return [r for r in rows if mode is None or r["mode"] == mode]
+
+
+async def adopt(order_id: int, *, venue_order_id: str, placed_ts: int) -> bool:
+    """An ``unknown`` order was found resting on the venue: follow it from now on."""
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            """
+            UPDATE kelly_horse_race_orders
+            SET state = ?, venue_order_id = ?, placed_ts = ?,
+                reason = COALESCE(reason || '; ', '') || 'found on the exchange'
+            WHERE id = ? AND state = ? AND final = 0
+            """,
+            (OPEN_STATE, str(venue_order_id), int(placed_ts), int(order_id), UNKNOWN_STATE),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
+
+
+async def give_up(order_id: int, *, reason: str, ts: float) -> bool:
+    """An ``unknown`` order was never found by its window's stop: close it, still ``unknown``
+    (nothing was committed to the gate, so nothing is given back)."""
+    async with _db.connect() as conn:
+        cur = await conn.execute(
+            """
+            UPDATE kelly_horse_race_orders
+            SET final = 1, credited = 1, closed_ts = ?,
+                reason = COALESCE(reason || '; ', '') || ?
+            WHERE id = ? AND state = ? AND final = 0
+            """,
+            (int(math.floor(ts)), reason, int(order_id), UNKNOWN_STATE),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
 
 
 async def apply_view(order_id: int, view: OrderView) -> float:

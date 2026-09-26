@@ -19,9 +19,19 @@ from fastapi.testclient import TestClient
 from ems.dashboard.app import app
 
 
+def page_token(client: TestClient) -> str:
+    """The token the served page carries (the dashboard's POSTs need it)."""
+    text = client.get("/").text
+    marker = 'name="dashboard-token" content="'
+    start = text.index(marker) + len(marker)
+    return text[start:text.index('"', start)]
+
+
 @pytest.fixture
 def client() -> TestClient:
-    with TestClient(app) as c:
+    """Like the page: a local host name, and the page's token on every POST."""
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.headers["X-Dashboard-Token"] = page_token(c)
         yield c
 
 
@@ -156,9 +166,7 @@ class TestPaperLive:
 
     @staticmethod
     def _token(client: TestClient) -> str:
-        text = client.get("/").text
-        start = text.index('name="dashboard-token" content="') + len('name="dashboard-token" content="')
-        return text[start:text.index('"', start)]
+        return page_token(client)
 
     @pytest.fixture
     def client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -167,7 +175,8 @@ class TestPaperLive:
         from ems.execution import live_control
 
         monkeypatch.setattr(_db, "DB_PATH", tmp_path / "mode.db")
-        with TestClient(app) as c:
+        with TestClient(app, base_url="http://127.0.0.1") as c:
+            c.headers["X-Dashboard-Token"] = page_token(c)
             yield c
         live_control.record_click("paper")
 
@@ -178,7 +187,8 @@ class TestPaperLive:
 
     def test_live_without_the_token_is_refused(self, client: TestClient):
         from ems.execution import live_control
-        r = client.post("/api/mode", json={"mode": "live"}).json()
+        r = client.post("/api/mode", json={"mode": "live"},
+                        headers={"X-Dashboard-Token": ""}).json()
         assert r["status"] == "error" and "clicking LIVE" in r["detail"]
         assert not live_control.clicked_live()
         r = client.post("/api/mode", json={"mode": "live"},
@@ -191,7 +201,7 @@ class TestPaperLive:
                         headers={"X-Dashboard-Token": self._token(client)}).json()
         assert r["status"] == "ok" and r["mode"] == "live" and live_control.clicked_live()
         assert "Operator selected LIVE" in client.get("/api/data").json()["activity"]
-        r = client.post("/api/mode", json={"mode": "paper"}).json()  # PAPER needs no token
+        r = client.post("/api/mode", json={"mode": "paper"}).json()
         assert r["status"] == "ok" and not live_control.clicked_live()
 
     def test_a_bad_mode_is_refused(self, client: TestClient):
@@ -207,3 +217,44 @@ class TestPaperLive:
         js = client.get("/static/dashboard.js").text
         for dialog in ("confirm(", "alert(", "prompt("):
             assert dialog not in js, dialog
+
+
+class TestNoForeignWrites:
+    """Only this page changes state: a cross-site form, a missing token or another host name
+    is refused for the switch, the knobs (live risk caps among them) and PAPER/LIVE."""
+
+    @pytest.fixture
+    def client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        from ems import db as _db
+
+        monkeypatch.setattr(_db, "DB_PATH", tmp_path / "csrf.db")
+        with TestClient(app, base_url="http://127.0.0.1") as c:
+            yield c
+
+    def test_a_cross_site_text_form_cannot_lift_a_live_cap(self, client: TestClient):
+        from ems import runtime_knobs as _knobs
+
+        token = page_token(client)
+        body = '{"key": "live_max_trade_usd", "value": 1000, "pad": "="}'
+        for headers in ({"Content-Type": "text/plain"},
+                        {"Content-Type": "text/plain", "X-Dashboard-Token": token},
+                        {"Content-Type": "application/json", "Origin": "https://evil.example",
+                         "X-Dashboard-Token": token},
+                        {"Content-Type": "application/json"}):
+            r = client.post("/api/runtime-config", content=body, headers=headers).json()
+            assert r["status"] == "error" and r["detail"].startswith("Refused"), headers
+        import asyncio
+        assert asyncio.run(_knobs.get("live_max_trade_usd")) == 3.0
+
+    def test_the_page_itself_can_write(self, client: TestClient):
+        r = client.post("/api/runtime-config", json={"key": "kelly_horse_race_max_notional_usd",
+                                                     "value": 4.0},
+                        headers={"X-Dashboard-Token": page_token(client),
+                                 "Origin": "http://127.0.0.1:7860"}).json()
+        assert r["status"] == "ok"
+
+    def test_another_host_name_is_not_served(self):
+        with TestClient(app, base_url="http://rebind.evil.example:7860") as c:
+            r = c.get("/")
+            assert r.status_code == 400 and "dashboard-token" not in r.text
+            assert c.post("/api/mode", json={"mode": "live"}).status_code == 400

@@ -22,7 +22,12 @@ from ems.dashboard.app import app
 
 @pytest.fixture
 def client() -> TestClient:
-    with TestClient(app) as c:
+    """Like the page: a local host name, and the page's token on every POST."""
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        text = c.get("/").text
+        marker = 'name="dashboard-token" content="'
+        start = text.index(marker) + len(marker)
+        c.headers["X-Dashboard-Token"] = text[start:text.index('"', start)]
         yield c
 
 

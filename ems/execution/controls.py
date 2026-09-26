@@ -32,6 +32,15 @@ class PlacementRefused(RuntimeError):
         self.reason = reason
 
 
+class OutcomeUnknown(PlacementRefused):
+    """The send failed with no reply and the venue could not be searched for the order, so it
+    may or may not rest there. The caller keeps looking (the venue's ``find_order``) and holds
+    new orders on that venue until it knows."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("outcome_unknown", message)
+
+
 class PassiveOrder(Protocol):
     """What :func:`check_passive` reads from an order."""
 

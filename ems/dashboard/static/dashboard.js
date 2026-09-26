@@ -239,7 +239,7 @@ function setKnob(name, kind) {
   var label = (el.getAttribute('aria-label') || name);
   fetch('/api/runtime-config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': dashboardToken() },
     body: JSON.stringify({ key: name, value: v })
   })
     .then(function(r) { return r.json(); })
@@ -287,7 +287,7 @@ function setStrategy(name) {
   var label = (el.getAttribute('aria-label') || name);
   fetch('/api/runtime-config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': dashboardToken() },
     body: JSON.stringify({ key: 'strategy', value: { name: name, enabled: on } })
   })
     .then(function(r) { return r.json(); })

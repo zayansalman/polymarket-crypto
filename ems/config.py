@@ -40,6 +40,11 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 DASHBOARD_SERVER_NAME = os.getenv("DASHBOARD_SERVER_NAME", "127.0.0.1")
 DASHBOARD_SERVER_PORT = int(os.getenv("DASHBOARD_SERVER_PORT", "7860"))
+# Extra host names the dashboard answers to (comma-separated), beyond 127.0.0.1 and localhost.
+# Only for a deliberate LAN or container setup: any name here can serve the page's token.
+DASHBOARD_ALLOWED_HOSTS = tuple(
+    h.strip() for h in os.getenv("DASHBOARD_ALLOWED_HOSTS", "").split(",") if h.strip()
+)
 
 # Market-data mirror of the spot API: api.binance.com is unreachable from some
 # networks, while data-api.binance.vision serves the same /api/v3 endpoints.

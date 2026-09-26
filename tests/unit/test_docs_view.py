@@ -12,7 +12,7 @@ from ems.dashboard import docs_view
 def _client() -> TestClient:
     app = FastAPI()
     docs_view.register(app)
-    return TestClient(app)
+    return TestClient(app, base_url="http://127.0.0.1")
 
 
 def test_inline_and_display_maths_survive_markdown() -> None:
@@ -86,6 +86,6 @@ def test_the_dashboard_serves_the_docs_pages() -> None:
     # background loops start.
     from ems.dashboard.app import app
 
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
     assert client.get("/strategy-docs").status_code == 200
     assert client.get("/strategy-docs/fade_1h_momentum_15m").status_code == 200

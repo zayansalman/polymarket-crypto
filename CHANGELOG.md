@@ -21,6 +21,15 @@
   dashboard in this process, the wallet config passes and the strategy's switch
   is on. The top bar has a PAPER/LIVE control again; `BOT_MODE=live` alone never
   trades. The CLOB client is the optional `live` extra.
+- Security: the dashboard answers only `127.0.0.1`/`localhost` host names
+  (plus `DASHBOARD_ALLOWED_HOSTS`), and every settings write (knobs, switches,
+  PAPER/LIVE) needs the page's token, a JSON body and no foreign `Origin`, so a
+  web page can neither change the risk caps nor arm LIVE.
+- Live safety: the switch, the kill switch and LIVE are checked again right
+  before an order goes. A send with no reply is searched for on the exchange,
+  never sent twice, and holds new live orders until found or its window stops.
+  An empty status reply no longer closes a live order, and failed cancels reach
+  the card.
 
 ## Unreleased — one package, every dashboard card folds (2026-09-26)
 

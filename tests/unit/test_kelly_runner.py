@@ -22,6 +22,7 @@ from ems import db as _db
 from ems import runtime_knobs as _knobs
 from ems import strategies as _strategies
 from ems.execution import clob, live_control, resting
+from ems.execution.controls import OutcomeUnknown
 from ems.execution.live_control import LiveVenueHolder
 from ems.execution.resting import OrderView, Placed, PlaceRequest
 from ems.kelly_horse_race import inputs, ledger, maths
@@ -94,6 +95,10 @@ class FakeLive:
         self.cancelled: list[tuple[list[str], str]] = []
         self.views: dict[str, OrderView] = {}
         self.refuse: Exception | None = None
+        self.open_ids: list[str] = []  # what find_order finds, in turn
+        self.find_error: Exception | None = None
+        self.cancel_error: str | None = None
+        self.last_errors: list[str] = []
 
     async def place(self, request: PlaceRequest, *, now: float | None = None) -> Placed:
         if self.refuse is not None:
@@ -103,9 +108,18 @@ class FakeLive:
         self.views[order_id] = OrderView(order_id, "resting", request.size, 0.0, None, False)
         return Placed(order_id=order_id, placed_ts=int(now or 0) + 1)
 
+    async def find_order(self, *, token_id: str, price: float, size: float,
+                         expires_ts: int) -> str | None:
+        if self.find_error is not None:
+            raise self.find_error
+        return self.open_ids.pop(0) if self.open_ids else None
+
     async def cancel(self, order_ids, *, reason: str, now: float | None = None) -> int:
         ids = list(order_ids)
         self.cancelled.append((ids, reason))
+        if self.cancel_error is not None:
+            self.last_errors.append(self.cancel_error)
+            return 0
         for i in ids:
             v = self.views[i]
             self.views[i] = OrderView(i, "cancelled", v.size, v.filled_size, int(now or 0), True)
@@ -537,3 +551,126 @@ async def test_a_live_order_waits_for_consent(kelly_db, venue, armed) -> None:
     report = await make_runner(venue, make_hub(), {"now": NOW}, live=live).pass_once()
     assert report.endpoints["live"]["state"] == live_control.NOT_CLICKED
     assert live.placed == [] and len(await rows("kelly_horse_race_orders")) == 1
+
+
+async def test_paper_clicked_during_the_decision_stops_the_live_order(kelly_db, venue, armed,
+                                                                     monkeypatch) -> None:
+    await armed()
+    await _knobs.set("live_max_trade_usd", 5.0)
+    live = FakeLive()
+    real_read_book = inputs.read_book
+
+    async def read_book_then_click_paper(client, token):
+        await live_control.select_mode("paper", clicked=True)  # the operator, mid-decision
+        return await real_read_book(client, token)
+
+    monkeypatch.setattr(inputs, "read_book", read_book_then_click_paper)
+    await make_runner(venue, make_hub(), {"now": NOW}, live=live).pass_once()
+    assert live.placed == []
+    paper, stopped = await rows("kelly_horse_race_orders")
+    assert paper["state"] == "resting"
+    assert stopped["state"] == "blocked" and stopped["reason"].startswith("live_disarmed")
+
+
+async def test_switched_off_during_the_decision_sends_nothing(kelly_db, venue,
+                                                              monkeypatch) -> None:
+    real_read_book = inputs.read_book
+
+    async def read_book_then_switch_off(client, token):
+        await _strategies.set_enabled(rn.STRATEGY, False)
+        return await real_read_book(client, token)
+
+    monkeypatch.setattr(inputs, "read_book", read_book_then_switch_off)
+    await make_runner(venue, make_hub(), {"now": NOW}).pass_once()
+    (order,) = await rows("kelly_horse_race_orders")
+    assert order["state"] == "blocked" and order["reason"].startswith("switched_off")
+    assert await rows("paper_resting_orders") == []
+
+
+# ---------------------------------------------------------------------------
+# A live send with no reply, an order that cannot be recorded, cancel errors
+# ---------------------------------------------------------------------------
+
+
+async def live_runner(venue: FakeVenue, armed, clock: dict) -> tuple[rn.Runner, FakeLive]:
+    await armed()
+    await _knobs.set("live_max_trade_usd", 5.0)
+    live = FakeLive()
+    return make_runner(venue, make_hub(), clock, live=live), live
+
+
+async def test_a_send_with_no_reply_is_unknown_until_found(kelly_db, venue, armed) -> None:
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = OutcomeUnknown("The send failed and the open orders could not be read.")
+    report = await runner.pass_once()
+    _, unknown = await rows("kelly_horse_race_orders")
+    assert (unknown["state"], unknown["final"], unknown["venue_order_id"]) == ("unknown", 0, None)
+    assert any("looked for every pass" in e for e in report.errors)
+    assert not [e for e in await rows("risk_events") if e["mode"] == "live"]
+
+    live.open_ids = ["0xFOUND"]
+    live.views["0xFOUND"] = OrderView("0xFOUND", "resting", unknown["size"], 0.0, None, False)
+    clock["now"] = NOW + 5
+    report = await runner.pass_once()
+    _, found = await rows("kelly_horse_race_orders")
+    assert (found["state"], found["venue_order_id"], found["final"]) == ("resting", "0xFOUND", 0)
+    commits = [e for e in await rows("risk_events") if e["mode"] == "live"]
+    assert [c["kind"] for c in commits] == ["commit"]
+    assert any("found resting on the exchange" in e for e in report.errors)
+
+
+async def test_an_unknown_order_never_found_is_closed_at_the_stop(kelly_db, venue,
+                                                                  armed) -> None:
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = OutcomeUnknown("no reply")
+    await runner.pass_once()
+    clock["now"] = END - resting.GTD_STOP_S
+    report = await runner.pass_once()
+    _, closed = await rows("kelly_horse_race_orders")
+    assert (closed["state"], closed["final"], closed["credited"]) == ("unknown", 1, 1)
+    assert "check your Polymarket orders" in closed["reason"]
+    assert any("check your Polymarket orders" in e for e in report.errors)
+
+
+async def test_an_open_unknown_order_holds_new_live_orders(kelly_db, venue, armed) -> None:
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    await ledger.record_order(decision_id=999, window_slug="btc-updown-15m-older", mode="live",
+                              token_id=UP, outcome="Up", price=0.5, size=6.0, queue_ahead=0.0,
+                              window_end_ts=END + 900, state="unknown", reason="no reply")
+    await runner.pass_once()
+    assert live.placed == []
+    held = [o for o in await rows("kelly_horse_race_orders") if o["window_slug"] == SLUG
+            and o["mode"] == "live"]
+    assert held[0]["state"] == "blocked" and held[0]["reason"].startswith("outcome_unknown")
+
+
+async def test_an_order_that_cannot_be_recorded_is_cancelled(kelly_db, venue, armed,
+                                                             monkeypatch) -> None:
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    real_record = ledger.record_order
+
+    async def record_order(**kw):
+        if kw["mode"] == "live" and kw["state"] == "resting":
+            raise OSError("database is locked")
+        return await real_record(**kw)
+
+    monkeypatch.setattr(ledger, "record_order", record_order)
+    report = await runner.pass_once()
+    assert live.cancelled == [(["0xLIVE1"], "not_recorded")]
+    assert any("Recording the live order" in e for e in report.errors)
+
+
+async def test_a_failed_cancel_reaches_the_report(kelly_db, venue, armed) -> None:
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    await runner.pass_once()
+    live.cancel_error = "the cancel of 1 order(s) failed: HTTP 503"
+    clock["now"] = END - rn.CANCEL_LEAD_S
+    report = await runner.pass_once()
+    assert "live: the cancel of 1 order(s) failed: HTTP 503" in report.errors
+    assert live.last_errors == []
+

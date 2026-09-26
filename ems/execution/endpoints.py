@@ -83,3 +83,19 @@ async def _live_endpoint(gate: RiskGate, holder: _live.LiveVenueHolder | None, o
         return Endpoint(LIVE, BOOT_FAILED, f"LIVE is armed but the exchange sign-in failed: "
                         f"{holder.error}. Tried again in a minute.", None, gate)
     return Endpoint(LIVE, ON, status.message, venue, gate, active=True)
+
+
+async def still_active(point: Endpoint, *, kill_switch_path: Path | str | None = None
+                       ) -> str | None:
+    """Re-check an endpoint just before an order is sent: None if it may still take it, else
+    why not. A decision can take tens of seconds of reads, and the operator may have clicked
+    PAPER, or touched the kill switch, in the meantime."""
+    if not point.active or point.venue is None:
+        return f"{point.mode} is off"
+    if _controls.kill_switch_active(kill_switch_path):
+        return "kill_switch: the kill switch file appeared"
+    if point.mode == LIVE:
+        status = await _live.live_status()
+        if not status.armed:
+            return f"live_disarmed: {status.message}"
+    return None
