@@ -32,18 +32,20 @@ from ems.strategies import STRATEGIES
 
 
 def _record_html(family: _inv.Family, live: dict[str, Any] | None) -> str:
-    """What it has actually done — the live number when we have one."""
+    """What it has actually done — the live number when we have one. A ``label`` (e.g.
+    "paper") names which record it is."""
     if live and live.get("n") is not None:
         n = int(live.get("n") or 0)
+        label = f"{escape(str(live['label']))}: " if live.get("label") else ""
         if not n:
-            return "<span class='strategy-record'>no settled positions yet</span>"
+            return f"<span class='strategy-record'>{label}no settled positions yet</span>"
         pnl = float(live.get("pnl") or 0.0)
         cls = "pos" if pnl > 0 else ("neg" if pnl < 0 else "")
         win = live.get("win_rate")
         win_txt = f" &middot; {100 * float(win):.0f}% won" if win is not None else ""
         return (
             "<span class='strategy-record'>"
-            f"{n} settled &middot; <b class='{cls}'>${pnl:+,.2f}</b>{win_txt}</span>"
+            f"{label}{n} settled &middot; <b class='{cls}'>${pnl:+,.2f}</b>{win_txt}</span>"
         )
     return f"<span class='strategy-record'>{escape(family.record)}</span>"
 

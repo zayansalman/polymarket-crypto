@@ -135,6 +135,8 @@ def _pnl_class(v: Any) -> str:
 
 def _endpoint_pills(status: Mapping[str, Any]) -> str:
     points = _map(status.get("endpoints"))
+    if not points:
+        return ""  # not known until this process's first pass
     pills = []
     for mode in MODES:
         state = str(_map(points.get(mode)).get("state") or "")
@@ -183,6 +185,9 @@ def _state_lines(status: Mapping[str, Any], enabled: bool | None, caps: Mapping[
         lines.append(_line(text, tone))
     if enabled is False and state != "switched_off":
         lines.append(_line("The switch is off: it applies on the next pass.", "warn"))
+    if status.get("from_earlier_run"):
+        lines.append(_line("PAPER and LIVE show here after this run's first pass; the last pass "
+                           "above is from an earlier run of the app.", "warn"))
     for mode in MODES:
         point = _map(_map(status.get("endpoints")).get(mode))
         if point.get("message"):
@@ -340,7 +345,8 @@ def render(
     head = (f"<summary class='card-h'><span class='fold-title'>{TITLE}</span>"
             f"<span class='win kelly-pills'>{_endpoint_pills(status)} {switch} "
             + (_pill(*loop) + " " if loop else "")
-            + f"<span>last pass {_ago(status.get('last_pass_ts'), now)}</span></span>"
+            + f"<span>last pass {_ago(status.get('last_pass_ts'), now)}"
+            + (" (earlier run)" if status.get("from_earlier_run") else "") + "</span></span>"
             "</summary>")
     error = (f"<div class='kelly-reason down'>Could not read this strategy's records: "
              f"{escape(load_error)}</div>" if load_error else "")

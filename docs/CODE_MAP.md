@@ -71,8 +71,10 @@ main.py ─ singleton lock + init_db ─▶ uvicorn ─▶ ems/dashboard/app.py 
 ```
 
 `main.py` takes a singleton `fcntl` lock on `data/bot.lock`, runs `init_db`, then serves
-the FastAPI app. The strategy places nothing while the requested mode is not paper or the
-kill switch file exists; paper orders already filled keep settling in every state.
+the FastAPI app. Fade places nothing while the requested mode is not paper or the kill
+switch file exists. Kelly horse-race trades on paper in every mode unless the kill switch
+file exists, and also sends to the exchange only while LIVE is armed (AGENTS.md, "Live
+trading"). Orders already filled keep settling in every state.
 
 ## Module status (generated)
 
@@ -83,7 +85,7 @@ kill switch file exists; paper orders already filled keep settling in every stat
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1143.
+- **Tests:** 1145.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->
 

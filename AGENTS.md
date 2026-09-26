@@ -89,6 +89,10 @@ live leg of Kelly horse-race. What that authorises, and nothing more:
   an earlier process is never consent), and a wallet config that passes, and
   the strategy's switch on. Off by default. The kill switch and the live risk
   gate leg (per-trade cap, daily cap, loss halt) apply to every order.
+- **What the page token proves:** a settings or PAPER/LIVE write came from the
+  dashboard page, so another web site cannot make one. A program on this
+  machine can read the page too, so the machine is the trust boundary: the
+  dashboard stays on `127.0.0.1`, and agents never call `/api/mode`.
 
 Agents still never place live orders, never arm LIVE and never change these
 conditions.
@@ -138,6 +142,6 @@ http://127.0.0.1:7860
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1143.
+- **Tests:** 1145.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->

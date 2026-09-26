@@ -125,8 +125,10 @@ app.add_middleware(
                          | ({DASHBOARD_SERVER_NAME} - {"", "0.0.0.0", "::"})),
 )
 
-# A new token each process, put in the page it serves. Only a click on that page carries it,
-# so only the operator's click in this dashboard session can select LIVE (AGENTS.md).
+# A new token each process, put in the page it serves. It proves a write came from this
+# page, so another web site cannot change a setting or select LIVE. It does not keep out a
+# program on this machine, which can read the page too: the machine is the trust boundary,
+# the dashboard listens on 127.0.0.1 only, and agents never select LIVE (AGENTS.md).
 _DASHBOARD_TOKEN = secrets.token_urlsafe(32)
 
 
@@ -282,13 +284,13 @@ async def dashboard(request: Request) -> Any:
 @app.post("/api/mode")
 async def api_mode(request: Request) -> dict[str, Any]:
     """Select PAPER or LIVE, only from this process's page (``_refusal``: its token, a JSON
-    body, a local origin), so LIVE is selected only by the operator's click here. Audited to
-    the activity feed."""
+    body, a local origin), so no other web site can select LIVE. Audited to the activity
+    feed."""
     refused = _refusal(request)
     if refused:
         log.warning("mode_refused", reason=refused)
         return {"status": "error",
-                "detail": f"{refused} LIVE can only be selected by clicking LIVE in the dashboard."}
+                "detail": f"{refused} PAPER/LIVE can only be changed from the dashboard page."}
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001

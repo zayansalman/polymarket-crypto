@@ -102,3 +102,14 @@ def test_families_are_grouped_by_status() -> None:
 def test_a_strategy_with_no_record_yet_says_that_too() -> None:
     html = panel.render(enabled=ALL_ON, records={"fade_1h_momentum_15m": {"n": 0}})
     assert "no settled positions yet" in html
+
+
+def test_a_labelled_record_says_which_record_it_is() -> None:
+    html = panel.render(
+        enabled=ALL_ON,
+        records={"kelly_horse_race": {"n": 0, "pnl": 0.0, "win_rate": None, "label": "paper"},
+                 "fade_1h_momentum_15m": {"n": 3, "pnl": 1.5, "win_rate": None,
+                                          "label": "paper"}},
+    )
+    assert "paper: no settled positions yet" in html and "paper: 3 settled" in html
+

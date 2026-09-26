@@ -75,6 +75,8 @@ body {
 .mode-opt:hover { color: var(--text); }
 .mode-opt.active.paper { background: var(--bg-alt); color: var(--muted); }
 .mode-opt.active.live { background: rgba(255,93,108,.16); color: var(--neg); }
+/* LIVE selected but not armed (not clicked in this process, no wallet, ...): nothing is sent. */
+.mode-opt.active.live[data-armed="0"] { background: rgba(255,180,84,.14); color: var(--warn); text-decoration: line-through; }
 
 .btn {
   font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.4px;

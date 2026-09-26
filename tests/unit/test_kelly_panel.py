@@ -97,3 +97,24 @@ async def test_the_page_shows_a_real_pass(kelly_db, venue) -> None:  # noqa: F81
     assert html.index("FADE 1H MOMENTUM ON 15M") < html.index(panel.TITLE) < html.index(
         "SETTINGS")
     assert rn.status()["window"]["slug"] == SLUG
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_runs_live_state_is_not_shown_as_now(kelly_db, monkeypatch) -> None:  # noqa: F811
+    """A saved status from a run that had LIVE armed lends only its last pass time."""
+    import json
+
+    from ems import db as _db
+
+    saved = {**STATUS, "errors": ["live: HTTP 500 from an earlier run"],
+             "endpoints": {"paper": {"state": "on", "message": "Paper: on.", "active": True},
+                           "live": {"state": "on", "message": "LIVE is armed.",
+                                    "active": True}}}
+    await _db.set_config(rn.STATUS_KEY, json.dumps(saved))
+    monkeypatch.setattr(rn, "_STATUS", {"state": "not_started", "last_pass_ts": None,
+                                        "last_error": None})
+    data = await execution_view.kelly_horse_race_data()
+    assert data["status"]["from_earlier_run"] and data["status"]["endpoints"] == {}
+    html = panel.render(**data, enabled=True, now=NOW)
+    assert "LIVE ARMED" not in html and "LIVE is armed." not in html
+    assert "HTTP 500 from an earlier run" not in html and "(earlier run)" in html

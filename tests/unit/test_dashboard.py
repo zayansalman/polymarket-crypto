@@ -189,7 +189,7 @@ class TestPaperLive:
         from ems.execution import live_control
         r = client.post("/api/mode", json={"mode": "live"},
                         headers={"X-Dashboard-Token": ""}).json()
-        assert r["status"] == "error" and "clicking LIVE" in r["detail"]
+        assert r["status"] == "error" and "from the dashboard page" in r["detail"]
         assert not live_control.clicked_live()
         r = client.post("/api/mode", json={"mode": "live"},
                         headers={"X-Dashboard-Token": "not-the-token"}).json()

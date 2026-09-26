@@ -274,7 +274,13 @@ function setMode(mode) {
         b.classList.toggle('active', b.classList.contains(res.mode));
       });
       const live = document.querySelector('.mode-opt.live');
-      if (live) { live.dataset.armed = res.live_armed ? '1' : '0'; }
+      if (live) {
+        live.dataset.armed = res.live_armed ? '1' : '0';
+        live.title = 'LIVE: Kelly horse-race sends post-only orders to the exchange while armed. '
+          + 'Fade places nothing while LIVE is selected. ' + res.detail;
+      }
+      const toggle = document.querySelector('.mode-toggle');
+      if (toggle) { toggle.title = res.detail; }
       showToast(res.mode.toUpperCase() + ' — ' + res.detail, res.live_armed ? 'success' : 'info', 6000);
     })
     .catch(err => showToast('Mode not changed: ' + err, 'error'));

@@ -1,6 +1,7 @@
 # Operations Runbook
 
-Running the EMS is meant to be boring: one process, visible state, paper only.
+Running the EMS is meant to be boring: one process, visible state, paper unless the
+operator arms LIVE (see Modes).
 
 ## Start
 

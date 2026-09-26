@@ -90,14 +90,17 @@ async def kelly_horse_race_data() -> dict[str, Any]:
     """Everything the KELLY HORSE-RACE card shows, as ``kelly_panel.render`` kwargs.
 
     The runner's status comes from memory; before this process's first pass, the copy an
-    earlier run saved lends its last pass, with the state and errors still this process's
-    own (``fade_1h_status`` does the same for fade). A failed read becomes ``load_error``.
+    earlier run saved lends only its last pass time: the state and errors stay this
+    process's own (``fade_1h_status`` does the same for fade), and the earlier run's
+    endpoints (LIVE armed or not) and window are dropped, since they were that run's, not
+    this one's. A failed read becomes ``load_error``.
     """
     from ems.kelly_horse_race import ledger as _kelly_ledger
     from ems.kelly_horse_race import runner as _kelly_runner
 
     errors: list[str] = []
-    status: dict[str, Any] = _kelly_runner.status()
+    memory: dict[str, Any] = _kelly_runner.status()
+    status = memory
     if not status.get("last_pass_ts"):
         try:
             saved = json.loads(await get_config(_kelly_runner.STATUS_KEY) or "null")
@@ -105,6 +108,10 @@ async def kelly_horse_race_data() -> dict[str, Any]:
             errors.append(f"the saved status ({type(exc).__name__}: {exc})")
         else:
             status = fade_1h_status(status, saved)
+    if status.get("from_earlier_run"):
+        status = {**status, "endpoints": {}, "window": {}}
+        if not memory.get("last_error"):
+            status.update(errors=[], last_error=None, last_error_ts=None)
     out: dict[str, Any] = {"status": status, "summary": {}, "decisions": [], "caps": {}}
     try:
         out["caps"] = {
@@ -150,11 +157,13 @@ async def execution_view_html() -> str:
                 "pnl": _fsummary.get("net_pnl_usd"),
                 "win_rate": None,
             },
-            # The paper record: paper is always on, so it has every window.
+            # The paper record: paper is always on, so it has every window. Labelled, since
+            # live can settle positions paper did not fill (the card has both).
             "kelly_horse_race": {
                 "n": _kpaper.get("settled"),
                 "pnl": _kpaper.get("pnl_usd"),
                 "win_rate": _kpaper.get("win_rate"),
+                "label": "paper",
             },
         },
     )
