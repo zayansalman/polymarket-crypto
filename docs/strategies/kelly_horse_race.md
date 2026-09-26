@@ -7,8 +7,8 @@
 | Key | `kelly_horse_race` |
 | Status | running now |
 | Switch | `kelly_horse_race` on the MY STRATEGIES card |
-| Code | `ems/kelly_horse_race/` — 11 files (`ems/execution/controls.py`, `ems/execution/endpoints.py`, `ems/execution/gate.py`, `ems/execution/queue.py`, `ems/execution/resting.py`, `ems/execution/tape.py` shared) |
-| Code fingerprint | `ffd0d90d7706` |
+| Code | `ems/kelly_horse_race/` — 14 files (`ems/execution/clob.py`, `ems/execution/controls.py`, `ems/execution/endpoints.py`, `ems/execution/gate.py`, `ems/execution/journal.py`, `ems/execution/live_control.py`, `ems/execution/queue.py`, `ems/execution/resting.py`, `ems/execution/tape.py` shared) |
+| Code fingerprint | `ef4bc244bf1a` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -33,7 +33,7 @@ The size: draw $u_2$ uniform on $[0,1)$ and pick one share count, in hundredths 
 
 ### How it works
 
-Once per BTC 15m window, as soon as its inputs are in: $K$ and $X$ from the TWAP-60s stream, the last hour from sixty 1-minute Binance returns, then $P(\text{Up})$ and the die for the side. It reads that side's order book and rests one passive limit buy at the best bid, behind the shares already resting there, with the random size. The same order goes to paper and, when armed, live, each through its own risk gate leg. From 60 s before the close anything still resting is cancelled. Once the venue calls the window, each filled share makes $1 - p$ if its side won and $-p$ if not, with no fee.
+Once per BTC 15m window, as soon as its inputs are in: $K$ and $X$ from the TWAP-60s stream, the last hour from sixty 1-minute Binance returns, then $P(\text{Up})$ and the die for the side. It reads that side's order book and rests one passive limit buy at the best bid, behind the shares already resting there, with the random size. The same order goes to paper and, when the operator has armed LIVE, to the exchange as a post-only order, each through its own risk gate leg. From 60 s before the close anything still resting is cancelled. Once the venue calls the window, each filled share makes $1 - p$ if its side won and $-p$ if not, with no fee.
 
 ### How it was derived
 
@@ -60,7 +60,7 @@ It never crosses the spread and never holds both sides of a window: there is one
 - **Research:** Claude, 2026-09-22, `tasks/2026-09-22-kelly-horse-race-research.md`. It covers the Kelly horse-race rule and probability matching, the digital-option probability, whether the last hour predicts the next 15 minutes, short-horizon volatility and how the 15m market settles.
 - **Build instructions:** Zayan (operator), 2026-09-22: "as the paper would do it and with randomness"; "completely randomise the notional between min shs required and 5$"; one execution layer shared by every strategy.
 - **Design:** Claude, 2026-09-26, `docs/superpowers/specs/2026-09-26-kelly-horse-race-design.md`.
-- **Built on the one-package tree:** Claude, 2026-09-26, after develop removed every strategy but Fade 1h Momentum on 15m. The operator chose then to build the spec's live leg, to share fade's paper fill model, and to keep everything on one branch.
+- **Built on the one-package tree:** Claude, 2026-09-26, after develop removed every strategy but Fade 1h Momentum on 15m. The operator chose then to build the spec's live leg, to share fade's paper fill model, and to keep everything on one branch. The live leg is recorded in AGENTS.md, "Live trading".
 
 ## How it works
 
@@ -93,7 +93,7 @@ One passive limit buy at the chosen side's best bid, which is below the ask by c
 The same order goes to every endpoint that is on when the decision is made:
 
 - **Paper** is always on unless the kill switch file exists. A paper order fills only from the real taker trade tape, once the shares that were ahead of it have traded: for this one order, filled $= \min(\text{size}, \max(0, \text{crossed} - \text{queue ahead}))$.
-- **Live** places nothing until a live venue is built and armed; the card says which.
+- **Live** is on only while the operator has armed it (AGENTS.md, "Live trading"): LIVE selected and clicked in the dashboard in this process (a saved LIVE or `BOT_MODE=live` is never consent), a wallet config that passes, and this strategy's switch on. The order goes to the exchange as a post-only good-till-date limit buy expiring at the window end (the exchange refuses it rather than let it cross), cancelled by id, and journaled to `live_orders`. Its fills are the exchange's `size_matched`. Selecting PAPER again cancels whatever still rests live; fills and settlement of live orders are still followed. The card says which condition is missing.
 
 Each endpoint has its own risk gate leg (kill switch, daily loss halt, per-trade cap, daily notional cap; the "Risk" knobs in SETTINGS). A blocked order is recorded against its mode with the reason. The live per-trade cap starts at \$3, below this strategy's \$5 notional cap, so on live every draw above \$3 is blocked, and recorded as blocked, until the operator raises it.
 
@@ -109,7 +109,9 @@ Switch off, or the kill switch file present: whatever rests is cancelled, nothin
 |---|---|---|
 | Largest order (`kelly_horse_race_max_notional_usd`) | \$5 | the cap the random size is drawn up to |
 | Pass interval (`kelly_horse_race_poll_interval_seconds`) | 5 s | how often the loop runs |
-| Paper / Live risk knobs ("Risk" group) | see SETTINGS | the gate legs every strategy's orders pass |
+| Paper / Live risk knobs ("Risk" group) | paper: \$5 per trade, no daily cap, no halt; live: \$3 per trade, no daily cap, \$10 loss halt | the gate legs every strategy's orders pass |
+| PAPER/LIVE (top bar) | PAPER | LIVE arms the live leg as described above |
+| Wallet (`.env`) | none | `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_FUNDER`, `POLYMARKET_SIGNATURE_TYPE=2`; the `live` extra installed |
 
 Fixed in code: the decision cutoff (2 minutes before the close), the cancel lead (60 s before the close), the price-now age limit (5 s).
 
@@ -151,4 +153,5 @@ The size at a bid of 0.53 with a 5-share minimum and the \$5 cap: from 5.00 to 9
 
 ## Changelog
 
+- 2026-09-26 · `ef4bc244bf1a` · The live leg: the order also goes to the exchange as a post-only GTD buy while the operator has armed LIVE (selected and clicked in this process, a wallet that passes, the switch on); PAPER again cancels resting live orders; fills from size_matched; every live placement and cancel journaled.
 - 2026-09-26 · `ffd0d90d7706` · First build: the maths, the inputs, the ledger and the runner, on the shared resting-order layer; paper always, live not built yet.

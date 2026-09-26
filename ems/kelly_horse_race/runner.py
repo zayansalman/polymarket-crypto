@@ -49,6 +49,7 @@ from ems import db as _db  # type: ignore[import-untyped]
 from ems import runtime_knobs as _knobs
 from ems import strategies as _strategies
 from ems.execution import endpoints as _endpoints
+from ems.execution.live_control import LiveVenueHolder
 from ems.execution.controls import PlacementRefused
 from ems.execution.gate import MODES, RiskGate
 from ems.execution.resting import PaperRestingVenue, PlaceRequest, RestingVenue
@@ -155,7 +156,7 @@ class _Draws:
 
 
 class Runner:
-    """One Kelly horse-race loop. ``live`` is the live venue factory once one is built."""
+    """One Kelly horse-race loop. ``live`` holds the live venue (None: paper only)."""
 
     def __init__(
         self,
@@ -166,7 +167,7 @@ class Runner:
         kill_switch_path: Any = None,
         rng: Callable[[], float] | None = None,
         paper: RestingVenue | None = None,
-        live: _endpoints.LiveVenueFactory | None = None,
+        live: LiveVenueHolder | None = None,
     ) -> None:
         self._client = client
         self._hub_fn = hub_fn or _current_hub
@@ -177,7 +178,7 @@ class Runner:
         self.paper = paper or PaperRestingVenue(client, clock=clock,
                                                 kill_switch_path=kill_switch_path,
                                                 latest_market=lambda: self._latest_cid)
-        self._live_factory = live
+        self._live = live
         self.venues: dict[str, RestingVenue] = {"paper": self.paper}
         self.gates = {mode: RiskGate(mode, kill_switch_path=kill_switch_path) for mode in MODES}
         self.memory = _inputs.Memory()
@@ -338,9 +339,14 @@ class Runner:
 
     async def _choose(self, report: PassReport) -> dict[str, _endpoints.Endpoint] | None:
         try:
+            live_open = bool(await _ledger.open_orders("live"))
+        except Exception as exc:  # noqa: BLE001 - the endpoints are still chosen
+            report.fail("Reading the open live orders", exc)
+            live_open = False
+        try:
             points = await _endpoints.endpoints(
-                paper=self.paper, gates=self.gates, live=self._live_factory,
-                kill_switch_path=self._kill_switch_path)
+                paper=self.paper, gates=self.gates, live=self._live,
+                live_orders_open=live_open, kill_switch_path=self._kill_switch_path)
         except Exception as exc:  # noqa: BLE001 - fail closed: nothing new anywhere
             report.fail("Choosing the endpoints", exc)
             await self._cancel_resting(report, modes=MODES, reason="endpoints_unknown")
@@ -348,7 +354,7 @@ class Runner:
         for mode, point in points.items():
             report.endpoints[mode] = {"state": point.state, "message": point.message,
                                       "active": point.active}
-            if point.active and point.venue is not None:
+            if point.venue is not None:
                 self.venues[mode] = point.venue
         off = [mode for mode, point in points.items() if not point.active]
         if off:
@@ -583,13 +589,13 @@ def _stopped(stop_event: asyncio.Event | None) -> bool:
 
 
 async def run_forever(stop_event: asyncio.Event | None = None) -> None:
-    """Pass after pass until ``stop_event`` is set. Paper always; live once built and armed."""
+    """Pass after pass until ``stop_event`` is set. Paper always; live only while armed."""
     global _STATUS
     failed = False
     runner: Runner | None = None
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-            runner = Runner(client)
+            runner = Runner(client, live=LiveVenueHolder())
             while not _stopped(stop_event):
                 started = time.monotonic()
                 try:

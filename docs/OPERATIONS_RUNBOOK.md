@@ -33,10 +33,22 @@ A second instance refuses to start while the first holds `data/bot.lock`.
 
 ## Modes
 
-`BOT_MODE` in `.env` is `paper`, the only mode built. Any other value makes the
-strategy place nothing, cancel its resting paper orders and say "no live order
-path" on its card; paper orders already filled keep settling. The dashboard has
-no LIVE control.
+PAPER/LIVE is chosen with the control in the top bar. `BOT_MODE` in `.env` only
+sets the choice before one is made, and `BOT_MODE=live` is never consent to trade.
+
+- **PAPER:** nothing is sent to the exchange. Both strategies trade on paper.
+- **LIVE:** Kelly horse-race also sends its order to the exchange (post-only,
+  good till the window end), only while all of these hold: LIVE clicked in the
+  dashboard in this process, a wallet config that passes (`POLYMARKET_PRIVATE_KEY`,
+  `POLYMARKET_FUNDER`, `POLYMARKET_SIGNATURE_TYPE=2`, and `pip install -e ".[live]"`)
+  and its switch on. Its card says which condition is missing. Fade places
+  nothing while LIVE is selected, and its paper orders already filled keep
+  settling.
+- **Back to PAPER:** Kelly's resting live orders are cancelled on the next pass;
+  their fills and settlement are still followed.
+- Live risk limits are the "Risk" knobs in SETTINGS (per-trade cap $3, loss halt
+  $10 a UTC day by default). Every live placement and cancel is in the
+  `live_orders` table.
 
 ## Health checks
 

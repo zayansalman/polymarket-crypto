@@ -175,3 +175,36 @@ so `db.py` is not touched:
 
 Coins other than BTC. Fitting or recalibrating P(Up) from outcomes: the maths runs as written,
 and the records show how it does. Scaled orders at more than one price level.
+
+## Addendum: as built on the one-package tree (Claude, 2026-09-26)
+
+Develop was restructured after this design was written (`ea93457`, `af1e294`, `4a85c4f`: one
+`ems/` package, only Fade left, the live executor, its risk gate and `py-clob-client-v2`
+removed). The operator then chose, in the building session: build the live leg as this design
+says; the shared layer is Fade's paper tape code lifted out unchanged; everything on this one
+branch. What changed from the text above, and why:
+
+- **Paths.** The layer is `ems/execution/` (`queue.py`, `tape.py`, `controls.py` lifted from
+  Fade; `resting.py`, `gate.py`, `endpoints.py`, `live_control.py`, `clob.py`, `journal.py`
+  new). The strategy is `ems/kelly_horse_race/`.
+- **Source.** `resting_orders.py` from the lc2004 worktree was never committed, so the types
+  are new code: `PlaceRequest`, `Placed`, `OrderView` and `RestingVenue` (`place`, `fills`,
+  `cancel`; `closed_on_venue` is `OrderView.closed`).
+- **Paper fills.** The shared `allocate_fills`, fade's model: for one buy at the best bid it is
+  the formula above; orders of every strategy on one market go through the tape together.
+- **Protected ids and the boot sweep.** Not built: nothing in the tree cancels all orders at
+  boot any more, so there is nothing to protect them from. The live venue cancels by id only.
+- **Risk.** A new gate, one leg per mode, totals from a `risk_events` table; limits are
+  "Risk" knobs on new `runtime.risk.*` keys (the deleted keys meant other things). The live
+  per-trade cap defaults to $3, so live draws above $3 are blocked and recorded, and the card
+  says so.
+- **"Start is pressed".** There is no Start button on this tree; the fourth live condition is
+  the strategy's switch.
+- **Storage.** The tables are in `ems/db.py` SCHEMA (develop's convention, so the dashboard
+  never meets a missing table), not a `ledger.init()`.
+- **Mode.** PAPER/LIVE is one selection for the whole app: Fade places nothing while LIVE is
+  selected.
+- **Worked examples.** `tools/kelly_horse_race/examples.py` rebuilds the decision at the open
+  of real windows and scores it; it needs network access to Gamma and Binance, which the
+  building session did not have, so no real examples are committed yet.
+

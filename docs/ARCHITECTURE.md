@@ -54,10 +54,17 @@ from a mid price, so the paper ledger is a lower bound on what a real order woul
 Every strategy uses the same fill model (`ems/execution/queue.py:allocate_fills`).
 
 ### One executor interface
-`runner.py` asks an `Executor` to rest, cancel and settle. Paper is the only implementation.
-Any other requested mode, or the kill switch file, yields an executor that places nothing
-and says why on the card, while the bookkeeper keeps filling and settling what was already
-placed.
+Fade's `runner.py` asks an `Executor` to rest, cancel and settle; paper is its only
+implementation. Any other requested mode, or the kill switch file, yields an executor that
+places nothing and says why on the card, while the bookkeeper keeps filling and settling what
+was already placed.
+
+Kelly horse-race uses the shared layer's `RestingVenue` instead: the paper venue
+(`execution/resting.py`) and the live one (`execution/clob.py`) take the same calls, and
+`execution/endpoints.py` says each pass which may take new orders. The same order goes to
+every active endpoint through its own risk gate leg; live is active only while armed
+(`execution/live_control.py`: LIVE selected and clicked in this process, a wallet that
+passes).
 
 ### Switches and knobs, not restarts
 The strategy switch (`ems/strategies.py`) and every runtime knob (`ems/runtime_knobs.py`)

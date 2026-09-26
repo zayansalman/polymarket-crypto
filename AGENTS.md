@@ -45,7 +45,10 @@ How it runs:
    STRATEGIES card is on. Off stops new entries; open paper positions still
    settle.
 3. The kill switch file (`data/KILL` by default) stops new orders and cancels
-   resting paper orders on the next pass. Delete it to re-arm.
+   resting orders on the next pass. Delete it to re-arm.
+4. PAPER/LIVE in the top bar. PAPER sends nothing to the exchange. LIVE arms
+   only Kelly horse-race's live leg, and only as "Live trading" below says;
+   Fade places nothing while LIVE is selected.
 
 ## Scope
 
@@ -135,6 +138,6 @@ http://127.0.0.1:7860
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1101.
-- **Built-but-dead (do not edit expecting runtime effect):** `ems/execution/clob.py`.
+- **Tests:** 1120.
+- **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->

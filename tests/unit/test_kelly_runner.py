@@ -21,7 +21,8 @@ from ems import config as _config
 from ems import db as _db
 from ems import runtime_knobs as _knobs
 from ems import strategies as _strategies
-from ems.execution import resting
+from ems.execution import clob, live_control, resting
+from ems.execution.live_control import LiveVenueHolder
 from ems.execution.resting import OrderView, Placed, PlaceRequest
 from ems.kelly_horse_race import inputs, ledger, maths
 from ems.kelly_horse_race import runner as rn
@@ -161,11 +162,26 @@ def venue() -> FakeVenue:
 
 def make_runner(venue: FakeVenue, hub: FakeHub, clock: dict, *, rng=None,
                 live: FakeLive | None = None) -> rn.Runner:
-    async def live_factory():
-        return live
+    holder = None
+    if live is not None:
+        async def opener():
+            return live
 
+        holder = LiveVenueHolder(clock=lambda: clock["now"], opener=opener)
     return rn.Runner(venue, hub_fn=lambda: hub, clock=lambda: clock["now"],
-                     rng=rng or draws(0.1, 0.5), live=live_factory if live else None)
+                     rng=rng or draws(0.1, 0.5), live=holder)
+
+
+@pytest.fixture
+def armed(monkeypatch: pytest.MonkeyPatch):
+    """LIVE selected and clicked in this process, with a wallet that passes."""
+
+    async def arm() -> None:
+        await live_control.select_mode("live", clicked=True)
+
+    monkeypatch.setattr(clob, "wallet_problems", lambda: [])
+    yield arm
+    live_control.record_click("paper")
 
 
 async def rows(table: str) -> list[dict[str, Any]]:
@@ -224,7 +240,8 @@ async def test_a_down_draw_buys_down_at_its_own_bid(kelly_db, venue) -> None:
     assert order["size"] == 5.0 and order["outcome_index"] == 1
 
 
-async def test_the_same_order_goes_to_paper_and_live(kelly_db, venue) -> None:
+async def test_the_same_order_goes_to_paper_and_live(kelly_db, venue, armed) -> None:
+    await armed()
     live = FakeLive()
     await _knobs.set("live_max_trade_usd", 5.0)
     await make_runner(venue, make_hub(), {"now": NOW}, live=live).pass_once()
@@ -238,7 +255,8 @@ async def test_the_same_order_goes_to_paper_and_live(kelly_db, venue) -> None:
     assert {o["price"] for o in orders} == {0.50} and len({o["size"] for o in orders}) == 1
 
 
-async def test_a_gate_block_is_recorded_against_its_mode(kelly_db, venue) -> None:
+async def test_a_gate_block_is_recorded_against_its_mode(kelly_db, venue, armed) -> None:
+    await armed()
     live = FakeLive()  # the live per-trade cap is $3 by default
     await make_runner(venue, make_hub(), {"now": NOW}, rng=draws(0.1, 0.99), live=live).pass_once()
     paper, blocked = await rows("kelly_horse_race_orders")
@@ -248,7 +266,8 @@ async def test_a_gate_block_is_recorded_against_its_mode(kelly_db, venue) -> Non
     assert live.placed == []
 
 
-async def test_a_venue_refusal_is_recorded(kelly_db, venue) -> None:
+async def test_a_venue_refusal_is_recorded(kelly_db, venue, armed) -> None:
+    await armed()
     live = FakeLive()
     live.refuse = resting.PlacementRefused("would_cross", "A bid at the ask.")
     await _knobs.set("live_max_trade_usd", 5.0)
@@ -363,7 +382,9 @@ async def test_the_order_stops_before_the_end_and_credits_the_unfilled_notional(
     assert credit[0]["amount_usd"] == pytest.approx(1.5)
 
 
-async def test_what_still_rests_at_the_cancel_lead_is_cancelled(kelly_db, venue) -> None:
+async def test_what_still_rests_at_the_cancel_lead_is_cancelled(kelly_db, venue,
+                                                                armed) -> None:
+    await armed()
     live = FakeLive()
     await _knobs.set("live_max_trade_usd", 5.0)
     hub, clock = make_hub(), {"now": NOW}
@@ -488,3 +509,31 @@ async def test_a_failing_step_is_shown_and_the_pass_goes_on(kelly_db, venue,
     assert rn.status()["state"] == rn.PASS_FAILED
     assert any("Checking fills failed" in e for e in report.errors)
     assert len(await rows("kelly_horse_race_decisions")) == 1
+
+
+async def test_turning_live_off_cancels_live_orders_and_keeps_following_them(
+    kelly_db, venue, armed
+) -> None:
+    await armed()
+    await _knobs.set("live_max_trade_usd", 5.0)
+    live = FakeLive()
+    hub, clock = make_hub(), {"now": NOW}
+    runner = make_runner(venue, hub, clock, live=live)
+    await runner.pass_once()
+    await live_control.select_mode("paper", clicked=True)
+    clock["now"] = NOW + 5
+    report = await runner.pass_once()
+    assert report.endpoints["live"]["state"] == live_control.NOT_SELECTED
+    assert live.cancelled == [(["0xLIVE1"], "endpoint_off")]
+    _, live_order = await rows("kelly_horse_race_orders")
+    assert live_order["state"] == "cancelled" and live_order["final"] == 1
+    (paper_order, _) = await rows("kelly_horse_race_orders")
+    assert paper_order["state"] == "resting"  # paper goes on
+
+
+async def test_a_live_order_waits_for_consent(kelly_db, venue, armed) -> None:
+    await live_control.select_mode("live", clicked=False)
+    live = FakeLive()
+    report = await make_runner(venue, make_hub(), {"now": NOW}, live=live).pass_once()
+    assert report.endpoints["live"]["state"] == live_control.NOT_CLICKED
+    assert live.placed == [] and len(await rows("kelly_horse_race_orders")) == 1

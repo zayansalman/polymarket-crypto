@@ -17,8 +17,11 @@ Two strategies run today:
 Both place orders through one shared execution layer (`ems/execution/`): the
 same order shapes, fill model, risk gate and kill switch for every strategy.
 
-Paper only. There is no live order path; `BOT_MODE=live` makes Fade place nothing
-and say so on its card, and Kelly horse-race keeps trading paper only. Agent rules and scope are in
+Paper by default. One live path exists, for Kelly horse-race on BTC 15m only
+(AGENTS.md, "Live trading"): post-only orders, sent only while the operator has
+clicked LIVE in the dashboard in this session, the wallet config passes and the
+strategy's switch is on. `BOT_MODE=live` alone never trades; Fade has no live
+path and places nothing while LIVE is selected. Agent rules and scope are in
 **[AGENTS.md](AGENTS.md)**; "where do I change what" is
 **[docs/CODE_MAP.md](docs/CODE_MAP.md)**.
 

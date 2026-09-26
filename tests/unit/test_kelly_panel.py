@@ -35,7 +35,7 @@ DECISION = {
 STATUS = {
     "state": "running", "last_pass_ts": NOW - 4, "errors": [],
     "endpoints": {"paper": {"state": "on", "message": "Paper: on.", "active": True},
-                  "live": {"state": "not_built", "message": "Live: none built.",
+                  "live": {"state": "not_selected", "message": "PAPER is selected.",
                            "active": False}},
     "window": {"slug": SLUG},
 }
@@ -51,7 +51,7 @@ def test_the_latest_decision_factor_by_factor() -> None:
     html = panel.render(decisions=[DECISION], status=STATUS, enabled=True, now=NOW,
                         caps={"max_notional_usd": 5.0, "paper_max_trade_usd": 5.0,
                               "live_max_trade_usd": 3.0})
-    for text in ("PAPER ON", "LIVE NOT BUILT", "SWITCH ON", "100,000.00", "58.3%",
+    for text in ("PAPER ON", "LIVE OFF", "SWITCH ON", "100,000.00", "58.3%",
                  "u1 0.1000 → UP", "bid 0.50 × 20", "7.50 shares at 0.50 = $3.75", "RESTING",
                  "2.00 of 7.50 filled", "BLOCKED", "max_trade"):
         assert text in html, text

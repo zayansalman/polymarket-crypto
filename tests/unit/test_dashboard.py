@@ -31,9 +31,10 @@ class TestAppCreation:
 
     def test_app_has_routes(self):
         paths = {r.path for r in app.routes}
-        assert {"/", "/api/data", "/api/stream", "/api/runtime-config"} <= paths
-        # The BTC loop's controls went with it (2026-09-26).
-        assert not {"/api/start", "/api/stop", "/api/mode"} & paths
+        assert {"/", "/api/data", "/api/stream", "/api/runtime-config", "/api/mode"} <= paths
+        # The BTC loop's Start/Stop went with it (2026-09-26); PAPER/LIVE came back for
+        # Kelly horse-race's live leg (AGENTS.md, "Live trading").
+        assert not {"/api/start", "/api/stop"} & paths
 
 
 class TestDashboardPage:
@@ -55,7 +56,7 @@ class TestDashboardPage:
 
     def test_no_loop_controls(self, client: TestClient):
         text = client.get("/").text
-        for gone in ("handleStart()", "handleStop()", "setMode(", "ORDER SIZE",
+        for gone in ("handleStart()", "handleStop()", "ORDER SIZE",
                      "TRADE BLOTTER", "DECISION ENGINE"):
             assert gone not in text, gone
 
@@ -94,8 +95,9 @@ class TestStaticFiles:
         js = client.get("/static/dashboard.js").text
         for fn in ("handleRefresh", "updateDashboard", "EventSource", "setKnob", "setStrategy"):
             assert fn in js, f"missing {fn}"
-        for gone in ("handleStart", "handleStop", "setMode", "setTradeShares", "updateTicket"):
+        for gone in ("handleStart", "handleStop", "setTradeShares", "updateTicket"):
             assert gone not in js, gone
+        assert "setMode" in js and "X-Dashboard-Token" in js
 
     def test_js_swaps_ems_content(self, client: TestClient):
         assert "execution-content" in client.get("/static/dashboard.js").text
@@ -146,3 +148,62 @@ class TestApiRuntimeConfig:
 class TestApiStream:
     def test_stream_route_exists(self):
         assert any(r.path == "/api/stream" for r in app.routes)
+
+
+
+class TestPaperLive:
+    """PAPER/LIVE: LIVE only by the operator's click on this process's page (AGENTS.md)."""
+
+    @staticmethod
+    def _token(client: TestClient) -> str:
+        text = client.get("/").text
+        start = text.index('name="dashboard-token" content="') + len('name="dashboard-token" content="')
+        return text[start:text.index('"', start)]
+
+    @pytest.fixture
+    def client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        """Its own database: these tests write the PAPER/LIVE selection."""
+        from ems import db as _db
+        from ems.execution import live_control
+
+        monkeypatch.setattr(_db, "DB_PATH", tmp_path / "mode.db")
+        with TestClient(app) as c:
+            yield c
+        live_control.record_click("paper")
+
+    def test_the_page_has_the_control_and_a_token(self, client: TestClient):
+        text = client.get("/").text
+        assert "setMode('paper')" in text and "setMode('live')" in text
+        assert len(self._token(client)) > 30
+
+    def test_live_without_the_token_is_refused(self, client: TestClient):
+        from ems.execution import live_control
+        r = client.post("/api/mode", json={"mode": "live"}).json()
+        assert r["status"] == "error" and "clicking LIVE" in r["detail"]
+        assert not live_control.clicked_live()
+        r = client.post("/api/mode", json={"mode": "live"},
+                        headers={"X-Dashboard-Token": "not-the-token"}).json()
+        assert r["status"] == "error"
+
+    def test_a_click_with_the_token_selects_live(self, client: TestClient):
+        from ems.execution import live_control
+        r = client.post("/api/mode", json={"mode": "live"},
+                        headers={"X-Dashboard-Token": self._token(client)}).json()
+        assert r["status"] == "ok" and r["mode"] == "live" and live_control.clicked_live()
+        assert "Operator selected LIVE" in client.get("/api/data").json()["activity"]
+        r = client.post("/api/mode", json={"mode": "paper"}).json()  # PAPER needs no token
+        assert r["status"] == "ok" and not live_control.clicked_live()
+
+    def test_a_bad_mode_is_refused(self, client: TestClient):
+        assert client.post("/api/mode", json={"mode": "shadow"}).json()["status"] == "error"
+
+    def test_cors_stays_local(self, client: TestClient):
+        r = client.options("/api/mode", headers={
+            "Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+        assert r.headers.get("access-control-allow-origin") != "*"
+        assert "evil.example" not in (r.headers.get("access-control-allow-origin") or "")
+
+    def test_no_browser_dialogs(self, client: TestClient):
+        js = client.get("/static/dashboard.js").text
+        for dialog in ("confirm(", "alert(", "prompt("):
+            assert dialog not in js, dialog

@@ -60,10 +60,10 @@ class TestButtonInteractivity:
     def test_refresh_button(self, client: TestClient):
         assert "handleRefresh()" in client.get("/").text
 
-    def test_no_start_stop_or_mode_controls(self, client: TestClient):
+    def test_no_start_stop_but_a_paper_live_control(self, client: TestClient):
         text = client.get("/").text
         assert "handleStart()" not in text and "handleStop()" not in text
-        assert "setMode(" not in text
+        assert "setMode('live')" in text
 
 
 class TestApiRoundTrip:

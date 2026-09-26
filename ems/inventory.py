@@ -117,12 +117,15 @@ FAMILIES: tuple[Family, ...] = (
             "order and the notional cap, on paper always and on live when armed."
         ),
         status=RUNNING,
-        record="Paper orders from 2026-09-26",
+        record="Paper orders from 2026-09-26; live only while the operator arms it",
         switch="kelly_horse_race",
         shared=(
+            "ems/execution/clob.py",
             "ems/execution/controls.py",
             "ems/execution/endpoints.py",
             "ems/execution/gate.py",
+            "ems/execution/journal.py",
+            "ems/execution/live_control.py",
             "ems/execution/queue.py",
             "ems/execution/resting.py",
             "ems/execution/tape.py",

@@ -6,6 +6,7 @@ Starts the WebSocket market-data hub and the strategies (Fade 1h Momentum on
 Endpoints:
     GET  /                   — the dashboard page (HTML)
     POST /api/runtime-config — a strategy switch or a SETTINGS knob
+    POST /api/mode           — the PAPER/LIVE selection (LIVE needs the page's token)
     GET  /api/data           — the page's fragments as JSON
     GET  /api/stream         — Server-Sent Events for live updates
     GET  /strategy-docs      — the strategy docs (``docs_view``)
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from html import escape
@@ -33,6 +35,8 @@ from ems.db import connect, init_db, notify  # type: ignore[import-untyped]
 from ems.logging_setup import get_logger  # type: ignore[import-untyped]
 from ems import runtime_knobs as _knobs
 from ems import strategies as _strategies
+from ems.execution import controls as _controls
+from ems.execution import live_control as _live_control
 from ems.dashboard.execution_view import execution_view_html
 
 log = get_logger("dashboard")
@@ -105,8 +109,27 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Dashboard-Token"],
 )
+
+# A new token each process, put in the page it serves. Only a click on that page carries it,
+# so only the operator's click in this dashboard session can select LIVE (AGENTS.md).
+_DASHBOARD_TOKEN = secrets.token_urlsafe(32)
+
+
+def _has_dashboard_token(request: Request) -> bool:
+    return secrets.compare_digest(request.headers.get("x-dashboard-token", ""),
+                                  _DASHBOARD_TOKEN)
+
+
+async def _mode_context() -> dict[str, Any]:
+    """The PAPER/LIVE control's state for the page."""
+    try:
+        mode = await _controls.requested_mode()
+    except Exception:  # noqa: BLE001 — shown as PAPER; the strategies fail closed anyway
+        mode = "paper"
+    status = await _live_control.live_status()
+    return {"mode": mode, "live_armed": status.armed, "live_hint": status.message}
 
 app.mount("/static", StaticFiles(directory=str(dashboard_dir / "static")), name="static")
 
@@ -171,6 +194,7 @@ _FEED_KIND = {
     "kelly_fill": "trade",
     "kelly_settled": "trade",
     "runtime_config": "config",
+    "mode": "config",
 }
 
 
@@ -221,8 +245,33 @@ async def dashboard(request: Request) -> Any:
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {**await _page_data(), "static_version": _STATIC_VERSION},
+        {**await _page_data(), **await _mode_context(), "static_version": _STATIC_VERSION,
+         "dashboard_token": _DASHBOARD_TOKEN},
     )
+
+
+@app.post("/api/mode")
+async def api_mode(request: Request) -> dict[str, Any]:
+    """Select PAPER or LIVE. LIVE needs the token only this process's page carries, so it is
+    selected only by the operator's click here; PAPER is always allowed (it sends nothing).
+    Audited to the activity feed."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    mode = str((body or {}).get("mode", "")).strip().lower()
+    if mode not in ("paper", "live"):
+        return {"status": "error", "detail": "mode must be paper or live"}
+    if mode == "live" and not _has_dashboard_token(request):
+        return {"status": "error",
+                "detail": "LIVE can only be selected by clicking LIVE in the dashboard."}
+    await _live_control.select_mode(mode, clicked=True)
+    status = await _live_control.live_status()
+    await notify("mode", f"Operator selected {mode.upper()}. {status.message}",
+                 {"mode": mode, "live_armed": status.armed})
+    log.info("mode_selected", mode=mode, live_armed=status.armed, state=status.state)
+    return {"status": "ok", "mode": mode, "live_armed": status.armed,
+            "detail": status.message}
 
 
 @app.post("/api/runtime-config")

@@ -14,6 +14,13 @@
   volatility, rolls a die weighted by it for the side, and rests one passive
   buy at that side's best bid with a random size between the venue's minimum
   and $5. Its doc is `docs/strategies/kelly_horse_race.md`.
+- Added: Kelly horse-race's live leg, as the operator decided and AGENTS.md
+  records under "Live trading": BTC 15m only, post-only GTD buys through
+  `ems/execution/clob.py`, every placement and cancel journaled to
+  `live_orders`. It is armed only while LIVE is selected and clicked in the
+  dashboard in this process, the wallet config passes and the strategy's switch
+  is on. The top bar has a PAPER/LIVE control again; `BOT_MODE=live` alone never
+  trades. The CLOB client is the optional `live` extra.
 
 ## Unreleased — one package, every dashboard card folds (2026-09-26)
 

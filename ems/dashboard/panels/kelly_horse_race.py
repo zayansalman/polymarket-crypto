@@ -35,7 +35,10 @@ MAX_ERRORS = 6
 
 ENDPOINT_PILLS: dict[str, dict[str, tuple[str, str]]] = {
     "paper": {"on": ("PAPER ON", "paper"), "kill_switch": ("KILL SWITCH", "down")},
-    "live": {"on": ("LIVE ON", "live"), "not_built": ("LIVE NOT BUILT", "off"),
+    "live": {"on": ("LIVE ARMED", "live"), "not_built": ("NO LIVE VENUE", "off"),
+             "not_selected": ("LIVE OFF", "off"), "not_clicked": ("LIVE NOT CLICKED", "warn"),
+             "no_wallet": ("LIVE: WALLET", "warn"), "mode_unknown": ("MODE UNKNOWN", "warn"),
+             "boot_failed": ("LIVE SIGN-IN FAILED", "down"),
              "kill_switch": ("KILL SWITCH", "down")},
 }
 LOOP_PILLS: dict[str, tuple[str, str]] = {
