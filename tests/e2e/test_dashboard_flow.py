@@ -40,8 +40,8 @@ class TestFullPageLoad:
 
     def test_ems_panels_present(self, client: TestClient):
         text = client.get("/").text
-        for panel in ("DECISION ENGINE", "LIVE MARKET", "PERFORMANCE / ALPHA",
-                      "TCA", "TRADE BLOTTER", "execution-grid", "ribbon"):
+        for panel in ("FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M", "SETTINGS",
+                      "execution-grid"):
             assert panel in text
 
     def test_ems_content_container(self, client: TestClient):
@@ -57,34 +57,24 @@ class TestFullPageLoad:
 
 
 class TestButtonInteractivity:
-    def test_start_button(self, client: TestClient):
-        text = client.get("/").text
-        assert "handleStart()" in text
-        assert "Start" in text
-
-    def test_stop_button(self, client: TestClient):
-        text = client.get("/").text
-        assert "handleStop()" in text
-
     def test_refresh_button(self, client: TestClient):
         assert "handleRefresh()" in client.get("/").text
 
+    def test_no_start_stop_or_mode_controls(self, client: TestClient):
+        text = client.get("/").text
+        assert "handleStart()" not in text and "handleStop()" not in text
+        assert "setMode(" not in text
+
 
 class TestApiRoundTrip:
-    def test_start_returns_status(self, client: TestClient):
-        r = client.post("/api/start")
-        assert r.status_code == 200 and "status" in r.json()
-
-    def test_stop_returns_status(self, client: TestClient):
-        r = client.post("/api/stop")
-        assert r.status_code == 200 and "status" in r.json()
-
-    def test_data_after_start_stop_cycle(self, client: TestClient):
-        client.post("/api/start")
-        client.post("/api/stop")
+    def test_a_switch_flip_shows_on_the_next_page(self, client: TestClient):
+        body = {"key": "strategy", "value": {"name": "fade_1h_momentum_15m", "enabled": False}}
+        assert client.post("/api/runtime-config", json=body).json()["status"] == "ok"
         data = client.get("/api/data").json()
-        assert "execution_view" in data
-        assert "activity" in data
+        assert "execution_view" in data and "activity" in data
+        assert "turned Fade 1h Momentum on 15m OFF" in data["activity"]
+        body["value"]["enabled"] = True
+        assert client.post("/api/runtime-config", json=body).json()["status"] == "ok"
 
 
 class TestStaticAssets:
@@ -100,8 +90,8 @@ class TestStaticAssets:
 
     def test_js_has_core_functions(self, client: TestClient):
         js = client.get("/static/dashboard.js").text
-        for fn in ("showToast", "handleStart", "handleStop", "handleRefresh",
-                   "updateDashboard", "connectSSE", "updateSseIndicator"):
+        for fn in ("showToast", "handleRefresh", "updateDashboard", "connectSSE",
+                   "updateSseIndicator", "setKnob", "setStrategy"):
             assert fn in js, f"missing JS function: {fn}"
 
 

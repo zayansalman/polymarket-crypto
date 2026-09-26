@@ -1,18 +1,13 @@
 """FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health.
 
-Rows come from the always-on feed monitor (``polymarket_exec/ops/feed_monitor.py``),
-the market-data hub (``polymarket_exec/marketdata/hub.py``), the venue flow recorder
-and the macro recorder, which check every feed directly — so the card is live whether
-or not the bot loop is running. Rows are plain data (``FeedRow``) so new venues are one
-more row.
+Rows come from the market-data hub (``polymarket_exec/marketdata/hub.py``), which checks
+every feed directly. Rows are plain data (``FeedRow``) so new sources are one more row.
 
 Columns: Feed | Connection (how the data arrives and how often; the endpoint on hover)
 | Used for | Used by (the components that consume it today) | Delay | Status.
 
-Delay is the age of the latest print for the Chainlink WS stream and the RTDS price
-rows, the round-trip time of the latest check for each monitored REST feed, the served
-event latency (p50, the slowest market in use) for the Polymarket books, and the age of
-the last successful pull for recorder feeds.
+Delay is the age of the latest print for the RTDS price rows and the served event
+latency (p50, the slowest market in use) for the Polymarket books.
 
 Polymarket books are streamed on demand. Their summary row takes its status and delay
 from the markets in use only, and lists their owners. Under it, a grid shows every
@@ -26,12 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from html import escape
 
-import config as _config
 from polymarket_exec.marketdata import hub as md_hub
 from polymarket_exec.marketdata import rtds_stream as rs
-from polymarket_exec.ops import feed_monitor as fm
-from polymarket_exec.ops import flow_recorder as fr
-from polymarket_exec.ops import macro_recorder as mr
 
 # A Gamma lookup error older than this is history, not the reason a market has no tokens.
 GAMMA_ERROR_FRESH_S = 120.0
@@ -41,14 +32,6 @@ SLOW_MS = 2000.0
 COLUMNS = 6
 
 # Who consumes a feed today: components, not files.
-BOT_LOOP = "bot loop"
-TICKET = "order ticket"
-SCANNER = "daily scanner"
-HUB = "market hub"
-LIVE_EXECUTOR = "live executor"
-FEEDS_CHECK = "FEEDS check"  # the feed monitor itself: connected and checked, loop or not
-FLOW_RECORDER = "flow recorder"
-MACRO_RECORDER = "macro recorder"
 FADE_1H = "Fade 1h Momentum on 15m"
 # The hub keeps price history for strategies. Fade 1h Momentum on 15m reads all three: the
 # Chainlink price as the price now, the TWAP-60s prints for the price to beat and the closing
@@ -91,59 +74,6 @@ class FeedRow:
     grid: MarketGrid | None = None  # Polymarket books: every available market
 
 
-# The feed monitor's WebSocket row.
-_WS_NAME, _WS_ROLE, _WS_SOURCE = "Chainlink BTC/USD", "spot · vol", "RTDS · crypto_prices_chainlink"
-_WS_CONNECTION = "WebSocket · RTDS"
-_WS_USED_BY = _by(BOT_LOOP, FEEDS_CHECK)
-
-# (probe key, name, used for, endpoint, used by) — order is the card's row order.
-# The monitor checks each one every interval_s, as the loop would call it.
-_REST_FEEDS = (
-    (fm.CHAINLINK_REST, "Chainlink BTC/USD", "window open", "crypto-price API",
-     _by(BOT_LOOP, FEEDS_CHECK)),
-    (fm.GAMMA, "Polymarket Gamma", "market lookup", "Gamma /markets",
-     _by(BOT_LOOP, TICKET, SCANNER, HUB, FEEDS_CHECK)),
-    (fm.CLOB_BOOK, "Polymarket book", "UP/DOWN quotes", "CLOB /book",
-     _by(BOT_LOOP, TICKET, LIVE_EXECUTOR, FEEDS_CHECK)),
-    (fm.BINANCE, "Binance BTCUSDT 1s", "vol backup", "Binance /api/v3/klines 1s",
-     _by(BOT_LOOP, FEEDS_CHECK)),
-)
-
-# How a flow feed arrives: REST on every recorder pass, REST once an hour, or a WebSocket.
-EACH_PASS = "each pass"
-ONCE_AN_HOUR = "once an hour"
-
-# (flow feed key, name, used for, endpoint, connection, quiet_ok) — venue flow rows, in
-# card order. quiet_ok: silence on a connected socket is normal (sparse fills, liquidations).
-_FLOW_FEEDS = (
-    (fr.BINANCE_SPOT_BTC, "Binance BTCUSDT 1h", "hourly flow", "Binance /api/v3/klines 1h",
-     EACH_PASS, False),
-    (fr.BINANCE_SPOT_ETH, "Binance ETHUSDT", "hourly flow", "Binance /api/v3/klines 1h",
-     EACH_PASS, False),
-    (fr.BINANCE_PERP_BTC, "Binance perp BTCUSDT", "hourly flow", "Binance /fapi/v1/klines 1h",
-     EACH_PASS, False),
-    (fr.BINANCE_PERP_STATE, "Binance perp BTCUSDT", "funding · OI",
-     "Binance premiumIndex · openInterest", ONCE_AN_HOUR, False),
-    (fr.BINANCE_LIQ, "Binance liquidations", "liquidation flow", "Binance !forceOrder@arr",
-     "WebSocket · Binance futures", True),
-    (fr.KRAKEN_SPOT, "Kraken BTC/USD", "hourly flow", "Kraken v2 trade",
-     "WebSocket · Kraken", False),
-    (fr.KRAKEN_FUTURES, "Kraken PF_XBTUSD", "hourly flow", "Kraken Futures v1 trade",
-     "WebSocket · Kraken Futures", True),
-    (fr.KRAKEN_FUTURES_STATE, "Kraken PF_XBTUSD", "funding · OI", "Kraken Futures /tickers",
-     ONCE_AN_HOUR, False),
-)
-
-# (macro source key, name, used for, endpoint) — macro calendar rows, in card order.
-_MACRO_FEEDS = (
-    (mr.BLS_SCHEDULE, "BLS schedule", "CPI · jobs · PPI times", "bls.gov ICS"),
-    (mr.BEA_SCHEDULE, "BEA schedule", "GDP · PCE times", "bea.gov ICS"),
-    (mr.CENSUS_SCHEDULE, "Census schedule", "retail sales times", "census.gov calendar"),
-    (mr.FED_CALENDAR, "Fed calendar", "FOMC · speeches", "federalreserve.gov JSON"),
-    (mr.FF_WEEK, "ForexFactory week", "forecasts · claims", "faireconomy JSON"),
-)
-_MACRO_CADENCE_S = {source.key: source.cadence_s for source in mr.default_sources()}
-
 # (price source, name, used for) — RTDS reference price rows, in card order.
 _PRICE_FEEDS = (
     (rs.CHAINLINK, "Chainlink prices", "spot · vol"),
@@ -162,13 +92,8 @@ BOOKS_LAG_S = 5.0
 # A reference price whose newest print is older than this is flagged.
 PRICE_STALE_S = 10.0
 
-# A connected trade socket with no frame for this long is flagged (or QUIET if normal).
-WS_STALE_S = 120.0
 # A socket that has not connected yet this soon after start is "connecting", not down.
 WS_CONNECT_GRACE_S = 30.0
-# A rate-limited macro source is retried on the recorder's first tick after its wait ends,
-# behind any sources ahead of it in that pass: its row stays WAIT for a tick plus this.
-MACRO_WAIT_GRACE_S = 30.0
 
 
 def _secs(v: float) -> str:
@@ -183,106 +108,8 @@ def _ms(v: float) -> str:
     return f"{v:.0f}ms" if v < 1000 else _secs(v / 1000)
 
 
-def _age(v: float) -> str:
-    """Long ages, coarse: '42s', '17m', '5h03m', '2d04h'."""
-    s = max(0, int(v))
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m"
-    if s < 86_400:
-        return f"{s // 3600}h{s % 3600 // 60:02d}m"
-    return f"{s // 86_400}d{s % 86_400 // 3600:02d}h"
-
-
-def _every(seconds: float) -> str:
-    """A cadence in words: 'every 10 s', 'every 2 min', 'hourly', 'every 6 h'."""
-    s = int(round(seconds))
-    if s == 3600:
-        return "hourly"
-    if s > 3600 and s % 3600 == 0:
-        return f"every {s // 3600} h"
-    if s >= 120 and s % 60 == 0:
-        return f"every {s // 60} min"
-    return f"every {s} s"
-
-
 def _described(row: FeedRow, connection: str, used_by: str) -> FeedRow:
     return replace(row, connection=connection, used_by=used_by)
-
-
-def _ws_row(snap: fm.FeedsSnapshot) -> FeedRow:
-    name, role, source = _WS_NAME, _WS_ROLE, _WS_SOURCE
-    age = snap.ws_print_age_s
-    delay = _secs(age) if age is not None else "—"
-    delay_warn = age is not None and age > _config.CHAINLINK_STALE_SECONDS
-    if snap.ws_fresh:
-        return FeedRow(name, role, source, delay, "OK", "on", delay_warn)
-    if snap.ws_connected:
-        return FeedRow(name, role, source, delay, "STALE", "warn", delay_warn,
-                       "connected, but no recent prints")
-    if snap.taken_at - snap.started_at <= _config.CHAINLINK_STALE_SECONDS:
-        return FeedRow(name, role, source, delay, "CONNECTING", "idle")
-    return FeedRow(name, role, source, delay, "DOWN", "down", delay_warn,
-                   "not connected (reconnecting)")
-
-
-def _rest_row(
-    snap: fm.FeedsSnapshot, key: str, name: str, role: str, source: str
-) -> FeedRow:
-    probe = snap.probes.get(key)
-    if probe is None:
-        return FeedRow(name, role, source, "—", "CHECKING", "idle")
-    delay = _ms(probe.latency_ms)
-    slow = probe.latency_ms > SLOW_MS
-    if snap.taken_at - probe.checked_at > snap.interval_s * 3:
-        return FeedRow(name, role, source, delay, "STALE", "warn", slow,
-                       f"last checked {_secs(snap.taken_at - probe.checked_at)} ago")
-    if probe.ok:
-        return FeedRow(name, role, source, delay, "OK", "on", slow)
-    if probe.detail == "empty book":
-        return FeedRow(name, role, source, delay, "EMPTY", "warn", slow, probe.detail)
-    return FeedRow(name, role, source, delay, "DOWN", "down", slow, probe.detail)
-
-
-def _flow_row(
-    flow: fr.FlowSnapshot, key: str, name: str, role: str, source: str, quiet_ok: bool
-) -> FeedRow:
-    st = flow.feeds.get(key)
-    if st is None or (st.kind == "rest" and st.ok is None):
-        return FeedRow(name, role, source, "—", "CHECKING", "idle")
-    if st.kind == "rest":
-        age = flow.taken_at - st.last_event_at if st.last_event_at is not None else None
-        delay = _secs(age) if age is not None else "—"
-        if not st.ok:
-            return FeedRow(name, role, source, delay, "DOWN", "down", False, st.detail)
-        if age is not None and age > flow.interval_s * 3:
-            return FeedRow(name, role, source, delay, "STALE", "warn", True,
-                           f"last success {delay} ago")
-        return FeedRow(name, role, source, delay, "OK", "on")
-    last = st.last_event_at if st.last_event_at is not None else st.connected_since
-    age = flow.taken_at - last if last is not None else None
-    delay = _secs(flow.taken_at - st.last_event_at) if st.last_event_at is not None else "—"
-    if not st.connected:
-        if flow.taken_at - flow.started_at <= WS_CONNECT_GRACE_S:
-            return FeedRow(name, role, source, delay, "CONNECTING", "idle")
-        return FeedRow(name, role, source, delay, "DOWN", "down", False,
-                       st.detail or "not connected (reconnecting)")
-    if age is not None and age > WS_STALE_S:
-        if quiet_ok:
-            return FeedRow(name, role, source, delay, "QUIET", "idle", False,
-                           "connected; no events lately (normal for this feed)")
-        return FeedRow(name, role, source, delay, "STALE", "warn", True,
-                       "connected, but no recent trades")
-    return FeedRow(name, role, source, delay, "OK", "on")
-
-
-def _flow_connection(flow: fr.FlowSnapshot, how: str) -> str:
-    if how == EACH_PASS:
-        return f"REST · {_every(flow.interval_s)}"
-    if how == ONCE_AN_HOUR:
-        return f"REST · {_every(3600)}"
-    return how
 
 
 # --- Polymarket books: markets in use, and the grid of every available market ----------
@@ -475,70 +302,16 @@ def _price_row(md: md_hub.MarketDataSnapshot, key: str, name: str, role: str) ->
     return FeedRow(name, role, source, delay, "DOWN", "down", stale, detail)
 
 
-def _macro_row(macro: mr.MacroSnapshot, key: str, name: str, role: str, source: str) -> FeedRow:
-    st = macro.feeds.get(key)
-    if st is None or st.last_attempt_at is None:
-        return FeedRow(name, role, source, "—", "CHECKING", "idle")
-    age = macro.taken_at - st.last_ok_at if st.last_ok_at is not None else None
-    delay = _age(age) if age is not None else "—"
-    stale_after = 2 * st.cadence_s + macro.tick_s
-    if not st.ok:
-        waiting = (
-            st.retry_after
-            and st.next_attempt_at is not None
-            and macro.taken_at < st.next_attempt_at + macro.tick_s + MACRO_WAIT_GRACE_S
-        )
-        if not waiting:
-            return FeedRow(name, role, source, delay, "DOWN", "down", False, st.detail)
-        # A rate limit that never lifts is an outage: no data for too long (or, never had
-        # any, the recorder running that long) is STALE, not a quiet WAIT.
-        no_data_for = age if age is not None else macro.taken_at - macro.started_at
-        if no_data_for > stale_after:
-            return FeedRow(name, role, source, delay, "STALE", "warn", True, st.detail)
-        return FeedRow(name, role, source, delay, "WAIT", "idle", False, st.detail)
-    if age is not None and age > stale_after:
-        return FeedRow(name, role, source, delay, "STALE", "warn", True,
-                       f"last success {delay} ago")
-    return FeedRow(name, role, source, delay, "OK", "on")
 
-
-def _macro_connection(macro: mr.MacroSnapshot, key: str) -> str:
-    st = macro.feeds.get(key)
-    cadence = st.cadence_s if st is not None else _MACRO_CADENCE_S.get(key)
-    return f"REST · {_every(cadence)}" if cadence else "REST"
-
-
-def build_rows(
-    snap: fm.FeedsSnapshot | None,
-    flow: fr.FlowSnapshot | None = None,
-    macro: mr.MacroSnapshot | None = None,
-    marketdata: md_hub.MarketDataSnapshot | None = None,
-) -> list[FeedRow]:
-    interval_s = snap.interval_s if snap is not None else fm.DEFAULT_INTERVAL_S
-    checked = f"REST · {_every(interval_s)}"
-    if snap is None:
-        # Feed monitor not running (only outside the dashboard app).
-        rows = [_described(FeedRow(_WS_NAME, _WS_ROLE, _WS_SOURCE, "—", "OFF", "idle"),
-                           _WS_CONNECTION, _WS_USED_BY)]
-        rows += [_described(FeedRow(name, role, source, "—", "OFF", "idle"), checked, used_by)
-                 for _key, name, role, source, used_by in _REST_FEEDS]
-    else:
-        rows = [_described(_ws_row(snap), _WS_CONNECTION, _WS_USED_BY)]
-        rows += [_described(_rest_row(snap, key, name, role, source), checked, used_by)
-                 for key, name, role, source, used_by in _REST_FEEDS]
-    if marketdata is not None:
-        rows.append(_books_row(marketdata))
-        rows += [_described(_price_row(marketdata, key, name, role), _RTDS_CONNECTION,
-                            PRICES_USED_BY)
-                 for key, name, role in _PRICE_FEEDS]
-    if flow is not None:
-        rows += [_described(_flow_row(flow, key, name, role, source, quiet_ok),
-                            _flow_connection(flow, how), FLOW_RECORDER)
-                 for key, name, role, source, how, quiet_ok in _FLOW_FEEDS]
-    if macro is not None:
-        rows += [_described(_macro_row(macro, key, name, role, source),
-                            _macro_connection(macro, key), MACRO_RECORDER)
-                 for key, name, role, source in _MACRO_FEEDS]
+def build_rows(marketdata: md_hub.MarketDataSnapshot | None) -> list[FeedRow]:
+    if marketdata is None:
+        # Hub not running (only outside the dashboard app).
+        return [_described(FeedRow(BOOKS_NAME, "Up/Down books · trades", BOOKS_SOURCE, "—",
+                                   "OFF", "idle"), BOOKS_CONNECTION, NO_OWNER)]
+    rows = [_books_row(marketdata)]
+    rows += [_described(_price_row(marketdata, key, name, role), _RTDS_CONNECTION,
+                        PRICES_USED_BY)
+             for key, name, role in _PRICE_FEEDS]
     return rows
 
 
@@ -577,18 +350,12 @@ def _row_html(r: FeedRow) -> str:
     return html + (_grid_html(r.grid) if r.grid is not None else "")
 
 
-def render(
-    snap: fm.FeedsSnapshot | None,
-    flow: fr.FlowSnapshot | None = None,
-    macro: mr.MacroSnapshot | None = None,
-    marketdata: md_hub.MarketDataSnapshot | None = None,
-) -> str:
-    rows = build_rows(snap, flow, macro, marketdata)
+def render(marketdata: md_hub.MarketDataSnapshot | None) -> str:
+    rows = build_rows(marketdata)
     issues = sum(r.level in ("warn", "down") for r in rows)
     note = "all OK" if not issues else f"{issues} issue{'s' if issues != 1 else ''}"
-    # A <details> fold like ORDER SIZE: the table is long, and the issue count
-    # stays in the header when it is closed. dashboard.js stores open/closed
-    # by ``data-fold`` and re-applies it after every refresh swaps this HTML out.
+    # A <details> fold: dashboard.js stores open/closed by ``data-fold`` and
+    # re-applies it after every refresh swaps this HTML out.
     return (
         "<details class='card feeds-card fold' data-fold='feeds' open>"
         "<summary class='card-h'><span class='fold-title'>FEEDS</span>"

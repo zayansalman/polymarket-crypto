@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
 | Code | `polymarket_bot/fade_1h_momentum_15m/` — 9 files |
-| Code fingerprint | `a0649b0d0711` |
+| Code fingerprint | `0bc09fea343c` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -1004,6 +1004,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-26 · `0bc09fea343c` · Every other strategy family was deleted (BTC Up/Down loop and its live executor, maker, daily altcoin scanner). The browser headers the executor borrowed from the maker now live in executor.py; behaviour unchanged.
 - 2026-09-26 · `a0649b0d0711` · Merged the historical test, worked examples and TWAP settlement research from develop; the doc now describes the paper strategy running in the app.
 - 2026-09-26 · `e97d1c0c4462` · Review fixes. Both sides are priced and the one adding the most expected log growth is rested as scaled passive limit orders: a parent order split into child orders at price levels at or under the best bid, none at or across its own book. A losing position is reduced by a resting passive sell of the shares held, never by buying the other side. Paper orders are stamped when written, fill from the real tape through the depth ahead level by level, and keep their queue place across passes. Joint sizing accounts for each bet's side. The price now is the live Chainlink price. The learner holds the price-process fit as a fixed prior. The card shows every error of a pass, input warnings, and a dead or stopped loop. Standard terms throughout.
 - 2026-09-22 · `32a1484ce579` · The model is plugged in, so it now bids on paper. decide.py prices each window with model.py, a standard-library port of the research model for the TWAP-60s settlement (checked against the research code to 1e-9 on 197 cases), follows the market with fitted anchor weights, and gets the fill and win chances at each price level, and the quotes for hedging on the other side (replaced on 2026-09-26 by a resting sell of the shares held), from 2,000 simulated paths. Starting dials (version 1) fitted on the Sep 17-20 tape: w_M 0.45, w_S 0.57, rho 0.75. learner.py moves every dial one bounded step after each settled window (recursive maximum likelihood, about two days of memory).

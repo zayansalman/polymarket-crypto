@@ -6,23 +6,16 @@ and changes it from the dashboard, and the change applies on the next tick
 with no restart. Absent an operator override, ``Knob.default`` applies, so a
 freshly-cloned checkout behaves exactly like the old env defaults did.
 
-Storage: the existing generic ``config`` key/value table (``db.get_config`` /
-``set_config``), under ``runtime.*`` keys — the same table and prefix
-``polymarket_exec/execution/gate.py`` already uses for
-``runtime.max_trade_usd`` / ``runtime.trade_shares``. Those two stay hand-rolled
-in ``gate.py`` (they have unique dollar-vs-shares precedence logic); everything
-else registers here.
+Storage: the generic ``config`` key/value table (``db.get_config`` /
+``set_config``), under ``runtime.*`` keys.
 
 Two read paths, matching how each caller needs it:
 
 * ``await get(name)`` — the async, always-current read. Fine anywhere already
-  inside an ``async def`` (the dashboard's ``execution_view.py``, the gate's
-  ``refresh_*`` methods, the daily scanner's own loop).
+  inside an ``async def`` (the dashboard's ``execution_view.py``, a strategy's
+  own loop).
 * ``cached(name)`` — a synchronous read of whatever the last ``refresh_cache()``
-  call loaded. Needed by ``polymarket_bot/paper.py``, which reads several of
-  these knobs from plain ``def`` helpers (and one module-level constant at
-  import time) that cannot ``await``. ``refresh_cache()`` is called once per
-  tick, mirroring ``RiskGate.refresh_runtime_limits()``.
+  call loaded, for plain ``def`` helpers that cannot ``await``.
 """
 
 from __future__ import annotations
@@ -49,49 +42,6 @@ class Knob:
 
 
 KNOBS: dict[str, Knob] = {
-    # --- Maker (polymarket_bot/maker/) ------------------------------------
-    # Measured over 7,000 resolved crypto Up/Down markets: real resting orders
-    # that filled between 0.55 and 0.92 returned +2 to +6.6c/share held to
-    # resolution, fee-free, while fills under the midpoint lost 5-7c. The band
-    # is a knob and not a constant because that result is the thing under test.
-    # The maker's on/off switch moved to ``polymarket_bot.strategies`` so it
-    # sits with the other strategies and obeys the same "off stops new entries
-    # only" contract. A second switch here would be one more place for the two
-    # to disagree.
-    "maker_band_lo": Knob(
-        "runtime.maker.band_lo", 0.55, "float",
-        "Quote only at or above", 0.05, 0.95, group="Maker",
-    ),
-    "maker_band_hi": Knob(
-        "runtime.maker.band_hi", 0.92, "float",
-        "Quote only below", 0.10, 1.0, group="Maker",
-    ),
-    "maker_size": Knob(
-        "runtime.maker.size", 25.0, "float",
-        "Shares per quote", 5.0, 1000.0, unit="sh", group="Maker",
-    ),
-    # Improving a tick costs 1c of the measured edge and buys front of queue.
-    # Joining keeps the cent and waits behind everything already resting. Both
-    # are recorded with their queue depth so the ledger can settle the question.
-    "maker_improve_tick": Knob(
-        "runtime.maker.improve_tick", True, "bool",
-        "Improve best bid by one tick", group="Maker",
-    ),
-    "maker_max_spread_cents": Knob(
-        "runtime.maker.max_spread_cents", 6.0, "float",
-        "Skip books wider than", 1.0, 50.0, unit="c", group="Maker",
-    ),
-    # A fill in the last seconds is a coin flip on a stale price, not the edge
-    # that was measured.
-    "maker_min_seconds_left": Knob(
-        "runtime.maker.min_seconds_left", 120, "int",
-        "Do not quote inside", 0, 3600, unit="s", group="Maker",
-    ),
-    "maker_poll_interval_seconds": Knob(
-        "runtime.maker.poll_interval_seconds", 45.0, "float",
-        "Quote/fill poll interval", 10.0, 600.0, unit="s", group="Maker",
-    ),
-    # --- Fade 1h Momentum on 15m (polymarket_bot/fade_1h_momentum_15m/) ----
     # Paper only. Side, price and size come out of the maths; these are the
     # operator's preferences and caps around it, read fresh every pass. The
     # Kelly multiplier is the one preference inside the sizing (spec section 2).
@@ -159,70 +109,6 @@ KNOBS: dict[str, Knob] = {
     "fade1h_trade_xrp": Knob(
         "runtime.fade_1h.trade_xrp", True, "bool", "Trade XRP",
         group="Fade 1h Momentum on 15m",
-    ),
-    # --- Paper strategy (polymarket_bot/paper.py) -------------------------
-    "paper_min_trade_usd": Knob(
-        "runtime.paper.min_trade_usd", 1.0, "float", "Min trade size",
-        0.0, 1000.0, unit="USD", group="Paper strategy",
-    ),
-    "paper_max_trade_usd": Knob(
-        "runtime.paper.max_trade_usd", 5.0, "float", "Max trade size (paper)",
-        0.0, 1000.0, unit="USD", group="Paper strategy",
-    ),
-    "paper_target_return": Knob(
-        "runtime.paper.target_return", 0.10, "float",
-        "Target return (take-profit)", 0.0, 5.0, group="Paper strategy",
-    ),
-    "paper_stop_return": Knob(
-        "runtime.paper.stop_return", -0.08, "float",
-        "Stop return (stop-loss)", -1.0, 0.0, group="Paper strategy",
-    ),
-    "paper_tick_seconds": Knob(
-        "runtime.paper.tick_seconds", 5.0, "float", "Tick interval",
-        1.0, 300.0, unit="s", group="Paper strategy",
-    ),
-    "paper_time_exit_seconds": Knob(
-        "runtime.paper.time_exit_seconds", 45, "int",
-        "Time-based exit (seconds remaining)", 0, 300, unit="s", group="Paper strategy",
-    ),
-    "exit_style": Knob(
-        "runtime.paper.exit_style", "settle", "enum", "Exit style",
-        choices=("settle", "scalp"), group="Paper strategy",
-    ),
-    # --- Live risk limits (polymarket_exec/execution/gate.py, live.py) -----
-    "live_daily_loss_halt_usd": Knob(
-        "runtime.live.daily_loss_halt_usd", 10.0, "float",
-        "Daily loss halt", 0.0, 100000.0, unit="USD", group="Live risk limits",
-    ),
-    "live_max_entry_slippage": Knob(
-        "runtime.live.max_entry_slippage", 0.02, "float",
-        "Max entry slippage", 0.0, 1.0, group="Live risk limits",
-    ),
-    "live_bankroll_cap_usd": Knob(
-        "runtime.live.bankroll_cap_usd", 0.0, "float",
-        "Daily bankroll cap (0 = disabled)", 0.0, 1000000.0,
-        unit="USD", group="Live risk limits",
-    ),
-    "live_exit_fill_timeout_seconds": Knob(
-        "runtime.live.exit_fill_timeout_seconds", 10.0, "float",
-        "Exit fill timeout", 0.0, 300.0, unit="s", group="Live risk limits",
-    ),
-    # --- Daily altcoin scanner (polymarket_bot/daily/scanner.py) -----------
-    "daily_trade_usd": Knob(
-        "runtime.daily.trade_usd", 10.0, "float", "Trade size",
-        0.0, 1000.0, unit="USD", group="Daily scanner",
-    ),
-    "daily_scan_interval_seconds": Knob(
-        "runtime.daily.scan_interval_seconds", 60.0, "float",
-        "Scan interval", 5.0, 3600.0, unit="s", group="Daily scanner",
-    ),
-    "daily_entry_edge_min": Knob(
-        "runtime.daily.entry_edge_min", 0.045, "float", "Min entry edge",
-        0.0, 1.0, group="Daily scanner",
-    ),
-    "daily_vol_lookback_days": Knob(
-        "runtime.daily.vol_lookback_days", 30, "int",
-        "Volatility lookback", 1, 365, unit="d", group="Daily scanner",
     ),
 }
 

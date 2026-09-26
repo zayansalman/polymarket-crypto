@@ -6,7 +6,6 @@ import random
 
 import pytest
 
-from polymarket_bot.paper import BookTop
 from polymarket_exec.marketdata.order_book import LastTrade, OrderBook, TopOfBook
 
 WIRE_BIDS = ((0.01, 2655.36), (0.02, 884.92), (0.79, 1631.88), (0.8, 282.0))  # ascending
@@ -152,9 +151,9 @@ def test_empty_book() -> None:
     ("bid", "ask"),
     [(0.5, 0.6), (0.6, 0.5), (0.5, 0.5), (None, 0.5), (0.5, None), (None, None)],
 )
-def test_crossed_matches_the_paper_book_top(bid, ask) -> None:
+def test_crossed_means_a_bid_above_the_ask(bid, ask) -> None:
     ours = TopOfBook("tok", bid, ask, None, None, None, None, None, None)
-    assert ours.crossed is BookTop(best_bid=bid, best_ask=ask).crossed
+    assert ours.crossed is (bid is not None and ask is not None and bid > ask)
 
 
 def test_freshness_counts_events_at_the_newest_server_time() -> None:

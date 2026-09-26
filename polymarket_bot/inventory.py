@@ -1,36 +1,23 @@
-"""Every strategy family in this repo, including the ones that do nothing.
+"""Every strategy family in this repo.
 
 ``strategies.py`` is the switch registry: only things an operator can turn on
-and off. This module is the fuller, uglier list — every strategy family that
-exists in the tree, whether it runs, whether anything can reach it at runtime,
-and what it has actually traded.
-
-It exists so the dashboard can show what the codebase really contains. A card
-that lists three working strategies, next to a tree holding eleven more in
-various states of abandonment, tells the operator the repo is tidy when it is
-not. Seeing the dead ones is the point: they get deleted because they are
-visible, not in spite of it.
-
-Statuses, narrowest to widest:
+and off. This module is the fuller list — every strategy family that exists in
+the tree, whether it runs, whether anything can reach it at runtime, and what it
+has actually traded — so the dashboard can show what the codebase really
+contains. Statuses, narrowest to widest:
 
 ``RUNNING``       auto-runs whenever the dashboard is up.
 ``GATED``         has a loop, but only runs while the operator holds Start.
 ``UNWIRED``       cannot reach a market: imported at runtime with nothing
                   wired to it, or built but not wired in yet.
 ``DEAD``          nothing imports it outside tests; it cannot run at all.
-                  No family holds this status today — chronos_signal.py and
-                  the shadow roster's table were deleted on 2026-09-21.
 
-Every entry was verified against the tree on 2026-09-21, the day
-chronos_signal.py, the shadow roster's table and five dead scratch databases
-were deleted off the back of this list — and the day #267 deleted the v0 stack
-and the pair-arb strategy, and copy-trade was removed, all of which dropped
-off it the same way. The same day the whole offline-only group went too —
-the 5m backtest and replay, the wallet-research scripts, the forecast journal
-and the Chainlink lead-lag study — and its status with it. ``tests/unit/
-test_inventory.py`` re-checks the falsifiable half of that on every run — that
-each path still exists, and that the switch registry and this list agree — so
-a family cannot quietly drop off the card by being deleted or renamed.
+On 2026-09-26 every family but Fade 1h Momentum on 15m was deleted: the BTC
+Up/Down loop and its live executor, the maker and the daily altcoin scanner.
+``tests/unit/test_inventory.py`` re-checks the falsifiable half of this list on
+every run — that each path still exists, and that the switch registry and this
+list agree — so a family cannot quietly drop off the card by being deleted or
+renamed.
 """
 
 from __future__ import annotations
@@ -77,33 +64,6 @@ class Family:
 
 
 FAMILIES: tuple[Family, ...] = (
-    # ---- running ------------------------------------------------------
-    Family(
-        key="maker",
-        label="Maker — rest on the favourite",
-        path="polymarket_bot/maker/",
-        what=(
-            "Rests one passive bid per crypto Up/Down market when the "
-            "favourite sits in the 0.55-0.92 band, never crosses, holds to "
-            "resolution. One fixed clip per market."
-        ),
-        status=RUNNING,
-        record="30 quotes · 16 settled −$36.44 · 3 filled, 11 resting",
-        switch="maker",
-    ),
-    Family(
-        key="daily_altcoin",
-        label="Daily altcoin scanner",
-        path="polymarket_bot/daily/",
-        what=(
-            "Scores each tracked altcoin's 24h Up/Down market against a "
-            "realized-volatility model every 60s and opens one flat-size "
-            "paper position on the strongest edge."
-        ),
-        status=RUNNING,
-        record="19 positions · 18 settled −$67.08 · 1 open",
-        switch="daily_altcoin",
-    ),
     Family(
         key="fade_1h_momentum_15m",
         label="Fade 1h Momentum on 15m",
@@ -131,25 +91,6 @@ FAMILIES: tuple[Family, ...] = (
             "call (paper-trade and learn): the paper record, not a backtest, "
             "shows whether the maths pays. The starting anchor weights and "
             "coin correlation come from 3.5 days of tape."
-        ),
-    ),
-    # ---- wired, but cannot trade --------------------------------------
-    Family(
-        key="btc_updown",
-        label="BTC Up/Down loop",
-        path="polymarket_bot/paper.py",
-        what=(
-            "Prices the selected Up/Down window against the Chainlink feed "
-            "and takes one confidence-sized entry per window."
-        ),
-        status=UNWIRED,
-        record="254 ticks · 0 positions, ever",
-        switch="btc_updown",
-        verdict=(
-            "market_selection.LOOP_SUPPORTED is empty and paper.py still "
-            "builds the retired btc-updown-5m slug. It ticks and never "
-            "enters. Either point it at the 15m family or delete it — the "
-            "TRADE BLOTTER card is permanently empty because of this."
         ),
     ),
 )

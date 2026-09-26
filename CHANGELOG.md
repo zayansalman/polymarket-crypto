@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Fade 1h Momentum on 15m is the only strategy (2026-09-26)
+
+Everything but Fade 1h Momentum on 15m was removed at the operator's request:
+the BTC Up/Down loop (with its Start/Stop controller, market selector, order
+ticket, live CLOB executor and risk gate), the maker, the daily altcoin
+scanner, the venue flow and macro recorders and the feed monitor, plus the
+dashboard cards, tables, knobs, tools, tests and docs that existed only for
+them. The dashboard keeps the FEEDS card (the market-data hub's rows), MY
+STRATEGIES, the fade card, the STRATEGY card, SETTINGS (fade's knobs), the
+activity log and the strategy docs. Paper only: no live order path exists.
+`config.py` keeps the data/dashboard settings, `BOT_MODE` (paper) and the
+kill switch; `db.py` keeps `config`, `notification_feed` and the `fade_*`
+tables. Existing databases keep their old tables untouched.
+
 ## Unreleased — Fade 1h Momentum on 15m runs as a paper strategy (2026-09-26)
 
 A new paper strategy for the BTC, ETH, SOL and XRP 15-minute Up/Down windows,

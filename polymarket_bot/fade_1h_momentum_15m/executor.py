@@ -103,7 +103,14 @@ from polymarket_bot.fade_1h_momentum_15m.ledger import (
     PlaceResult,
     Settlement,
 )
-from polymarket_bot.maker.quoter import UA as BROWSER_HEADERS
+
+# Browser-like headers for Polymarket's public REST endpoints, which answer a
+# bare client with a Cloudflare 403.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+    "Accept": "application/json",
+}
 
 log = structlog.get_logger(__name__)
 

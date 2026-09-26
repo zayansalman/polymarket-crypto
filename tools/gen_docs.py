@@ -151,8 +151,13 @@ def _dotted_name(rel_path: str) -> str:
     return ".".join(parts)
 
 
-def _imported_targets(text: str) -> set[str]:
-    """Dotted names this module references via import / from-import."""
+def _imported_targets(text: str, pkg: str = "") -> set[str]:
+    """Dotted names this module references via import / from-import.
+
+    ``pkg`` is the importing module's own package (dotted); it resolves
+    relative imports (``from . import x``, ``from ..y import z``) to absolute
+    names so they count as importers like any other.
+    """
     targets: set[str] = set()
     try:
         tree = ast.parse(text)
@@ -163,12 +168,28 @@ def _imported_targets(text: str) -> set[str]:
             for a in node.names:
                 targets.add(a.name)
         elif isinstance(node, ast.ImportFrom):
-            if node.module is None:  # relative import without module — skip
+            if node.level:  # relative: anchor on the importer's package
+                base_parts = pkg.split(".") if pkg else []
+                if node.level > 1:
+                    base_parts = base_parts[: len(base_parts) - (node.level - 1)]
+                base = ".".join(base_parts)
+                module = ".".join(p for p in (base, node.module) if p)
+            else:
+                module = node.module or ""
+            if not module:
                 continue
-            targets.add(node.module)
+            targets.add(module)
             for a in node.names:  # `from pkg import mod` → pkg.mod is a candidate
-                targets.add(f"{node.module}.{a.name}")
+                targets.add(f"{module}.{a.name}")
     return targets
+
+
+def _package_of(rel_path: str) -> str:
+    """Dotted package that relative imports inside *rel_path* resolve against."""
+    dotted = _dotted_name(rel_path)
+    if rel_path.endswith("/__init__.py"):
+        return dotted
+    return dotted.rsplit(".", 1)[0] if "." in dotted else ""
 
 
 def annotate_importers(root: Path, mods, test_dirs=("tests",)) -> None:
@@ -177,7 +198,7 @@ def annotate_importers(root: Path, mods, test_dirs=("tests",)) -> None:
         rel = src.relative_to(root).as_posix()
         if any(rel.startswith(td + "/") or rel == td for td in test_dirs):
             continue  # test importers don't count toward "wired"
-        for tgt in _imported_targets(_read_text(src)):
+        for tgt in _imported_targets(_read_text(src), _package_of(rel)):
             mod = known.get(tgt)
             if mod is not None and mod.path != rel:
                 mod.importers += 1

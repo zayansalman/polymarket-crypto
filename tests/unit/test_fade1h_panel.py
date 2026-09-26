@@ -752,7 +752,7 @@ async def test_a_loop_that_died_reaches_the_card_through_the_loader(
 async def test_the_card_sits_under_my_strategies_and_survives_a_bad_read(
         fade_db, monkeypatch: pytest.MonkeyPatch) -> None:
     page = await ev.execution_view_html()
-    where = [page.index(x) for x in ("MY STRATEGIES", panel.TITLE, "LIVE MARKET")]
+    where = [page.index(x) for x in ("MY STRATEGIES", panel.TITLE, "SETTINGS")]
     assert where == sorted(where)
 
     async def _broken() -> dict:
@@ -762,4 +762,4 @@ async def test_the_card_sits_under_my_strategies_and_survives_a_bad_read(
     page = await ev.execution_view_html()
     assert "Could not read this strategy's records: the ledger (RuntimeError: no such " \
            "table: fade_orders)" in page
-    assert "MY STRATEGIES" in page and "LIVE MARKET" in page
+    assert "MY STRATEGIES" in page and "SETTINGS" in page
