@@ -16,6 +16,9 @@
   docs/ROADMAP.md, docs/RESEARCH_LOOP.md and docs/CHRONOS_INTEGRATION.md moved
   to docs/archive/ (they describe removed lines). The `.claude` doc-gen hooks,
   paused for the rebuild, are back on.
+- Removed: the `py-clob-client-v2` dependency, the `httpx[http2]` extra and the
+  `setup` extra (`polymarket-client`). They backed the deleted live executor
+  and wallet tool; nothing in the tree imports them.
 
 ## Unreleased — Fade 1h Momentum on 15m is the only strategy (2026-09-26)
 

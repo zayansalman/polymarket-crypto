@@ -8,19 +8,16 @@ version = "0.2.0"
 description = "Local research and shadow/paper execution stack for Polymarket crypto binary markets"
 requires-python = ">=3.11"
 dependencies = [
-    # http2 extra (h2) is REQUIRED, not optional: the Polymarket crypto-price
-    # reference endpoint is Cloudflare-protected and 403s HTTP/1.1 requests, so
-    # the settlement client must speak HTTP/2 (#120).
-    "httpx[http2]>=0.27",
+    "httpx>=0.27",
     "aiosqlite>=0.20",
     "python-dotenv>=1.0",
     "structlog>=24.1",
     "fastapi>=0.110",
     "jinja2>=3.1",
     "uvicorn>=0.29",
-    "py-clob-client-v2>=1.0",
     "websockets>=12",
-    # IANA zones for zoneinfo (US Eastern release times); slim images lack system tzdata.
+    # IANA zones for zoneinfo (Up/Down windows are named in US Eastern time);
+    # slim images lack system tzdata.
     "tzdata>=2024.1",
     # Renders docs/strategies/*.md at /docs in the dashboard.
     "markdown-it-py>=3.0",
@@ -33,9 +30,6 @@ dependencies = [
 # no longer exists in the tree — only stale .pyc files remained.)
 test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
-# One-time live onboarding only (tools/live_detect_wallet.py): MetaMask wallet lookup.
-# Day-to-day trading uses py-clob-client-v2, a core dependency.
-setup = ["polymarket-client"]
 
 [tool.setuptools]
 py-modules = ["main"]
