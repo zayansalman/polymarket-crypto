@@ -641,3 +641,39 @@ body {
 @media (max-width: 1100px) {
   .fade-grid { grid-template-columns: 1fr; }
 }
+
+/* KELLY HORSE-RACE card (panels/kelly_horse_race.py) */
+.kelly-pills { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kelly-strip { display: flex; flex-wrap: wrap; gap: 12px 28px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.kelly-rec { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
+.kelly-rec b { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--text); }
+.kelly-rec b.pos { color: var(--pos); }
+.kelly-rec b.neg { color: var(--neg); }
+.kelly-mode { color: var(--label); font-size: 10px; letter-spacing: .06em; }
+.kelly-state { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.kelly-state .warn { color: var(--warn); }
+.kelly-state .down { color: var(--neg); }
+.kelly-state .kelly-err { padding-left: 12px; }
+.kelly-block { padding: 8px 0; border-top: 1px solid var(--border); }
+.kelly-h { font-size: 12px; margin-bottom: 6px; }
+.kelly-h span { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.kelly-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr); gap: 12px; }
+.kelly-kv { display: flex; flex-direction: column; gap: 6px; }
+.kelly-kv > div { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.kelly-kv > div > span { color: var(--label); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.kelly-kv b { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; color: var(--text); }
+.kelly-kv .pos { color: var(--pos); }
+.kelly-kv .neg { color: var(--neg); }
+.kelly-sub { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.kelly-reason { padding: 2px 0; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.kelly-reason.warn { color: var(--warn); }
+.kelly-reason.down { color: var(--neg); }
+.kelly-table { width: 100%; border-collapse: collapse; margin: 6px 0; font-family: var(--font-mono); font-size: 11px; }
+.kelly-table th { text-align: left; color: var(--label); font-weight: 500; font-size: 10px; padding: 3px 6px; border-bottom: 1px solid var(--border); }
+.kelly-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); color: var(--text); }
+.kelly-table .pos { color: var(--pos); }
+.kelly-table .neg { color: var(--neg); }
+.kelly-foot { border-top: 1px solid var(--border-strong); padding-top: 8px; font-size: 11px; color: var(--muted); }
+@media (max-width: 900px) {
+  .kelly-grid { grid-template-columns: 1fr; }
+}

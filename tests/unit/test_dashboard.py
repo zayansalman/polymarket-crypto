@@ -50,7 +50,7 @@ class TestDashboardPage:
     def test_has_the_cards(self, client: TestClient):
         text = client.get("/").text
         for panel in ("execution-grid", "FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M",
-                      "SETTINGS"):
+                      "KELLY HORSE-RACE", "SETTINGS"):
             assert panel in text, f"missing card: {panel}"
 
     def test_no_loop_controls(self, client: TestClient):
@@ -67,10 +67,11 @@ class TestDashboardPage:
         # Each card is a <details> fold; dashboard.js stores open/closed by
         # data-fold and re-applies it after every refresh swaps the HTML.
         text = client.get("/").text
-        for key in ("feeds", "strategies", "strategy", "fade-1h", "settings"):
+        for key in ("feeds", "strategies", "strategy", "fade-1h", "kelly-horse-race",
+                    "settings"):
             assert f"data-fold='{key}'" in text, key
         assert "<section class='card" not in text
-        assert text.count("<summary class='card-h'>") == 5
+        assert text.count("<summary class='card-h'>") == 6
 
 
 class TestStaticFiles:

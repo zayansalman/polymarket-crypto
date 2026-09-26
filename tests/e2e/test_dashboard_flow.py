@@ -40,8 +40,8 @@ class TestFullPageLoad:
 
     def test_ems_panels_present(self, client: TestClient):
         text = client.get("/").text
-        for panel in ("FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M", "SETTINGS",
-                      "execution-grid"):
+        for panel in ("FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M", "KELLY HORSE-RACE",
+                      "SETTINGS", "execution-grid"):
             assert panel in text
 
     def test_ems_content_container(self, client: TestClient):

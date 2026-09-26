@@ -18,6 +18,7 @@ from ems.marketdata import hub as marketdata_hub
 from ems.dashboard.panels import (
     fade_1h as fade_1h_panel,
     feeds,
+    kelly_horse_race as kelly_panel,
     settings as settings_panel,
     strategies as strategies_panel,
     strategy_card as strategy_card_panel,
@@ -85,6 +86,43 @@ async def fade_1h_data() -> dict[str, Any]:
     return out
 
 
+async def kelly_horse_race_data() -> dict[str, Any]:
+    """Everything the KELLY HORSE-RACE card shows, as ``kelly_panel.render`` kwargs.
+
+    The runner's status comes from memory; before this process's first pass, the copy an
+    earlier run saved lends its last pass, with the state and errors still this process's
+    own (``fade_1h_status`` does the same for fade). A failed read becomes ``load_error``.
+    """
+    from ems.kelly_horse_race import ledger as _kelly_ledger
+    from ems.kelly_horse_race import runner as _kelly_runner
+
+    errors: list[str] = []
+    status: dict[str, Any] = _kelly_runner.status()
+    if not status.get("last_pass_ts"):
+        try:
+            saved = json.loads(await get_config(_kelly_runner.STATUS_KEY) or "null")
+        except Exception as exc:  # noqa: BLE001 — shown on the card
+            errors.append(f"the saved status ({type(exc).__name__}: {exc})")
+        else:
+            status = fade_1h_status(status, saved)
+    out: dict[str, Any] = {"status": status, "summary": {}, "decisions": [], "caps": {}}
+    try:
+        out["caps"] = {
+            "max_notional_usd": await _knobs.get("kelly_horse_race_max_notional_usd"),
+            "paper_max_trade_usd": await _knobs.get("paper_max_trade_usd"),
+            "live_max_trade_usd": await _knobs.get("live_max_trade_usd"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"the caps in Settings ({type(exc).__name__}: {exc})")
+    try:
+        out["summary"] = await _kelly_ledger.summary()
+        out["decisions"] = await _kelly_ledger.recent(12)
+    except Exception as exc:  # noqa: BLE001 — a missing table must not blank the page
+        errors.append(f"the ledger ({type(exc).__name__}: {exc})")
+    out["load_error"] = "; ".join(errors) or None
+    return out
+
+
 async def execution_view_html() -> str:
     """Render the full page body as one HTML string; ``app.py`` consumes this directly."""
     from ems.fade_1h_momentum_15m import executor as _fade_executor
@@ -98,6 +136,11 @@ async def execution_view_html() -> str:
     except Exception as exc:  # noqa: BLE001 — the card says what failed
         _fade = {"load_error": f"{type(exc).__name__}: {exc}"}
     _fsummary = _fade.get("summary") or {}
+    try:
+        _kelly = await kelly_horse_race_data()
+    except Exception as exc:  # noqa: BLE001 — the card says what failed
+        _kelly = {"load_error": f"{type(exc).__name__}: {exc}"}
+    _kpaper = (_kelly.get("summary") or {}).get("paper") or {}
     strategies_html = strategies_panel.render(
         enabled=_enabled,
         records={
@@ -106,6 +149,12 @@ async def execution_view_html() -> str:
                 "n": _fsummary.get("settled_windows"),
                 "pnl": _fsummary.get("net_pnl_usd"),
                 "win_rate": None,
+            },
+            # The paper record: paper is always on, so it has every window.
+            "kelly_horse_race": {
+                "n": _kpaper.get("settled"),
+                "pnl": _kpaper.get("pnl_usd"),
+                "win_rate": _kpaper.get("win_rate"),
             },
         },
     )
@@ -118,6 +167,14 @@ async def execution_view_html() -> str:
         fade_1h_html = fade_1h_panel.render(
             load_error=f"the card could not be drawn ({type(exc).__name__}: {exc})",
             enabled=_fade_on, mode=mode,
+        )
+    _kelly_on = _enabled.get("kelly_horse_race")
+    try:
+        kelly_html = kelly_panel.render(**_kelly, enabled=_kelly_on)
+    except Exception as exc:  # noqa: BLE001 — odd rows must not blank the page either
+        kelly_html = kelly_panel.render(
+            load_error=f"the card could not be drawn ({type(exc).__name__}: {exc})",
+            enabled=_kelly_on,
         )
     strategy_card_html = strategy_card_panel.render(entries=[
         (f, _sd.glance(f.key))
@@ -135,6 +192,7 @@ async def execution_view_html() -> str:
         + "<div class='grid-stack'>" + strategy_card_html + "</div>"
         + strategies_html
         + fade_1h_html
+        + kelly_html
         + settings_html
         + "</div></div>"
     )

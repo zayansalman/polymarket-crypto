@@ -80,7 +80,7 @@ kill switch file exists; paper orders already filled keep settling in every stat
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1080.
+- **Tests:** 1087.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->
 
@@ -99,6 +99,7 @@ kill switch file exists; paper orders already filled keep settling in every stat
 | `ems/dashboard/panels/_shared.py` | WIRED | 1 | Shared rendering primitives for dashboard panels. |
 | `ems/dashboard/panels/fade_1h.py` | WIRED | 1 | FADE 1H MOMENTUM ON 15M card: what the strategy has made, then what it is doing now. |
 | `ems/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
+| `ems/dashboard/panels/kelly_horse_race.py` | WIRED | 1 | KELLY HORSE-RACE card: what it has made per mode, what it is doing now, and each window. |
 | `ems/dashboard/panels/settings.py` | WIRED | 1 | Settings panel: every dashboard-editable runtime knob (#206). |
 | `ems/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
@@ -121,11 +122,11 @@ kill switch file exists; paper orders already filled keep settling in every stat
 | `ems/fade_1h_momentum_15m/sizing.py` | WIRED | 3 | Sizing maths for Fade 1h Momentum on 15m: market anchor, Kelly stakes, scaled passive limit |
 | `ems/fees.py` | WIRED | 1 | Canonical Polymarket taker-fee math. |
 | `ems/inventory.py` | WIRED | 5 | Every strategy family in this repo. |
-| `ems/kelly_horse_race/__init__.py` | pkg | 1 | Kelly horse-race: one randomised passive buy per BTC 15m Up/Down window, on paper and live. |
+| `ems/kelly_horse_race/__init__.py` | pkg | 3 | Kelly horse-race: one randomised passive buy per BTC 15m Up/Down window, on paper and live. |
 | `ems/kelly_horse_race/inputs.py` | WIRED | 1 | Live inputs for Kelly horse-race: the BTC 15m window, K, X, the last hour, and the book. |
-| `ems/kelly_horse_race/ledger.py` | WIRED | 1 | The ledger for Kelly horse-race: the only code that reads or writes its two tables. |
-| `ems/kelly_horse_race/maths.py` | WIRED | 2 | The maths of Kelly horse-race: the chance of Up, the two draws, and the size. Pure: no I/O. |
-| `ems/kelly_horse_race/runner.py` | WIRED | 1 | The Kelly horse-race loop: bookkeeping, then one randomised passive buy per BTC 15m window. |
+| `ems/kelly_horse_race/ledger.py` | WIRED | 2 | The ledger for Kelly horse-race: the only code that reads or writes its two tables. |
+| `ems/kelly_horse_race/maths.py` | WIRED | 3 | The maths of Kelly horse-race: the chance of Up, the two draws, and the size. Pure: no I/O. |
+| `ems/kelly_horse_race/runner.py` | WIRED | 2 | The Kelly horse-race loop: bookkeeping, then one randomised passive buy per BTC 15m window. |
 | `ems/logging_setup.py` | WIRED | 13 | Structured JSON logging with structlog. Module + trade_id context. |
 | `ems/marketdata/__init__.py` | pkg | 5 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
 | `ems/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
@@ -153,6 +154,7 @@ kill switch file exists; paper orders already filled keep settling in every stat
 | `tools/fade_1h_momentum_15m/validate_math.py` | cli | 0 | Monte Carlo check of every closed form in tasks/2026-09-21-fade-1h-momentum-on-15m.md. |
 | `tools/gen_docs.py` | cli | 0 | Generate the machine-derived sections of the agent docs. |
 | `tools/kelly_horse_race/checks.py` | cli | 0 | Numerical checks behind tasks/2026-09-22-kelly-horse-race-research.md. |
+| `tools/kelly_horse_race/examples.py` | cli | 0 | Worked examples of Kelly horse-race from real BTC 15m windows, through the real maths. |
 | `tools/kelly_horse_race/price_to_beat_chain.py` | cli | 0 | Check how Polymarket's BTC 15m Up/Down markets settle (research, 2026-09-22). |
 | `tools/strategy_docs.py` | cli | 0 | Keep each strategy's doc in step with its code. |
 <!-- END GENERATED:inventory -->
