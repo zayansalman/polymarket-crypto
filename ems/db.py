@@ -167,6 +167,59 @@ CREATE TABLE IF NOT EXISTS fade_dials (
   loglik       REAL,
   note         TEXT
 );
+
+-- The execution layer every strategy shares (ems/execution/). Timestamps are integer epoch
+-- seconds.
+
+-- The paper venue's book (ems/execution/resting.py, the only reader and writer): one row per
+-- passive limit BUY any strategy rested on paper. It rests from placed_ts until its cancel
+-- or its stop (the GTD expiry less the venue's 60 s) and fills only from the taker trade
+-- tape, through the depth that was ahead of it (queue_ahead). final_ts: its whole resting
+-- stretch of tape has been read, so nothing more can fill it.
+CREATE TABLE IF NOT EXISTS paper_resting_orders (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy           TEXT NOT NULL,
+  condition_id       TEXT NOT NULL,
+  token_id           TEXT NOT NULL,
+  outcome            TEXT NOT NULL CHECK (outcome IN ('Up', 'Down')),
+  up_token           TEXT NOT NULL,
+  down_token         TEXT NOT NULL,
+  price              REAL NOT NULL,
+  size               REAL NOT NULL,
+  queue_ahead        REAL NOT NULL,
+  levels_ahead_json  TEXT,
+  placed_ts          INTEGER NOT NULL,
+  stop_ts            INTEGER NOT NULL,
+  expires_ts         INTEGER NOT NULL,
+  cancelled_ts       INTEGER,
+  cancel_reason      TEXT,
+  flow_cursor_ts     INTEGER NOT NULL,
+  crossed            REAL NOT NULL DEFAULT 0,
+  filled_size        REAL NOT NULL DEFAULT 0,
+  filled_ts          INTEGER,
+  final_ts           INTEGER,
+  forced             INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_resting_orders_open
+  ON paper_resting_orders(final_ts, condition_id);
+
+-- The risk gate's record (ems/execution/gate.py), per mode: each order's notional when
+-- placed (commit), the unfilled part given back once it can fill no more (credit), and its
+-- settled P&L (realize). One row per kind per order, so nothing is counted twice.
+CREATE TABLE IF NOT EXISTS risk_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          INTEGER NOT NULL,
+  mode        TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+  strategy    TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('commit', 'credit', 'realize')),
+  order_ref   TEXT NOT NULL,
+  amount_usd  REAL NOT NULL,
+  UNIQUE (mode, kind, order_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_risk_events_day
+  ON risk_events(mode, kind, ts);
 """
 
 # Fade 1h Momentum on 15m tables. Each dict lists every column an older copy of the table

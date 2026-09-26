@@ -110,6 +110,37 @@ KNOBS: dict[str, Knob] = {
         "runtime.fade_1h.trade_xrp", True, "bool", "Trade XRP",
         group="Fade 1h Momentum on 15m",
     ),
+    # The risk gate every strategy's resting orders pass (ems/execution/gate.py), one leg per
+    # mode. A loss halt or daily cap of 0 is off. The live keys are the ones the deleted
+    # live executor used, so an existing database keeps the operator's values.
+    "paper_max_trade_usd": Knob(
+        "runtime.paper.max_trade_usd", 5.0, "float",
+        "Paper: largest single order", 0.01, 100_000.0, unit="USD", group="Risk",
+    ),
+    "paper_daily_notional_cap_usd": Knob(
+        "runtime.paper.daily_notional_cap_usd", 0.0, "float",
+        "Paper: most placed in a UTC day (0 = no cap)", 0.0, 10_000_000.0, unit="USD",
+        group="Risk",
+    ),
+    "paper_daily_loss_halt_usd": Knob(
+        "runtime.paper.daily_loss_halt_usd", 0.0, "float",
+        "Paper: stop placing after losing this much in a UTC day (0 = off)", 0.0,
+        10_000_000.0, unit="USD", group="Risk",
+    ),
+    "live_max_trade_usd": Knob(
+        "runtime.max_trade_usd", 3.0, "float",
+        "Live: largest single order", 0.01, 1_000.0, unit="USD", group="Risk",
+    ),
+    "live_daily_notional_cap_usd": Knob(
+        "runtime.live.bankroll_cap_usd", 0.0, "float",
+        "Live: most placed in a UTC day (0 = no cap)", 0.0, 100_000.0, unit="USD",
+        group="Risk",
+    ),
+    "live_daily_loss_halt_usd": Knob(
+        "runtime.live.daily_loss_halt_usd", 10.0, "float",
+        "Live: stop placing after losing this much in a UTC day (0 = off)", 0.0, 100_000.0,
+        unit="USD", group="Risk",
+    ),
 }
 
 # In-memory mirror of the last `refresh_cache()` read, for sync call sites.
