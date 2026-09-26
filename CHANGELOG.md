@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased — one package, every dashboard card folds (2026-09-26)
+
+- Changed: the tree is one package, `ems/`, with `main.py` as the only entry
+  point. `polymarket_bot/`, `connectors/` and `dashboard/` moved under it; the
+  `sys.path` bootstrap, the `polymarket_bot.*` import names and the empty
+  packages left by the strategy removal are gone. SQLite config keys keep
+  their `polymarket_bot.*` names so existing databases still read.
+- Changed: every dashboard card (FEEDS, MY STRATEGIES, STRATEGY, the fade
+  card, SETTINGS) is a collapsible fold. Click the header to collapse or
+  expand it; the browser remembers each card's state across refreshes and
+  reloads.
+- Docs: AGENTS.md, README.md, docs/CODE_MAP.md, docs/ARCHITECTURE.md and
+  docs/OPERATIONS_RUNBOOK.md describe the one-package, one-strategy app.
+  docs/ROADMAP.md, docs/RESEARCH_LOOP.md and docs/CHRONOS_INTEGRATION.md moved
+  to docs/archive/ (they describe removed lines). The `.claude` doc-gen hooks,
+  paused for the rebuild, are back on.
+- Removed: the `py-clob-client-v2` dependency, the `httpx[http2]` extra and the
+  `setup` extra (`polymarket-client`). They backed the deleted live executor
+  and wallet tool; nothing in the tree imports them.
+
+## Unreleased — Fade 1h Momentum on 15m is the only strategy (2026-09-26)
+
+Everything but Fade 1h Momentum on 15m was removed at the operator's request:
+the BTC Up/Down loop (with its Start/Stop controller, market selector, order
+ticket, live CLOB executor and risk gate), the maker, the daily altcoin
+scanner, the venue flow and macro recorders and the feed monitor, plus the
+dashboard cards, tables, knobs, tools, tests and docs that existed only for
+them. The dashboard keeps the FEEDS card (the market-data hub's rows), MY
+STRATEGIES, the fade card, the STRATEGY card, SETTINGS (fade's knobs), the
+activity log and the strategy docs. Paper only: no live order path exists.
+`config.py` keeps the data/dashboard settings, `BOT_MODE` (paper) and the
+kill switch; `db.py` keeps `config`, `notification_feed` and the `fade_*`
+tables. Existing databases keep their old tables untouched.
+
+## Unreleased — Fade 1h Momentum on 15m runs as a paper strategy (2026-09-26)
+
+A new paper strategy for the BTC, ETH, SOL and XRP 15-minute Up/Down windows,
+switch `fade_1h_momentum_15m` on MY STRATEGIES. Paper only: there is no live
+order path, and with LIVE selected it places nothing and says so on its card.
+
+- Added: `polymarket_bot/fade_1h_momentum_15m/` (live inputs from the market
+  data hub, a standard-library port of the research model for the TWAP-60s
+  settlement, the sizing and decision maths, the paper executor and ledger, the
+  live learner and the runner), the `fade_windows`, `fade_decisions`,
+  `fade_orders` and `fade_dials` tables, the "Fade 1h Momentum on 15m" group of
+  settings, and the FADE 1H MOMENTUM ON 15M card.
+- Orders are scaled passive limit orders: a parent order split into child
+  orders resting at price levels at or under the best bid (a sale: at or over
+  the best ask), never crossing the spread. Side, prices and sizes come out of
+  the expected log growth of the bankroll, over both sides; each is zero when
+  it does not pay. A losing position is cut by a resting sell of the shares
+  held, never by buying the other side.
+- Paper fills follow the real trade tape through the depth ahead of each order,
+  price level by price level, with partial fills; orders keep their place in
+  the queue across passes. Windows settle from the venue.
+- The dials learn from every settled window, with the research fit of the
+  price process held as a fixed prior.
+- The FEEDS card now names the strategy as the user of the Chainlink,
+  Chainlink TWAP-60s and Binance price streams (was "none yet").
+- `runtime_knobs.get` treats a stored choice a knob no longer offers as unset,
+  so the default applies and the Settings page shows what the code reads.
+- Standard terms throughout: code, tables, settings, the card and docs say
+  child orders, price levels and depth ahead.
+- `tools/venue_recorder.py`: the guessed market window is stored as
+  `window_guess` and `window_evidence` (no archive existed to migrate).
+- Maths: `tasks/2026-09-22-fade-1h-sizing.md`. Living doc:
+  `docs/strategies/fade_1h_momentum_15m.md`.
+- Not done: no job deletes old `fade_decisions` rows (one row per coin a
+  minute, so the table keeps growing). Deleting recorded data is the
+  operator's call.
+
 ## Unreleased — Remove the strategy group split (2026-09-21)
 
 The group field existed only to move copy-trade switches onto their own card.

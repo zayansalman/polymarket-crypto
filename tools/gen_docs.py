@@ -19,10 +19,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 NO_DOCSTRING = "(needs docstring)"
 
-SOURCE_ROOTS = ["polymarket_exec", "polymarket_bot", "tools"]
-TOPLEVEL_MODULES = ["main.py", "config.py", "db.py", "logging_setup.py", "dashboard.py"]
+SOURCE_ROOTS = ["ems", "tools"]
+TOPLEVEL_MODULES = ["main.py"]
+CONFIG_PATH = "ems/config.py"
 # Entrypoints / foundation: never flagged DEAD even with zero importers.
-WIRED_ALLOWLIST = {"main.py", "config.py", "db.py", "logging_setup.py"}
+WIRED_ALLOWLIST = {"main.py", "ems/config.py", "ems/db.py", "ems/logging_setup.py"}
 
 # Virtualenv/build/VCS dirs: never walk into these. Third-party packages have
 # modules/symbols with short generic names (`main`, `config`) that collide with
@@ -151,8 +152,13 @@ def _dotted_name(rel_path: str) -> str:
     return ".".join(parts)
 
 
-def _imported_targets(text: str) -> set[str]:
-    """Dotted names this module references via import / from-import."""
+def _imported_targets(text: str, pkg: str = "") -> set[str]:
+    """Dotted names this module references via import / from-import.
+
+    ``pkg`` is the importing module's own package (dotted); it resolves
+    relative imports (``from . import x``, ``from ..y import z``) to absolute
+    names so they count as importers like any other.
+    """
     targets: set[str] = set()
     try:
         tree = ast.parse(text)
@@ -163,12 +169,28 @@ def _imported_targets(text: str) -> set[str]:
             for a in node.names:
                 targets.add(a.name)
         elif isinstance(node, ast.ImportFrom):
-            if node.module is None:  # relative import without module — skip
+            if node.level:  # relative: anchor on the importer's package
+                base_parts = pkg.split(".") if pkg else []
+                if node.level > 1:
+                    base_parts = base_parts[: len(base_parts) - (node.level - 1)]
+                base = ".".join(base_parts)
+                module = ".".join(p for p in (base, node.module) if p)
+            else:
+                module = node.module or ""
+            if not module:
                 continue
-            targets.add(node.module)
+            targets.add(module)
             for a in node.names:  # `from pkg import mod` → pkg.mod is a candidate
-                targets.add(f"{node.module}.{a.name}")
+                targets.add(f"{module}.{a.name}")
     return targets
+
+
+def _package_of(rel_path: str) -> str:
+    """Dotted package that relative imports inside *rel_path* resolve against."""
+    dotted = _dotted_name(rel_path)
+    if rel_path.endswith("/__init__.py"):
+        return dotted
+    return dotted.rsplit(".", 1)[0] if "." in dotted else ""
 
 
 def annotate_importers(root: Path, mods, test_dirs=("tests",)) -> None:
@@ -177,7 +199,7 @@ def annotate_importers(root: Path, mods, test_dirs=("tests",)) -> None:
         rel = src.relative_to(root).as_posix()
         if any(rel.startswith(td + "/") or rel == td for td in test_dirs):
             continue  # test importers don't count toward "wired"
-        for tgt in _imported_targets(_read_text(src)):
+        for tgt in _imported_targets(_read_text(src), _package_of(rel)):
             mod = known.get(tgt)
             if mod is not None and mod.path != rel:
                 mod.importers += 1
@@ -211,7 +233,7 @@ def count_tests(root: Path) -> int:
 def entrypoint_ok(root: Path) -> bool:
     try:
         res = subprocess.run(
-            [sys.executable, "-c", "import polymarket_exec.ops.dashboard.app"],
+            [sys.executable, "-c", "import ems.dashboard.app"],
             cwd=root, capture_output=True, text=True, timeout=60,
         )
     except subprocess.TimeoutExpired:
@@ -219,7 +241,7 @@ def entrypoint_ok(root: Path) -> bool:
     return res.returncode == 0
 
 
-def collect_env_knobs(root: Path):
+def collect_env_knobs(root: Path, config_rel: str = CONFIG_PATH):
     """Parse config.py for * knob names + their deprecated aliases.
 
     Returns sorted list of (canonical, default, deprecated_alias|''). Best-effort:
@@ -227,7 +249,7 @@ def collect_env_knobs(root: Path):
     is an ALL_CAPS, multi-word (underscore-joined) constant — this excludes
     bare single-word env vars like ``PATH`` that aren't project knobs.
     """
-    cfg = _read_text(root / "config.py")
+    cfg = _read_text(root / config_rel)
     tree = ast.parse(cfg)
     knobs: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -309,8 +331,8 @@ def render_summary(
     else:
         n = PLACEHOLDER_TEST_COUNT
     lines = [
-        "- **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.",
-        "- **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.",
+        "- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.",
+        "- **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategy.",
         f"- **Tests:** {n}.",
         f"- **Built-but-dead (do not edit expecting runtime effect):** {', '.join(f'`{d}`' for d in dead) or 'none'}.",
     ]
@@ -386,7 +408,7 @@ def main(argv=None) -> int:
 
     _write_generated(REPO, fast=args.fast)
     if not entrypoint_ok(REPO):
-        print("WARNING: polymarket_exec.ops.dashboard.app failed to import — Gradio fallback would activate.", file=sys.stderr)
+        print("WARNING: ems.dashboard.app failed to import — main.py cannot boot the dashboard.", file=sys.stderr)
     return 0
 
 

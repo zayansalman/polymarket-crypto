@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 import websockets
 
-from polymarket_exec.marketdata import rtds_stream as rs
-from polymarket_exec.marketdata.clob_stream import tls_context
+from ems.marketdata import rtds_stream as rs
+from ems.marketdata.clob_stream import tls_context
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "marketdata"
 RECEIVED = 1_789_555_690_000

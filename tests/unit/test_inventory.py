@@ -1,6 +1,6 @@
 """The inventory must keep matching the tree, or the card starts lying.
 
-``polymarket_bot/inventory.py`` is hand-written prose about what exists. Prose
+``ems/inventory.py`` is hand-written prose about what exists. Prose
 goes stale. These tests pin the half of it that is falsifiable — the paths, the
 switch keys, the statuses that imply a runtime importer — so a family cannot
 quietly drop off the dashboard by being deleted, renamed or wired up.
@@ -11,8 +11,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from polymarket_bot import inventory as _inv
-from polymarket_bot import strategies as _strategies
+from ems import inventory as _inv
+from ems import strategies as _strategies
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -79,10 +79,9 @@ def test_a_dead_family_never_offers_a_switch() -> None:
 def test_the_running_families_are_the_ones_the_dashboard_starts() -> None:
     # If a loop is added to or removed from app.py's lifespan without the
     # inventory following, this is the test that says so.
-    lifespan = (ROOT / "polymarket_exec/ops/dashboard/app.py").read_text()
+    lifespan = (ROOT / "ems/dashboard/app.py").read_text()
     for key, module in (
-        ("maker", "polymarket_bot.maker.runner"),
-        ("daily_altcoin", "polymarket_bot.daily.scanner"),
+        ("fade_1h_momentum_15m", "ems.fade_1h_momentum_15m.runner"),
     ):
         family = next(f for f in _inv.FAMILIES if f.key == key)
         assert family.status == _inv.RUNNING, key
@@ -97,8 +96,7 @@ def test_a_dead_family_really_has_no_runtime_importer() -> None:
             continue  # no source left to import — see the empty-path test
         module = Path(family.path).stem
         found = subprocess.run(
-            ["grep", "-rn", "--include=*.py", f"import {module}", "polymarket_bot",
-             "polymarket_exec", "main.py"],
+            ["grep", "-rn", "--include=*.py", f"import {module}", "ems", "main.py"],
             cwd=ROOT, capture_output=True, text=True,
         ).stdout
         live = [

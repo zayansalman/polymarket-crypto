@@ -1,4 +1,26 @@
 {
-  "_paused": "gen_docs hooks paused during chore/cleanup-dead-code (2026-09-21) — every edit re-running gen_docs.py --fast against a tree mid-deletion/mid-move is noise, and gen_docs.py --check on Stop will be red for the whole rebuild by design. Restore the 'hooks' block below (see git history of this file) once the rebuild lands and gen_docs's relative-import bug (Stage F of the cleanup plan) is fixed.",
-  "hooks": {}
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null; ./.venv/bin/python tools/gen_docs.py --print-summary 2>/dev/null || python3 tools/gen_docs.py --print-summary 2>/dev/null || true" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null; ./.venv/bin/python tools/gen_docs.py --fast >/dev/null 2>&1 || python3 tools/gen_docs.py --fast >/dev/null 2>&1 || true" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null; ./.venv/bin/python tools/gen_docs.py --check 1>&2 2>/dev/null || true" }
+        ]
+      }
+    ]
+  }
 }

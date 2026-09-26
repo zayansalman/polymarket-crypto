@@ -1,11 +1,11 @@
-"""Entrypoint for the BTC 5-minute paper trading system."""
+"""Entrypoint: boots the FastAPI operator dashboard (uvicorn)."""
 from __future__ import annotations
 
 import asyncio
 
-from config import DASHBOARD_SERVER_PORT, DB_PATH
-from db import init_db, notify
-from logging_setup import get_logger, setup_logging
+from ems.config import DASHBOARD_SERVER_PORT, DB_PATH
+from ems.db import init_db, notify
+from ems.logging_setup import get_logger, setup_logging
 
 log = get_logger("main")
 
@@ -14,7 +14,7 @@ async def startup_tasks() -> None:
     await init_db()
     await notify(
         "system_start",
-        "BTC 5-minute paper trading system started",
+        "Polymarket crypto EMS started",
         {
             "db_path": str(DB_PATH),
             "version": "0.2.0",
@@ -79,7 +79,7 @@ def main() -> None:
     import uvicorn
     log.info("dashboard.start_fastapi", port=DASHBOARD_SERVER_PORT)
     uvicorn.run(
-        "polymarket_exec.ops.dashboard.app:app", **dashboard_server_options()
+        "ems.dashboard.app:app", **dashboard_server_options()
     )
 
 

@@ -11,11 +11,11 @@ import httpx
 import pytest
 from websockets.exceptions import ConnectionClosedError
 
-from polymarket_exec.marketdata import clob_messages as cm
-from polymarket_exec.marketdata import clob_shard as sh
-from polymarket_exec.marketdata import clob_stream as cs
-from polymarket_exec.marketdata import hub as hub_mod
-from polymarket_exec.marketdata import rtds_stream as rs
+from ems.marketdata import clob_messages as cm
+from ems.marketdata import clob_shard as sh
+from ems.marketdata import clob_stream as cs
+from ems.marketdata import hub as hub_mod
+from ems.marketdata import rtds_stream as rs
 
 # Captured before the autouse conftest fixture swaps ``run`` for an offline stub.
 _REAL_RUN = hub_mod.MarketDataHub.run
@@ -780,12 +780,12 @@ async def test_snapshot_shows_each_markets_state_owners_and_throughput() -> None
 def test_dashboard_lifespan_registers_and_clears_the_hub(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import db as _db
+    from ems import db as _db
 
     monkeypatch.setattr(_db, "DB_PATH", tmp_path / "t.db")
     from fastapi.testclient import TestClient
 
-    from polymarket_exec.ops.dashboard.app import app
+    from ems.dashboard.app import app
 
     with TestClient(app) as client:
         assert isinstance(hub_mod.current(), hub_mod.MarketDataHub)

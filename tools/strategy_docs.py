@@ -4,7 +4,7 @@
     python tools/strategy_docs.py stamp KEY "note" # after changing a strategy: refresh + log it
     python tools/strategy_docs.py new KEY          # scaffold a doc for a new family
 
-Docs live in docs/strategies/<key>.md; the rules are in polymarket_bot/strategy_docs.py.
+Docs live in docs/strategies/<key>.md; the rules are in ems/strategy_docs.py.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from polymarket_bot import strategy_docs as sd  # noqa: E402
+from ems import strategy_docs as sd  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:

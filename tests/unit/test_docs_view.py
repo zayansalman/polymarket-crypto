@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from polymarket_bot import inventory as _inv
-from polymarket_exec.ops.dashboard import docs_view
+from ems import inventory as _inv
+from ems.dashboard import docs_view
 
 
 def _client() -> TestClient:
@@ -72,7 +72,7 @@ def test_every_strategy_doc_page_renders() -> None:
 
 
 def test_relative_md_links_between_docs_resolve() -> None:
-    assert _client().get("/strategy-docs/maker.md").status_code == 200
+    assert _client().get("/strategy-docs/fade_1h_momentum_15m.md").status_code == 200
 
 
 def test_unknown_or_traversing_keys_are_404() -> None:
@@ -84,8 +84,8 @@ def test_unknown_or_traversing_keys_are_404() -> None:
 def test_the_dashboard_serves_the_docs_pages() -> None:
     # Outside a `with` block TestClient does not run the lifespan, so no
     # background loops start.
-    from polymarket_exec.ops.dashboard.app import app
+    from ems.dashboard.app import app
 
     client = TestClient(app)
     assert client.get("/strategy-docs").status_code == 200
-    assert client.get("/strategy-docs/maker").status_code == 200
+    assert client.get("/strategy-docs/fade_1h_momentum_15m").status_code == 200

@@ -1,6 +1,6 @@
 # Strategy docs
 
-One document per strategy family in `polymarket_bot/inventory.py`, at `docs/strategies/<key>.md`.
+One document per strategy family in `ems/inventory.py`, at `docs/strategies/<key>.md`.
 The dashboard serves them at `/strategy-docs`; each row on the MY STRATEGIES card links to its doc.
 
 Every doc has the same sections: **What it does**, **How it was formed** (who proposed it, when,
@@ -26,6 +26,15 @@ python tools/strategy_docs.py stamp <key> "what changed and why"
 That refreshes the block and adds a dated changelog entry. Update the prose in the same commit.
 A new family needs `python tools/strategy_docs.py new <key>` and every section filled in.
 `python tools/strategy_docs.py check` lists anything out of step.
+
+## Wording
+
+Plain English for the operator, and standard market terms only, never coined ones. An order
+split across prices is a scaled passive limit order: a parent order split into child orders
+resting at price levels below the touch (above it for a sell), with partial fills and the depth
+ahead in the queue. Cutting a position means selling shares held, never buying the other side.
+Explain real decisions in trader language, factor by factor, from the strategy's own maths.
+Report measured accuracy and the model's logic; never dismiss a result as luck.
 
 ## Sourcing
 

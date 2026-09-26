@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from html import escape
 
-from polymarket_bot import inventory as _inv
-from polymarket_bot import strategies as _strategies
-from polymarket_exec.ops.dashboard.panels import strategies as panel
+from ems import inventory as _inv
+from ems import strategies as _strategies
+from ems.dashboard.panels import strategies as panel
 
 ALL_ON = {name: True for name in _strategies.STRATEGIES}
 FAMILIES = sorted(_inv.FAMILIES, key=lambda f: _inv.STATUS_ORDER.index(f.status))
@@ -41,26 +41,26 @@ def test_every_row_links_to_its_strategy_doc_and_the_header_to_all_docs() -> Non
 
 
 def test_an_enabled_strategy_renders_a_checked_switch() -> None:
-    html = panel.render(enabled={**ALL_ON, "daily_altcoin": True})
-    row = html.split("id='strategy-daily_altcoin'")[1].split(">")[0]
+    html = panel.render(enabled={**ALL_ON, "fade_1h_momentum_15m": True})
+    row = html.split("id='strategy-fade_1h_momentum_15m'")[1].split(">")[0]
     assert "checked" in row
 
 
 def test_a_disabled_strategy_renders_an_unchecked_switch() -> None:
-    html = panel.render(enabled={**ALL_ON, "daily_altcoin": False})
-    row = html.split("id='strategy-daily_altcoin'")[1].split(">")[0]
+    html = panel.render(enabled={**ALL_ON, "fade_1h_momentum_15m": False})
+    row = html.split("id='strategy-fade_1h_momentum_15m'")[1].split(">")[0]
     assert "checked" not in row
 
 
 def test_the_switch_applies_on_click_with_no_apply_button() -> None:
     # The click IS the intent — no confirm dialog, no second press.
     html = panel.render(enabled=ALL_ON)
-    assert "setStrategy('daily_altcoin')" in html
+    assert "setStrategy('fade_1h_momentum_15m')" in html
     assert "Apply" not in html
 
 
 def test_the_header_counts_switchable_rows_and_the_whole_tree() -> None:
-    html = panel.render(enabled={**ALL_ON, "daily_altcoin": False})
+    html = panel.render(enabled={**ALL_ON, "fade_1h_momentum_15m": False})
     switchable = [f for f in FAMILIES if f.switch]
     assert f"{len(switchable) - 1} of {len(switchable)} switchable on" in html
     assert f"{len(FAMILIES)} in the tree" in html
@@ -71,18 +71,11 @@ def test_a_strategy_shows_what_it_has_actually_settled() -> None:
     # or wired to nothing — which is the question this card exists to answer.
     html = panel.render(
         enabled=ALL_ON,
-        records={"daily_altcoin": {"n": 18, "pnl": -67.08, "win_rate": 0.44}},
+        records={"fade_1h_momentum_15m": {"n": 18, "pnl": -67.08, "win_rate": 0.44}},
     )
     assert "18 settled" in html
     assert "$-67.08" in html
     assert "44% won" in html
-
-
-def test_a_family_that_cannot_trade_says_why_instead_of_showing_a_zero() -> None:
-    html = panel.render(enabled=ALL_ON)
-    btc = next(f for f in _inv.FAMILIES if f.key == "btc_updown")
-    assert btc.verdict in html
-    assert "0 positions, ever" in html
 
 
 def test_nothing_in_the_tree_is_hidden_from_the_card() -> None:
@@ -107,5 +100,5 @@ def test_families_are_grouped_by_status() -> None:
 
 
 def test_a_strategy_with_no_record_yet_says_that_too() -> None:
-    html = panel.render(enabled=ALL_ON, records={"daily_altcoin": {"n": 0}})
+    html = panel.render(enabled=ALL_ON, records={"fade_1h_momentum_15m": {"n": 0}})
     assert "no settled positions yet" in html
