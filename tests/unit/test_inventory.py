@@ -105,3 +105,41 @@ def test_a_dead_family_really_has_no_runtime_importer() -> None:
             if "__pycache__" not in line and f"/{module}.py" not in line
         ]
         assert not live, f"{family.key} is marked dead but is imported:\n{found}"
+
+
+def _execution_imports(path: Path) -> set[str]:
+    """``ems/execution/<m>.py`` files a source file imports directly."""
+    import ast
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        names: list[str] = []
+        if isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+        elif isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        for name in names:
+            parts = name.split(".")
+            if parts[:2] == ["ems", "execution"] and len(parts) >= 3:
+                candidate = ROOT / "ems" / "execution" / f"{parts[2]}.py"
+                if candidate.is_file():
+                    found.add(f"ems/execution/{parts[2]}.py")
+    return found
+
+
+def test_each_doc_answers_for_the_shared_code_its_strategy_reaches() -> None:
+    """A family's ``shared`` files exist and cover every ems/execution module its code
+    imports, directly or through another shared module, so a change there re-stamps it."""
+    for fam in _inv.FAMILIES:
+        for shared in fam.shared:
+            assert (ROOT / shared).is_file(), (fam.key, shared)
+        if not fam.path or not (ROOT / fam.path).is_dir():
+            continue
+        reached: set[str] = set()
+        todo = [p for p in (ROOT / fam.path).rglob("*.py") if "__pycache__" not in p.parts]
+        while todo:
+            for module in _execution_imports(todo.pop()):
+                if module not in reached:
+                    reached.add(module)
+                    todo.append(ROOT / module)
+        assert reached <= set(fam.shared), (fam.key, sorted(reached - set(fam.shared)))

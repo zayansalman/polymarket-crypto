@@ -130,7 +130,8 @@ class QueuedOrder:
 @dataclass(frozen=True)
 class OrderFlow:
     """Where one order stands after a read. ``added`` shares came from this read, the first
-    of them at ``fill_ts``; ``levels`` is the depth still ahead (book terms)."""
+    of them at ``fill_ts``; ``levels`` is the depth still ahead (book terms). ``done_ts`` is
+    the time of the record that took the order to its full size in this read, if one did."""
 
     order_id: int
     crossed: float
@@ -138,6 +139,7 @@ class OrderFlow:
     added: float
     fill_ts: int | None
     levels: tuple[tuple[float, float], ...]
+    done_ts: int | None = None
 
 
 def allocate_fills(prints: Sequence[TapePrint],
@@ -155,6 +157,7 @@ def allocate_fills(prints: Sequence[TapePrint],
     crossed = {o.order_id: float(o.crossed) for o in orders}
     filled = {o.order_id: float(o.filled) for o in orders}
     fill_ts: dict[int, int] = {}
+    done_ts: dict[int, int] = {}
     books: dict[str, list[QueuedOrder]] = {side: [] for side in SIDES}
     for o in orders:
         if o.side not in books:
@@ -195,6 +198,8 @@ def allocate_fills(prints: Sequence[TapePrint],
                 filled[o.order_id] += take
                 fill_ts.setdefault(o.order_id, p.ts)
                 available -= take
+                if filled[o.order_id] >= float(o.shares) - _SHARES_EPS:
+                    done_ts.setdefault(o.order_id, p.ts)
 
     return {
         o.order_id: OrderFlow(
@@ -204,6 +209,7 @@ def allocate_fills(prints: Sequence[TapePrint],
             added=max(0.0, filled[o.order_id] - float(o.filled)),
             fill_ts=fill_ts.get(o.order_id),
             levels=tuple((px, max(0.0, size)) for px, size in levels[o.order_id]),
+            done_ts=done_ts.get(o.order_id),
         )
         for o in orders
     }

@@ -94,3 +94,66 @@ async def test_paper_and_live_never_share_a_total() -> None:
 async def test_unknown_mode_is_refused() -> None:
     with pytest.raises(ValueError):
         gate.RiskGate("shadow")
+
+
+# ---------------------------------------------------------------------------
+# Regressions found in review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["live_max_trade_usd", "paper_daily_loss_halt_usd"])
+async def test_a_nan_limit_is_refused_by_the_knob(name: str) -> None:
+    with pytest.raises(ValueError):
+        await _knobs.set(name, "nan")
+
+
+async def test_a_limit_outside_its_range_blocks_everything() -> None:
+    await _db.set_config(_knobs.KNOBS["live_max_trade_usd"].key, "nan")
+    verdict = await gate.RiskGate("live").check(1.0, now=NOON)
+    assert verdict.reason == gate.BAD_LIMIT and not verdict.allowed
+    await _db.set_config(_knobs.KNOBS["live_max_trade_usd"].key, "5000")  # over the knob's max
+    assert (await gate.RiskGate("live").check(1.0, now=NOON)).reason == gate.BAD_LIMIT
+
+
+async def test_the_old_live_executors_rows_are_not_read() -> None:
+    for key, value in (("runtime.max_trade_usd", "100"), ("runtime.live.bankroll_cap_usd", "1"),
+                       ("runtime.live.daily_loss_halt_usd", "1"), ("runtime.paper.max_trade_usd",
+                                                                     "0")):
+        await _db.set_config(key, value)
+    assert (await gate.read_limits("live")) == gate.Limits(3.0, 0.0, 10.0)
+    assert (await gate.read_limits("paper")).max_trade_usd == 5.0
+
+
+async def test_a_loss_exactly_at_the_halt_stops_placing() -> None:
+    await _knobs.set("paper_daily_loss_halt_usd", 11.96)
+    leg = gate.RiskGate("paper")
+    await leg.realize(strategy="s", order_ref="a", pnl_usd=-3.93, now=NOON)
+    await leg.realize(strategy="s", order_ref="b", pnl_usd=-8.03, now=NOON)
+    assert (await leg.check(1.0, now=NOON)).reason == gate.LOSS_HALT
+
+
+async def test_a_credit_is_never_more_than_the_commit() -> None:
+    leg = gate.RiskGate("paper")
+    await leg.commit(strategy="s", order_ref="a", notional_usd=5.0, now=NOON)
+    await leg.credit(strategy="s", order_ref="a", unfilled_usd=9.0, now=NOON)
+    assert (await leg.day_totals(NOON)).notional_usd == pytest.approx(0.0)
+
+
+async def test_the_leg_lock_keeps_two_orders_under_one_cap() -> None:
+    import asyncio
+
+    await _knobs.set("paper_daily_notional_cap_usd", 10.0)
+    await _knobs.set("paper_max_trade_usd", 10.0)
+
+    async def order(ref: str) -> bool:
+        leg = gate.RiskGate("paper")
+        async with leg.lock:
+            verdict = await leg.check(8.0, now=NOON)
+            if verdict.allowed:
+                await asyncio.sleep(0)  # the venue call
+                await leg.commit(strategy="s", order_ref=ref, notional_usd=8.0, now=NOON)
+            return verdict.allowed
+
+    assert sorted(await asyncio.gather(order("a"), order("b"))) == [False, True]
+    assert gate.RiskGate("paper").lock is gate.RiskGate("paper").lock
+    assert gate.RiskGate("paper").lock is not gate.RiskGate("live").lock

@@ -211,3 +211,118 @@ async def test_unknown_ids_are_left_out(temp_db, venue) -> None:
 
 async def test_the_paper_venue_meets_the_protocol() -> None:
     assert isinstance(resting.PaperRestingVenue(FakeVenue()), resting.RestingVenue)
+
+
+# ---------------------------------------------------------------------------
+# Regressions found in review
+# ---------------------------------------------------------------------------
+
+
+class SlowTape:
+    """The fake venue, with each tape reply held until the test lets it go."""
+
+    def __init__(self, venue: FakeVenue) -> None:
+        import asyncio
+
+        self.venue = venue
+        self.gate = asyncio.Event()
+        self.waiting = asyncio.Event()
+
+    async def get(self, url, **kw):
+        if url.endswith("/trades"):
+            reply = await self.venue.get(url, **kw)  # the tape as it was when asked
+            self.waiting.set()
+            await self.gate.wait()
+            return reply
+        return await self.venue.get(url, **kw)
+
+
+async def test_a_cancel_during_a_slow_read_is_never_overwritten(temp_db, venue) -> None:
+    import asyncio
+
+    slow = SlowTape(venue)
+    paper = resting.PaperRestingVenue(slow)
+    placed = await paper.place(request(queue_ahead=0.0), now=START + 10)
+    venue.add(CID, sell_up(START + 20, 1.0), sell_up(START + 200, 3.0), nudge(START + 300))
+    check = asyncio.create_task(paper.fills([placed.order_id], now=START + 310))
+    await slow.waiting.wait()
+    # The order is cancelled at +100 while the read that saw the +200 trade is in flight.
+    await resting.PaperRestingVenue(venue).cancel([placed.order_id], reason="x", now=START + 100)
+    slow.gate.set()
+    await check
+    (row,) = await rows()
+    assert row["filled_size"] == 0.0 and row["flow_cursor_ts"] == START + 11  # nothing written
+    view = (await resting.PaperRestingVenue(venue).fills([placed.order_id],
+                                                         now=START + 320))[placed.order_id]
+    assert view.filled_size == pytest.approx(1.0)  # only the trade before the cancel
+    assert view.state == resting.CANCELLED and view.final
+
+
+async def test_concurrent_checks_never_fill_one_trade_twice(temp_db, venue) -> None:
+    import asyncio
+
+    paper_a, paper_b = resting.PaperRestingVenue(venue), resting.PaperRestingVenue(venue)
+    first = await paper_a.place(request(strategy="a", queue_ahead=0.0), now=START + 10)
+    second = await paper_b.place(request(strategy="b", queue_ahead=0.0, price=0.41,
+                                         best_ask=0.45), now=START + 30)
+    venue.add(CID, sell_up(START + 40, 6.0), nudge(START + 50))
+    await asyncio.gather(paper_a.fills([first.order_id], now=START + 60),
+                         paper_b.fills([second.order_id], now=START + 60),
+                         paper_a.fills([first.order_id], now=START + 61))
+    total = sum(r["filled_size"] for r in await rows())
+    assert total == pytest.approx(6.0)
+    assert [r["filled_size"] for r in await rows()] == [pytest.approx(1.0), pytest.approx(5.0)]
+
+
+async def test_the_probe_never_re_reads_a_market_already_read(temp_db, venue) -> None:
+    """The quiet order's market is the newest paper market: the probe must look elsewhere."""
+    other_cid = "0xcid-other"
+    paper = resting.PaperRestingVenue(venue, max_tape_lag_s=300)
+    await paper.place(request(condition_id=other_cid, expires_ts=END + 900), now=START + 3)
+    venue.add(other_cid, trade(START + 440, "Up", "SELL", 1.0, 0.99, cid=other_cid,
+                               up=UP, down=DOWN))
+    placed = await paper.place(request(queue_ahead=0.0), now=START + 10)
+    await paper.cancel([placed.order_id], reason="test", now=START + 100)
+    venue.add(CID, sell_up(START + 40, 1.0))
+    view = (await paper.fills([placed.order_id], now=START + 450))[placed.order_id]
+    assert view.final and not view.forced and view.filled_size == pytest.approx(1.0)
+
+
+async def test_the_callers_market_vouches_for_a_quiet_tape(temp_db, venue) -> None:
+    live_cid = "0xcid-now"
+    paper = resting.PaperRestingVenue(venue, max_tape_lag_s=300, latest_market=lambda: live_cid)
+    placed = await paper.place(request(queue_ahead=0.0), now=START + 10)
+    await paper.cancel([placed.order_id], reason="test", now=START + 100)
+    venue.add(live_cid, trade(START + 440, "Up", "SELL", 1.0, 0.99, cid=live_cid, up=UP,
+                              down=DOWN))
+    view = (await paper.fills([placed.order_id], now=START + 450))[placed.order_id]
+    assert view.final and not view.forced
+
+
+async def test_a_filled_order_closes_at_its_last_fill(temp_db, venue) -> None:
+    paper = resting.PaperRestingVenue(venue)
+    placed = await paper.place(request(queue_ahead=0.0), now=START + 10)
+    venue.add(CID, sell_up(START + 30, 1.0), nudge(START + 35))
+    await paper.fills([placed.order_id], now=START + 60)
+    venue.add(CID, sell_up(START + 400, 4.0), nudge(START + 410))
+    view = (await paper.fills([placed.order_id], now=START + 450))[placed.order_id]
+    assert view.state == resting.FILLED and view.closed_ts == START + 400
+
+
+async def test_an_outcome_that_is_not_the_tokens_is_refused(temp_db, venue) -> None:
+    with pytest.raises(PlacementRefused) as refused:
+        await resting.PaperRestingVenue(venue).place(request(token_id=DOWN, outcome="Up"),
+                                                     now=START + 10)
+    assert refused.value.reason == "bad_order"
+
+
+async def test_levels_ahead_move_the_order_up_the_queue(temp_db, venue) -> None:
+    """Behind 100 at 0.42 and 10 at 0.40: trades at 0.42 use the level above first."""
+    paper = resting.PaperRestingVenue(venue)
+    placed = await paper.place(request(queue_ahead=110.0, best_ask=0.45,
+                                       levels_ahead=((0.42, 100.0), (0.40, 10.0))),
+                               now=START + 10)
+    venue.add(CID, sell_up(START + 20, 100.0, price=0.42), sell_up(START + 30, 15.0),
+              nudge(START + 40))
+    view = (await paper.fills([placed.order_id], now=START + 60))[placed.order_id]
+    assert view.filled_size == pytest.approx(5.0)

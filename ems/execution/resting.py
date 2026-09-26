@@ -29,14 +29,20 @@ and some market's tape already holds a newer record. An order is ``final`` once 
 resting stretch has been read (nothing more can fill it), or ``force_final_after_s`` after it
 stopped, with ``forced`` set, if the tape never caught up.
 
+Fill checks run one at a time in the process, and each market's write goes through only if
+none of its orders changed since they were read (a cancel, or another check), so a slow tape
+reply can never move a cursor back or credit one trade twice.
+
 Storage: ``paper_resting_orders`` (created by ``db.init_db``), read and written only here.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
+import weakref
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,7 +92,11 @@ class PlaceRequest:
     ``queue_ahead`` is the size displayed at ``price`` or better when the order is placed: the
     depth it joins behind. ``best_ask`` is the lowest ask on the token (None when nobody is
     offering it): the order must rest strictly below it. ``tick_size`` is the market's price
-    step. ``strategy`` tags the order on the venue's record.
+    step. ``strategy`` tags the order on the venue's record. ``levels_ahead`` optionally gives
+    the displayed bid levels at the order's price or better, best first, as (price, shares):
+    the paper venue then moves the order up the queue as trades above its price use them up.
+    Left empty, the depth ahead is ``queue_ahead`` at the order's own price (a bid that joins
+    the best bid has nothing better ahead of it).
     """
 
     strategy: str
@@ -101,6 +111,7 @@ class PlaceRequest:
     tick_size: float
     queue_ahead: float
     best_ask: float | None
+    levels_ahead: tuple[tuple[float, float], ...] = ()
 
     @property
     def order_side(self) -> str:
@@ -169,6 +180,8 @@ def validate_request(request: PlaceRequest, now: float) -> None:
         raise PlacementRefused("bad_order", f"Outcome {request.outcome!r} is not Up or Down.")
     if request.token_id not in (request.up_token, request.down_token):
         raise PlacementRefused("bad_order", "The token is not one of the window's two tokens.")
+    if (request.outcome == "Up") != (request.token_id == request.up_token):
+        raise PlacementRefused("bad_order", f"The token is not the {request.outcome} token.")
     tick = request.tick_size
     if not (math.isfinite(tick) and 0.0 < tick < 1.0):
         raise PlacementRefused("bad_order", f"Tick size {tick!r} is not a price step.")
@@ -184,6 +197,11 @@ def validate_request(request: PlaceRequest, now: float) -> None:
         raise PlacementRefused("bad_order", f"Size {size} is not in hundredths of a share.")
     if not (math.isfinite(request.queue_ahead) and request.queue_ahead >= 0.0):
         raise PlacementRefused("bad_order", "The depth ahead must be a number of shares.")
+    for level_price, level_size in request.levels_ahead:
+        if not (math.isfinite(level_price) and math.isfinite(level_size) and level_size >= 0.0
+                and price - _EPS <= level_price < 1.0):
+            raise PlacementRefused("bad_order", "Each level ahead must be a bid at the order's "
+                                   "price or better, with a number of shares.")
     if int(request.expires_ts) - GTD_STOP_S <= math.floor(now) + 1:
         raise PlacementRefused(
             "too_late", "The venue stops an order 60 s before its expiry, so this one would "
@@ -195,6 +213,28 @@ def validate_request(request: PlaceRequest, now: float) -> None:
 # ---------------------------------------------------------------------------
 # The paper venue
 # ---------------------------------------------------------------------------
+
+
+def _levels_of(request: PlaceRequest) -> list[list[float]]:
+    """The depth ahead to store, best first: the given levels, else one at the order's price."""
+    if request.levels_ahead:
+        levels = sorted(((float(p), float(s)) for p, s in request.levels_ahead),
+                        key=lambda lv: -lv[0])
+        return [[p, s] for p, s in levels]
+    return [[float(request.price), float(request.queue_ahead)]]
+
+
+_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary())
+
+
+def _fills_lock() -> asyncio.Lock:
+    """One lock per event loop: fill checks run one at a time in the process."""
+    loop = asyncio.get_running_loop()
+    lock = _LOCKS.get(loop)
+    if lock is None:
+        lock = _LOCKS[loop] = asyncio.Lock()
+    return lock
 
 
 def paper_order_id(row_id: int) -> str:
@@ -224,13 +264,19 @@ def _end_ts(row: Mapping[str, Any]) -> int:
     return min(stop, int(cancelled)) if cancelled is not None else stop
 
 
+def _state_key(row: Mapping[str, Any]) -> tuple:
+    """What a fill check depends on: if any of it changed, the check read a stale row."""
+    return (int(row["flow_cursor_ts"]), float(row["filled_size"] or 0.0), row.get("cancelled_ts"),
+            row.get("final_ts"))
+
+
 def view_of(row: Mapping[str, Any], now: float) -> OrderView:
     """A paper order's row as the venue reports it."""
     size = float(row["size"])
     filled = float(row["filled_size"] or 0.0)
     end = _end_ts(row)
     if filled >= size - _EPS:
-        state, closed_ts = FILLED, int(row["filled_ts"] or end)
+        state, closed_ts = FILLED, int(row.get("completed_ts") or row["filled_ts"] or end)
     elif row.get("cancelled_ts") is not None and int(row["cancelled_ts"]) < int(row["stop_ts"]):
         state, closed_ts = CANCELLED, int(row["cancelled_ts"])
     elif now >= int(row["stop_ts"]):
@@ -257,10 +303,14 @@ class PaperRestingVenue:
         kill_switch_path: Path | str | None = None,
         max_tape_lag_s: float = DEFAULT_MAX_TAPE_LAG_S,
         force_final_after_s: float = DEFAULT_FORCE_FINAL_AFTER_S,
+        latest_market: Callable[[], str | None] | None = None,
     ) -> None:
+        """``latest_market`` names a market trading now, if the caller knows one: when a quiet
+        stretch needs the tape vouched for, that market's tape shows how far it has got."""
         if max_tape_lag_s < 0 or force_final_after_s < 0:
             raise ValueError("tape lag and force delay must be >= 0")
         self._client = client
+        self._latest_market = latest_market
         self.clock = clock
         self._kill_switch_path = kill_switch_path
         self.max_tape_lag_s = float(max_tape_lag_s)
@@ -291,7 +341,7 @@ class PaperRestingVenue:
                     request.strategy, request.condition_id, request.token_id, request.outcome,
                     request.up_token, request.down_token, float(request.price),
                     float(request.size), float(request.queue_ahead),
-                    json.dumps([[float(request.price), float(request.queue_ahead)]]),
+                    json.dumps(_levels_of(request)),
                     placed_ts, int(request.expires_ts) - GTD_STOP_S, int(request.expires_ts),
                     placed_ts,
                 ),
@@ -341,12 +391,13 @@ class PaperRestingVenue:
         clock = int(math.floor(t))
         self.last_errors = []
         ids = [i for i in (_row_id(o) for o in order_ids) if i is not None]
-        rows = await self._load(ids)
-        open_rows = [r for r in rows if r.get("final_ts") is None
-                     and float(r["filled_size"] or 0.0) < float(r["size"]) - _EPS]
-        if open_rows:
-            await self._advance(open_rows, t, clock)
+        async with _fills_lock():
             rows = await self._load(ids)
+            open_rows = [r for r in rows if r.get("final_ts") is None
+                         and float(r["filled_size"] or 0.0) < float(r["size"]) - _EPS]
+            if open_rows:
+                await self._advance(open_rows, t, clock)
+                rows = await self._load(ids)
         return {paper_order_id(int(r["id"])): view_of(r, t) for r in rows}
 
     async def _load(self, ids: list[int]) -> list[dict[str, Any]]:
@@ -426,16 +477,21 @@ class PaperRestingVenue:
         if need is None or (fresh is not None and fresh >= need):
             return fresh
         try:
-            async with _db.connect() as conn:
-                async with conn.execute(
-                    """
-                    SELECT condition_id FROM paper_resting_orders
-                    WHERE placed_ts <= ? ORDER BY placed_ts DESC, id DESC LIMIT 1
-                    """,
-                    (clock,),
-                ) as cur:
-                    row = await cur.fetchone()
-            probed = await tape_newest_ts(self._client, str(row["condition_id"])) if row else None
+            market = self._latest_market() if self._latest_market is not None else None
+            if not market or market in reads:
+                marks = ",".join("?" * len(reads))
+                async with _db.connect() as conn:
+                    async with conn.execute(
+                        f"""
+                        SELECT condition_id FROM paper_resting_orders
+                        WHERE placed_ts <= ? AND condition_id NOT IN ({marks})
+                        ORDER BY placed_ts DESC, id DESC LIMIT 1
+                        """,
+                        (clock, *reads),
+                    ) as cur:
+                        row = await cur.fetchone()
+                market = str(row["condition_id"]) if row else None
+            probed = await tape_newest_ts(self._client, market) if market else None
         except Exception as exc:  # noqa: BLE001 - without it the stretch just waits
             log.warning("paper_venue.tape_freshness_unread", error=str(exc))
             return fresh
@@ -466,29 +522,50 @@ class PaperRestingVenue:
         if not moving:
             return
         flows = allocate_fills(tape.prints, moving)
+        # Compare and set: one trade is shared across the whole group, so if any of its orders
+        # changed since the group was read (a cancel, another check), nothing is written and
+        # the next pass reads again from the stored state.
+        seen = {int(r["id"]): _state_key(r) for r in group}
         async with _db.connect() as conn:
-            for q in moving:
-                flow = flows[q.order_id]
-                done = q.flow_to >= ends[q.order_id] or flow.filled >= q.shares - _EPS
-                await conn.execute(
-                    """
-                    UPDATE paper_resting_orders
-                    SET flow_cursor_ts = ?, crossed = ?, filled_size = ?,
-                        filled_ts = COALESCE(filled_ts, ?), levels_ahead_json = ?,
-                        final_ts = CASE WHEN ? THEN ? ELSE final_ts END
-                    WHERE id = ?
-                    """,
-                    (
-                        q.flow_to, flow.crossed, flow.filled,
-                        flow.fill_ts if flow.added > _EPS else None,
-                        json.dumps([[px, size] for px, size in flow.levels]),
-                        1 if done else 0, clock, q.order_id,
-                    ),
-                )
-                if flow.added > _EPS:
-                    log.info("paper_venue.filled", order=q.order_id, outcome=q.side,
-                             price=q.price, shares=round(flow.added, 2), at=flow.fill_ts)
-            await conn.commit()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                marks = ",".join("?" * len(seen))
+                async with conn.execute(
+                    f"SELECT * FROM paper_resting_orders WHERE id IN ({marks})", list(seen)
+                ) as cur:
+                    now_rows = {int(r["id"]): _state_key(dict(r)) for r in await cur.fetchall()}
+                if now_rows != seen:
+                    await conn.rollback()
+                    log.info("paper_venue.stale_read_skipped", orders=len(seen))
+                    return
+                for q in moving:
+                    flow = flows[q.order_id]
+                    done = q.flow_to >= ends[q.order_id] or flow.filled >= q.shares - _EPS
+                    await conn.execute(
+                        """
+                        UPDATE paper_resting_orders
+                        SET flow_cursor_ts = ?, crossed = ?, filled_size = ?,
+                            filled_ts = COALESCE(filled_ts, ?),
+                            completed_ts = COALESCE(completed_ts, ?), levels_ahead_json = ?,
+                            final_ts = CASE WHEN ? THEN ? ELSE final_ts END
+                        WHERE id = ?
+                        """,
+                        (
+                            q.flow_to, flow.crossed, flow.filled,
+                            flow.fill_ts if flow.added > _EPS else None, flow.done_ts,
+                            json.dumps([[px, size] for px, size in flow.levels]),
+                            1 if done else 0, clock, q.order_id,
+                        ),
+                    )
+                await conn.commit()
+            except BaseException:
+                await conn.rollback()
+                raise
+        for q in moving:
+            flow = flows[q.order_id]
+            if flow.added > _EPS:
+                log.info("paper_venue.filled", order=q.order_id, outcome=q.side,
+                         price=q.price, shares=round(flow.added, 2), at=flow.fill_ts)
 
     async def _force_final(self, rows: list[dict[str, Any]], clock: int) -> None:
         """Orders whose tape never caught up are made final ``force_final_after_s`` after they

@@ -61,6 +61,10 @@ class Family:
     verdict: str = ""
     """The one-line case for keeping or deleting it. Blank for the ones that
     are plainly working."""
+    shared: tuple[str, ...] = ()
+    """Repo-relative files outside ``path`` that its behaviour depends on (the
+    shared execution layer). Its doc answers for them too: change one and the
+    doc must be re-stamped."""
 
 
 FAMILIES: tuple[Family, ...] = (
@@ -86,6 +90,11 @@ FAMILIES: tuple[Family, ...] = (
             "Sep 17-20 tape, learning from every settled window"
         ),
         switch="fade_1h_momentum_15m",
+        shared=(
+            "ems/execution/controls.py",
+            "ems/execution/queue.py",
+            "ems/execution/tape.py",
+        ),
         verdict=(
             "Paper only. Wired before the historical test at the operator's "
             "call (paper-trade and learn): the paper record, not a backtest, "
@@ -110,6 +119,14 @@ FAMILIES: tuple[Family, ...] = (
         status=RUNNING,
         record="Paper orders from 2026-09-26",
         switch="kelly_horse_race",
+        shared=(
+            "ems/execution/controls.py",
+            "ems/execution/endpoints.py",
+            "ems/execution/gate.py",
+            "ems/execution/queue.py",
+            "ems/execution/resting.py",
+            "ems/execution/tape.py",
+        ),
         verdict=(
             "Built as the operator asked: the maths as written, with randomness, and "
             "not fitted to outcomes. The records show how its chance of Up compares "

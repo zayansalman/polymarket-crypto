@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS paper_resting_orders (
   crossed            REAL NOT NULL DEFAULT 0,
   filled_size        REAL NOT NULL DEFAULT 0,
   filled_ts          INTEGER,
+  completed_ts       INTEGER,
   final_ts           INTEGER,
   forced             INTEGER NOT NULL DEFAULT 0
 );
@@ -350,6 +351,11 @@ FADE_ORDER_COLUMN_MIGRATIONS = {
     "settled_ts": "INTEGER",
 }
 
+# Columns the shared layer's tables gained after they were first created.
+PAPER_RESTING_ORDER_COLUMN_MIGRATIONS = {
+    "completed_ts": "INTEGER",
+}
+
 FADE_DIALS_COLUMN_MIGRATIONS = {
     "n_windows": "INTEGER NOT NULL DEFAULT 0",
     "loglik": "REAL",
@@ -388,6 +394,7 @@ async def init_db() -> None:
         await _migrate_columns(db, "fade_decisions", FADE_DECISION_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "fade_orders", FADE_ORDER_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "fade_dials", FADE_DIALS_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "paper_resting_orders", PAPER_RESTING_ORDER_COLUMN_MIGRATIONS)
         await db.commit()
 
 

@@ -7,8 +7,8 @@
 | Key | `fade_1h_momentum_15m` |
 | Status | running now |
 | Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
-| Code | `ems/fade_1h_momentum_15m/` — 9 files |
-| Code fingerprint | `a0c549de8d0d` |
+| Code | `ems/fade_1h_momentum_15m/` — 12 files (`ems/execution/controls.py`, `ems/execution/queue.py`, `ems/execution/tape.py` shared) |
+| Code fingerprint | `7e11ca7b9cd8` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -1004,6 +1004,7 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-26 · `7e11ca7b9cd8` · Its doc now also answers for the shared code it uses in ems/execution/ (controls.py, queue.py, tape.py): the fill model records when an order completes (done_ts), which fade does not read. Behaviour unchanged.
 - 2026-09-26 · `a0c549de8d0d` · The tape reader, fill allocation, result lookup, never-cross check, kill switch and PAPER/LIVE read moved to ems/execution/ (queue.py, tape.py, controls.py), shared with every strategy; the executor re-exports what callers used. Behaviour unchanged.
 - 2026-09-26 · `5b51c3681fa1` · executor docstring: dropped the citation of the deleted maker filler; the crossed-volume rule is stated inline
 - 2026-09-26 · `07696b37f565` · Moved into the single ems/ package (ems/fade_1h_momentum_15m/); imports only, behaviour unchanged.

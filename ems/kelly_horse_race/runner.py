@@ -173,8 +173,10 @@ class Runner:
         self._clock = clock
         self._kill_switch_path = kill_switch_path
         self._rng = rng or random.SystemRandom().random
+        self._latest_cid: str | None = None
         self.paper = paper or PaperRestingVenue(client, clock=clock,
-                                                kill_switch_path=kill_switch_path)
+                                                kill_switch_path=kill_switch_path,
+                                                latest_market=lambda: self._latest_cid)
         self._live_factory = live
         self.venues: dict[str, RestingVenue] = {"paper": self.paper}
         self.gates = {mode: RiskGate(mode, kill_switch_path=kill_switch_path) for mode in MODES}
@@ -377,6 +379,7 @@ class Runner:
             report.window = {"waiting": exc.code, "message": exc.message}
             return
         self._forget_before(win.start)
+        self._latest_cid = win.condition_id  # a market trading now, for the tape's freshness
         report.window = {"slug": win.slug, "start": win.start, "end": win.end}
         existing = await _ledger.decision_for(win.slug)
         if existing is not None:
@@ -465,28 +468,32 @@ class Runner:
                       token_id=request.token_id, outcome=request.outcome, price=request.price,
                       size=request.size, queue_ahead=request.queue_ahead,
                       window_end_ts=win.end)
-        verdict = await point.gate.check(request.notional_usd, now=now)
-        if not verdict.allowed:
-            await _ledger.record_order(**common, state="blocked",
-                                       reason=f"{verdict.reason}: {verdict.message}")
-            log.info("kelly.blocked", mode=point.mode, reason=verdict.reason)
-            return
-        try:
-            placed = await point.venue.place(request, now=now)  # type: ignore[union-attr]
-        except PlacementRefused as exc:
-            await _ledger.record_order(**common, state="rejected", reason=f"{exc.reason}: {exc}")
-            log.info("kelly.refused", mode=point.mode, reason=exc.reason)
-            return
-        except Exception as exc:  # noqa: BLE001 - recorded, and the other endpoint still goes
-            await _ledger.record_order(**common, state="rejected",
-                                       reason=f"error: {type(exc).__name__}: {exc}")
-            report.fail(f"Placing on {point.mode}", exc)
-            return
-        row_id = await _ledger.record_order(**common, state="resting",
-                                            venue_order_id=placed.order_id,
-                                            placed_ts=placed.placed_ts)
-        await point.gate.commit(strategy=STRATEGY, order_ref=order_ref(row_id),
-                                notional_usd=request.notional_usd, now=now)
+        # The leg's lock spans check, place and commit, so another strategy's order checked at
+        # the same moment cannot also fit under a cap that has room for one.
+        async with point.gate.lock:
+            verdict = await point.gate.check(request.notional_usd, now=now)
+            if not verdict.allowed:
+                await _ledger.record_order(**common, state="blocked",
+                                           reason=f"{verdict.reason}: {verdict.message}")
+                log.info("kelly.blocked", mode=point.mode, reason=verdict.reason)
+                return
+            try:
+                placed = await point.venue.place(request, now=now)  # type: ignore[union-attr]
+            except PlacementRefused as exc:
+                await _ledger.record_order(**common, state="rejected",
+                                           reason=f"{exc.reason}: {exc}")
+                log.info("kelly.refused", mode=point.mode, reason=exc.reason)
+                return
+            except Exception as exc:  # noqa: BLE001 - recorded; the other endpoint still goes
+                await _ledger.record_order(**common, state="rejected",
+                                           reason=f"error: {type(exc).__name__}: {exc}")
+                report.fail(f"Placing on {point.mode}", exc)
+                return
+            row_id = await _ledger.record_order(**common, state="resting",
+                                                venue_order_id=placed.order_id,
+                                                placed_ts=placed.placed_ts)
+            await point.gate.commit(strategy=STRATEGY, order_ref=order_ref(row_id),
+                                    notional_usd=request.notional_usd, now=now)
 
     async def _not_ready(self, win: _inputs.Window, now: float, exc: _inputs.NotReady,
                          report: PassReport) -> None:

@@ -7,8 +7,8 @@
 | Key | `kelly_horse_race` |
 | Status | running now |
 | Switch | `kelly_horse_race` on the MY STRATEGIES card |
-| Code | `ems/kelly_horse_race/` — 5 files |
-| Code fingerprint | `cc1dd475f7a4` |
+| Code | `ems/kelly_horse_race/` — 11 files (`ems/execution/controls.py`, `ems/execution/endpoints.py`, `ems/execution/gate.py`, `ems/execution/queue.py`, `ems/execution/resting.py`, `ems/execution/tape.py` shared) |
+| Code fingerprint | `ffd0d90d7706` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -151,4 +151,4 @@ The size at a bid of 0.53 with a 5-share minimum and the \$5 cap: from 5.00 to 9
 
 ## Changelog
 
-- 2026-09-26 · `cc1dd475f7a4` · First build: the maths, the inputs, the ledger and the runner, on the shared resting-order layer; paper always, live not built yet.
+- 2026-09-26 · `ffd0d90d7706` · First build: the maths, the inputs, the ledger and the runner, on the shared resting-order layer; paper always, live not built yet.
