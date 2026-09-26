@@ -8,6 +8,7 @@ switch and the kill switch; inputs that wait, and inputs that never come.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from dataclasses import dataclass, field
@@ -674,3 +675,71 @@ async def test_a_failed_cancel_reaches_the_report(kelly_db, venue, armed) -> Non
     assert "live: the cancel of 1 order(s) failed: HTTP 503" in report.errors
     assert live.last_errors == []
 
+
+
+# ---------------------------------------------------------------------------
+# A failed realize, a shutdown mid-send, the time an order goes
+# ---------------------------------------------------------------------------
+
+
+async def test_a_failed_realize_is_tried_again_next_pass(kelly_db, venue, monkeypatch) -> None:
+    hub, clock = make_hub(), {"now": NOW}
+    runner = make_runner(venue, hub, clock, rng=draws(0.1, 0.0))
+    await runner.pass_once()
+    venue.add(CID, sell_up(NOW + 60, 30.0), sell_up(END + 30, 1.0, price=0.99))
+    venue.resolve(CID, winner="Down", up=UP, down=DOWN)
+    real_realize = rn.RiskGate.realize
+    failures = [OSError("database is locked")]
+
+    async def realize_once_failing(self, **kw):
+        if failures:
+            raise failures.pop()
+        return await real_realize(self, **kw)
+
+    monkeypatch.setattr(rn.RiskGate, "realize", realize_once_failing)
+    clock["now"] = END + 200
+    report = await runner.pass_once()
+    assert len(report.settled) == 1 and any("settled P&L" in e for e in report.errors)
+    assert not [e for e in await rows("risk_events") if e["kind"] == "realize"]
+    clock["now"] = END + 205
+    await runner.pass_once()
+    (realized,) = [e for e in await rows("risk_events") if e["kind"] == "realize"]
+    assert realized["amount_usd"] == pytest.approx(-2.5)
+
+
+async def test_a_shutdown_mid_send_still_records_the_order(kelly_db, venue, armed) -> None:
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    started = asyncio.Event()
+    real_place = live.place
+
+    async def slow_place(request, *, now=None):
+        started.set()
+        await asyncio.sleep(0.2)  # the exchange takes its time to answer
+        return await real_place(request, now=now)
+
+    live.place = slow_place  # type: ignore[method-assign]
+    task = asyncio.create_task(runner.pass_once())
+    await started.wait()
+    task.cancel()  # the app's teardown
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, recorded = await rows("kelly_horse_race_orders")
+    assert (recorded["mode"], recorded["state"], recorded["venue_order_id"]) == (
+        "live", "resting", "0xLIVE1")
+    assert [e["kind"] for e in await rows("risk_events") if e["mode"] == "live"] == ["commit"]
+
+
+async def test_a_paper_order_counts_trades_from_when_it_is_sent(kelly_db, venue,
+                                                                monkeypatch) -> None:
+    clock = {"now": NOW}
+    real_read_book = inputs.read_book
+
+    async def slow_read_book(client, token):
+        clock["now"] = NOW + 5  # the reads took five seconds
+        return await real_read_book(client, token)
+
+    monkeypatch.setattr(inputs, "read_book", slow_read_book)
+    await make_runner(venue, make_hub(), clock).pass_once()
+    (paper,) = await rows("paper_resting_orders")
+    assert paper["placed_ts"] == NOW + 5 + 1

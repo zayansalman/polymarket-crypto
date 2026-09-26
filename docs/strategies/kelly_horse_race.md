@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `kelly_horse_race` on the MY STRATEGIES card |
 | Code | `ems/kelly_horse_race/` — 14 files (`ems/execution/clob.py`, `ems/execution/controls.py`, `ems/execution/endpoints.py`, `ems/execution/gate.py`, `ems/execution/journal.py`, `ems/execution/live_control.py`, `ems/execution/queue.py`, `ems/execution/resting.py`, `ems/execution/tape.py` shared) |
-| Code fingerprint | `69daf64caa7a` |
+| Code fingerprint | `ad2bb25e746d` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -154,6 +154,7 @@ The size at a bid of 0.53 with a 5-share minimum and the \$5 cap: from 5.00 to 9
 
 ## Changelog
 
+- 2026-09-26 · `ad2bb25e746d` · A settled P&L the risk gate failed to record is tried again next pass; a shutdown mid-send waits for the order to be recorded; an order is stamped with the time it goes, so a paper order counts trades only from then.
 - 2026-09-26 · `69daf64caa7a` · Live safety: the switch, the kill switch and LIVE are checked again right before an order goes; a live send with no reply is searched for on the exchange and recorded as unknown until found, holding new live orders; an empty status reply is a miss, not an end; failed cancels reach the card; an order that cannot be recorded is cancelled.
 - 2026-09-26 · `422daf624a50` · Live venue: an order the exchange reports expired or invalid, or still open two minutes past its GTD stop, is taken as closed (the stuck case flagged forced), so its window can settle.
 - 2026-09-26 · `ef4bc244bf1a` · The live leg: the order also goes to the exchange as a post-only GTD buy while the operator has armed LIVE (selected and clicked in this process, a wallet that passes, the switch on); PAPER again cancels resting live orders; fills from size_matched; every live placement and cancel journaled.

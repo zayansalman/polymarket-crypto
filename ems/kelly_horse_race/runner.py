@@ -15,7 +15,8 @@ after the market-data hub). Every pass, in the order that keeps the record hones
    - from ``CANCEL_LEAD_S`` (60 s) before the window end, cancel what still rests (the venue
      stops a GTD order then anyway); filled shares are kept;
    - settle every ended window whose orders are all final, once the venue's order-book
-     service calls it: P&L per filled share is ``1[won] - price``, with no fee.
+     service calls it: P&L per filled share is ``1[won] - price``, with no fee. The P&L then
+     counts toward each gate leg's loss halt; a write that fails is tried again next pass.
 3. The endpoints for this pass (``ems/execution/endpoints.py``): paper is always on unless the
    kill switch file exists. Whatever rests on an endpoint that is off is cancelled.
 4. The strategy switch. Off: cancel every resting order, give up the market data, decide
@@ -25,6 +26,8 @@ after the market-data hub). Every pass, in the order that keeps the record hones
    to wait for an input never rolls the die again. The same order goes to every active
    endpoint, through that endpoint's risk gate leg; a block or a refusal is recorded against
    that mode. An endpoint that comes on after the window's decision starts at the next window.
+   The switch, the kill switch and LIVE are checked again right before each order goes, and a
+   shutdown mid-send waits (``SEND_GRACE_S``) for the order to be recorded.
    Inputs that cannot arrive in time (``NotReady.final``, or still missing at the cutoff
    ``DECISION_CUTOFF_S`` before the end) are recorded as the window's reason for no order.
 6. Record this pass's state for the card (``status()`` and the ``STATUS_KEY`` config row).
@@ -76,6 +79,7 @@ CANCEL_LEAD_S = 60
 DECISION_CUTOFF_S = 120
 SETTLE_RETRY_S = 30.0
 MAX_SETTLE_PER_PASS = 20
+SEND_GRACE_S = 30.0  # how long a shutdown waits for an order in flight to be recorded
 FILL_EVENT = "kelly_fill"
 SETTLED_EVENT = "kelly_settled"
 
@@ -188,6 +192,7 @@ class Runner:
         self._draws: dict[str, _Draws] = {}
         self._waiting: dict[str, _inputs.NotReady] = {}
         self._settle_retry_at: dict[int, float] = {}
+        self._to_realize: dict[str, tuple[str, float, float]] = {}  # ref -> mode, P&L, when
         self._setup_done = False
         self._hub: Any = None
 
@@ -241,7 +246,8 @@ class Runner:
                          ("Checking fills", self._sync_fills),
                          ("Giving unfilled notional back to the gate", self._credit),
                          ("Cancelling at the window end", self._cancel_ending),
-                         ("Settling", self._settle)):
+                         ("Settling", self._settle),
+                         ("Telling the risk gate the settled P&L", self._realize)):
             try:
                 await fn(report)
             except Exception as exc:  # noqa: BLE001 - each step on its own
@@ -368,9 +374,7 @@ class Runner:
             if settled is None:
                 continue
             for order in settled.orders:
-                await self.gates[order.mode].realize(
-                    strategy=STRATEGY, order_ref=order_ref(order.order_id),
-                    pnl_usd=order.pnl_usd, now=now)
+                self._to_realize[order_ref(order.order_id)] = (order.mode, order.pnl_usd, now)
             report.settled.append(settled)
             pnl = {m: round(sum(o.pnl_usd for o in settled.orders if o.mode == m), 4)
                    for m in {o.mode for o in settled.orders}}
@@ -378,6 +382,13 @@ class Runner:
                 f"Kelly horse-race: {settled.window_slug} settled {outcome}"
                 + "".join(f"; {m} P&L ${v:+.2f}" for m, v in sorted(pnl.items()))),
                 {"window_slug": settled.window_slug, "outcome": outcome, "pnl": pnl})
+
+    async def _realize(self, report: PassReport) -> None:
+        """Count settled P&L toward each leg's loss halt. One that fails stays queued and is
+        tried again next pass (the gate counts each order once)."""
+        for ref, (mode, pnl, ts) in list(self._to_realize.items()):
+            await self.gates[mode].realize(strategy=STRATEGY, order_ref=ref, pnl_usd=pnl, now=ts)
+            del self._to_realize[ref]
 
     # -- endpoints and the switch -----------------------------------------------------
 
@@ -540,41 +551,58 @@ class Runner:
                 await _ledger.record_order(**common, state="blocked", reason=gone)
                 log.info("kelly.not_sent", mode=point.mode, reason=gone)
                 return
-            verdict = await point.gate.check(request.notional_usd, now=now)
+            # Stamped when it goes, not when the decision began: a paper order counts trades
+            # only from then, and the queue ahead was read after the decision began.
+            sent = self._now()
+            verdict = await point.gate.check(request.notional_usd, now=sent)
             if not verdict.allowed:
                 await _ledger.record_order(**common, state="blocked",
                                            reason=f"{verdict.reason}: {verdict.message}")
                 log.info("kelly.blocked", mode=point.mode, reason=verdict.reason)
                 return
+            # Placing and recording finish together: a shutdown mid-send waits for the order
+            # to be written down (or taken off) rather than leave it on the venue untracked.
+            inner = asyncio.ensure_future(
+                self._place_and_record(point, request, common, sent, win, report))
             try:
-                placed = await point.venue.place(request, now=now)  # type: ignore[union-attr]
-            except OutcomeUnknown as exc:
-                await _ledger.record_order(**common, state=_ledger.UNKNOWN_STATE,
-                                           reason=f"{exc.reason}: {exc}")
-                report.errors.append(f"{point.mode}: {exc} It is looked for every pass.")
-                log.error("kelly.outcome_unknown", mode=point.mode, window=win.slug)
-                return
-            except PlacementRefused as exc:
-                await _ledger.record_order(**common, state="rejected",
-                                           reason=f"{exc.reason}: {exc}")
-                log.info("kelly.refused", mode=point.mode, reason=exc.reason)
-                return
-            except Exception as exc:  # noqa: BLE001 - recorded; the other endpoint still goes
-                await _ledger.record_order(**common, state="rejected",
-                                           reason=f"error: {type(exc).__name__}: {exc}")
-                report.fail(f"Placing on {point.mode}", exc)
-                return
-            _drain_errors(point.mode, point.venue, report)
-            try:
-                row_id = await _ledger.record_order(**common, state="resting",
-                                                    venue_order_id=placed.order_id,
-                                                    placed_ts=placed.placed_ts)
-            except Exception as exc:  # noqa: BLE001 - an order this ledger cannot follow
-                report.fail(f"Recording the {point.mode} order", exc)
-                await self._cancel_unrecorded(point, placed.order_id, report)
-                return
-            await point.gate.commit(strategy=STRATEGY, order_ref=order_ref(row_id),
-                                    notional_usd=request.notional_usd, now=now)
+                await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                if not inner.done():
+                    log.warning("kelly.stopping_mid_send", mode=point.mode)
+                    await asyncio.wait({inner}, timeout=SEND_GRACE_S)
+                raise
+
+    async def _place_and_record(self, point: _endpoints.Endpoint, request: PlaceRequest,
+                                common: Mapping[str, Any], now: float, win: _inputs.Window,
+                                report: PassReport) -> None:
+        try:
+            placed = await point.venue.place(request, now=now)  # type: ignore[union-attr]
+        except OutcomeUnknown as exc:
+            await _ledger.record_order(**common, state=_ledger.UNKNOWN_STATE,
+                                       reason=f"{exc.reason}: {exc}")
+            report.errors.append(f"{point.mode}: {exc} It is looked for every pass.")
+            log.error("kelly.outcome_unknown", mode=point.mode, window=win.slug)
+            return
+        except PlacementRefused as exc:
+            await _ledger.record_order(**common, state="rejected", reason=f"{exc.reason}: {exc}")
+            log.info("kelly.refused", mode=point.mode, reason=exc.reason)
+            return
+        except Exception as exc:  # noqa: BLE001 - recorded; the other endpoint still goes
+            await _ledger.record_order(**common, state="rejected",
+                                       reason=f"error: {type(exc).__name__}: {exc}")
+            report.fail(f"Placing on {point.mode}", exc)
+            return
+        _drain_errors(point.mode, point.venue, report)
+        try:
+            row_id = await _ledger.record_order(**common, state="resting",
+                                                venue_order_id=placed.order_id,
+                                                placed_ts=placed.placed_ts)
+        except Exception as exc:  # noqa: BLE001 - an order this ledger cannot follow
+            report.fail(f"Recording the {point.mode} order", exc)
+            await self._cancel_unrecorded(point, placed.order_id, report)
+            return
+        await point.gate.commit(strategy=STRATEGY, order_ref=order_ref(row_id),
+                                notional_usd=request.notional_usd, now=now)
 
     async def _cancel_unrecorded(self, point: _endpoints.Endpoint, order_id: str,
                                  report: PassReport) -> None:
