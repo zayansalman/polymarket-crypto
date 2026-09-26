@@ -7,10 +7,10 @@
 
 - **Where to make what change:** read **[docs/CODE_MAP.md](docs/CODE_MAP.md)**
   first. It is the routing doc: "I want to change X → edit Y".
-- **One package, `ems/`.** One paper strategy (`ems/fade_1h_momentum_15m/`),
-  the execution layer every strategy shares (`ems/execution/`: the fill model,
+- **One package, `ems/`.** Two strategies (`ems/fade_1h_momentum_15m/`,
+  `ems/kelly_horse_race/`), the execution layer every strategy shares (`ems/execution/`: the fill model,
   the trade tape and result reads, the mode and kill switch checks), the
-  WebSocket market-data hub it reads (`ems/marketdata/`), the FastAPI
+  WebSocket market-data hub they read (`ems/marketdata/`), the FastAPI
   operator dashboard (`ems/dashboard/`) and the foundation (`ems/config.py`,
   `ems/db.py`, `ems/logging_setup.py`). `main.py` is the only entry point.
 - **Machine-generated facts** (module inventory, wired-vs-dead status, test
@@ -28,9 +28,11 @@
 
 A small local execution management system (EMS) for trying trading ideas on
 Polymarket's crypto Up/Down markets with real market data and paper fills.
-One strategy is wired today: **Fade 1h Momentum on 15m**, which prices the
+Two strategies are wired today. **Fade 1h Momentum on 15m** prices the
 15-minute BTC, ETH, SOL and XRP windows every minute and rests paper orders
-that fill only against the real trade tape. Everything else that used to live
+that fill only against the real trade tape. **Kelly horse-race** rolls a die
+weighted by its chance of Up once per BTC 15m window and rests one passive buy
+at that side's best bid, with a random size up to $5. Everything else that used to live
 here (the BTC 5-minute loop, the maker, the daily altcoin scanner, the live
 CLOB executor and its risk gate) was removed on 2026-09-26; `git log` before
 `ea93457` has it.
@@ -38,8 +40,8 @@ CLOB executor and its risk gate) was removed on 2026-09-26; `git log` before
 How it runs:
 
 1. `python main.py` boots the dashboard. Its lifespan starts the market-data
-   hub, then the strategy loop. There is no Start button.
-2. The strategy opens new positions only while its switch on the MY
+   hub, then the strategy loops. There is no Start button.
+2. Each strategy opens new positions only while its switch on the MY
    STRATEGIES card is on. Off stops new entries; open paper positions still
    settle.
 3. The kill switch file (`data/KILL` by default) stops new orders and cancels
@@ -109,8 +111,8 @@ http://127.0.0.1:7860
 ## Live module status (generated)
 
 <!-- BEGIN GENERATED:summary -->
-- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` = the one strategy (paper only), `execution/` = the execution layer every strategy shares (fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
-- **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategy.
-- **Tests:** 1000.
-- **Built-but-dead (do not edit expecting runtime effect):** `ems/execution/gate.py`, `ems/execution/resting.py`.
+- **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
+- **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
+- **Tests:** 1065.
+- **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->

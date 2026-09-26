@@ -1,1 +1,2 @@
-"""Polymarket crypto EMS: one paper strategy, the market-data hub and the operator dashboard."""
+"""Polymarket crypto EMS: the strategies, their shared execution layer, the market-data hub
+and the operator dashboard."""

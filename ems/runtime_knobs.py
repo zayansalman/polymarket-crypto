@@ -110,6 +110,16 @@ KNOBS: dict[str, Knob] = {
         "runtime.fade_1h.trade_xrp", True, "bool", "Trade XRP",
         group="Fade 1h Momentum on 15m",
     ),
+    # Kelly horse-race: one randomised passive buy per BTC 15m window (ems/kelly_horse_race/).
+    "kelly_horse_race_max_notional_usd": Knob(
+        "runtime.kelly_horse_race.max_notional_usd", 5.0, "float",
+        "Largest order: size is drawn up to this", 0.01, 10_000.0, unit="USD",
+        group="Kelly horse-race",
+    ),
+    "kelly_horse_race_poll_interval_seconds": Knob(
+        "runtime.kelly_horse_race.poll_interval_seconds", 5.0, "float",
+        "Pass interval", 1.0, 600.0, unit="s", group="Kelly horse-race",
+    ),
     # The risk gate every strategy's resting orders pass (ems/execution/gate.py), one leg per
     # mode. A loss halt or daily cap of 0 is off. The live keys are the ones the deleted
     # live executor used, so an existing database keeps the operator's values.

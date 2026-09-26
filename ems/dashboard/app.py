@@ -1,7 +1,7 @@
 """FastAPI dashboard for the local Polymarket crypto trading lab.
 
-Starts the WebSocket market-data hub and the Fade 1h Momentum on 15m paper
-strategy as background tasks for its lifetime — see ``_lifespan``.
+Starts the WebSocket market-data hub and the strategies (Fade 1h Momentum on
+15m, Kelly horse-race) as background tasks for its lifetime — see ``_lifespan``.
 
 Endpoints:
     GET  /                   — the dashboard page (HTML)
@@ -66,11 +66,20 @@ async def _lifespan(app: FastAPI):
     fade_stop_event = asyncio.Event()
     fade_task = asyncio.create_task(_run_fade(fade_stop_event))
 
+    # Kelly horse-race: one randomised passive buy per BTC 15m window, read from
+    # the hub above. Paper always; live only once built and armed. Its fills and
+    # settlement run every pass whatever its switch says.
+    from ems.kelly_horse_race.runner import run_forever as _run_kelly
+
+    kelly_stop_event = asyncio.Event()
+    kelly_task = asyncio.create_task(_run_kelly(kelly_stop_event))
+
     yield
 
     _marketdata_hub.set_current(None)
     for stop_event, task in (
         (fade_stop_event, fade_task),
+        (kelly_stop_event, kelly_task),
         (marketdata_stop_event, marketdata_task),
     ):
         stop_event.set()
@@ -159,6 +168,8 @@ _FEED_KIND = {
     "system_start": "system",
     "fade1h_fill": "trade",
     "fade1h_settled": "trade",
+    "kelly_fill": "trade",
+    "kelly_settled": "trade",
     "runtime_config": "config",
 }
 

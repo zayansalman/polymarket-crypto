@@ -220,6 +220,85 @@ CREATE TABLE IF NOT EXISTS risk_events (
 
 CREATE INDEX IF NOT EXISTS idx_risk_events_day
   ON risk_events(mode, kind, ts);
+
+-- Kelly horse-race (ems/kelly_horse_race/, read and written only through its ledger.py).
+
+-- One row per BTC 15m window decided: every input, both draws, the book, the order sent to
+-- every active endpoint (or why none was), and the window's result once settled.
+CREATE TABLE IF NOT EXISTS kelly_horse_race_decisions (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  window_slug       TEXT NOT NULL UNIQUE,
+  condition_id      TEXT,
+  up_token          TEXT,
+  down_token        TEXT,
+  window_start      INTEGER NOT NULL,
+  window_end        INTEGER NOT NULL,
+  ts                INTEGER NOT NULL,
+  k_price           REAL,
+  k_source          TEXT,
+  x_price           REAL,
+  x_obs_ts          INTEGER,
+  r60               REAL,
+  sigma_h           REAL,
+  tau_h             REAL,
+  z                 REAL,
+  p_up              REAL,
+  u1                REAL,
+  side              TEXT CHECK (side IN ('Up', 'Down')),
+  u2                REAL,
+  token_id          TEXT,
+  best_bid          REAL,
+  best_ask          REAL,
+  bid_size          REAL,
+  tick_size         REAL,
+  min_order_size    REAL,
+  max_notional_usd  REAL,
+  price             REAL,
+  shares            REAL,
+  notional_usd      REAL,
+  reason            TEXT,
+  outcome           TEXT CHECK (outcome IN ('Up', 'Down')),
+  settled_ts        INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_kelly_horse_race_decisions_due
+  ON kelly_horse_race_decisions(outcome, window_end);
+
+-- One row per order per mode (paper, live) for a decision, blocked ones included with the
+-- gate's reason. state: blocked, rejected, resting, filled, cancelled, expired. final: the
+-- venue can fill it no more. credited: its unfilled notional was given back to the gate.
+CREATE TABLE IF NOT EXISTS kelly_horse_race_orders (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id       INTEGER NOT NULL,
+  window_slug       TEXT NOT NULL,
+  mode              TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+  venue_order_id    TEXT,
+  token_id          TEXT NOT NULL,
+  outcome           TEXT NOT NULL CHECK (outcome IN ('Up', 'Down')),
+  outcome_index     INTEGER NOT NULL,
+  price             REAL NOT NULL,
+  size              REAL NOT NULL,
+  notional_usd      REAL NOT NULL,
+  queue_ahead       REAL NOT NULL,
+  placed_ts         INTEGER,
+  window_end_ts     INTEGER NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('blocked', 'rejected', 'resting', 'filled',
+                                                   'cancelled', 'expired')),
+  reason            TEXT,
+  filled_size       REAL NOT NULL DEFAULT 0,
+  closed_ts         INTEGER,
+  final             INTEGER NOT NULL DEFAULT 0,
+  forced            INTEGER NOT NULL DEFAULT 0,
+  credited          INTEGER NOT NULL DEFAULT 0,
+  won               INTEGER,
+  payout_usd        REAL,
+  pnl_usd           REAL,
+  settled_ts        INTEGER,
+  UNIQUE (decision_id, mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kelly_horse_race_orders_open
+  ON kelly_horse_race_orders(final, mode);
 """
 
 # Fade 1h Momentum on 15m tables. Each dict lists every column an older copy of the table

@@ -6,8 +6,8 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `ems/__init__.py` | pkg | 13 | Polymarket crypto EMS: one paper strategy, the market-data hub and the operator dashboard. |
-| `ems/config.py` | WIRED | 8 | Configuration for the local Polymarket crypto trading lab. |
+| `ems/__init__.py` | pkg | 16 | Polymarket crypto EMS: the strategies, their shared execution layer, the market-data hub |
+| `ems/config.py` | WIRED | 9 | Configuration for the local Polymarket crypto trading lab. |
 | `ems/connectors/__init__.py` | pkg | 0 | Data connectors: ``updown_quote`` (live top-of-book of a crypto Up/Down window), used by the market-data hub. |
 | `ems/connectors/updown_quote.py` | WIRED | 1 | Live top-of-book quote for the current window of any crypto Up/Down market. |
 | `ems/dashboard/__init__.py` | pkg | 1 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
@@ -21,13 +21,14 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `ems/dashboard/panels/settings.py` | WIRED | 1 | Settings panel: every dashboard-editable runtime knob (#206). |
 | `ems/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
-| `ems/db.py` | WIRED | 10 | SQLite storage for the local Polymarket crypto trading lab. |
-| `ems/execution/__init__.py` | pkg | 3 | The execution layer every strategy shares: how a resting order meets the venue. |
-| `ems/execution/controls.py` | WIRED | 3 | What every placement checks first: the operator's mode, the kill switch and the spread. |
-| `ems/execution/gate.py` | DEAD? | 0 | The pre-trade risk gate every strategy's orders pass: one leg per mode, paper and live. |
+| `ems/db.py` | WIRED | 12 | SQLite storage for the local Polymarket crypto trading lab. |
+| `ems/execution/__init__.py` | pkg | 5 | The execution layer every strategy shares: how a resting order meets the venue. |
+| `ems/execution/controls.py` | WIRED | 5 | What every placement checks first: the operator's mode, the kill switch and the spread. |
+| `ems/execution/endpoints.py` | WIRED | 1 | Which venues may take new orders this pass: one endpoint per mode, each with its gate leg. |
+| `ems/execution/gate.py` | WIRED | 2 | The pre-trade risk gate every strategy's orders pass: one leg per mode, paper and live. |
 | `ems/execution/queue.py` | WIRED | 4 | Queue maths for resting orders: the depth ahead of an order, and how the taker tape fills it. |
-| `ems/execution/resting.py` | DEAD? | 0 | Resting orders for any strategy: one request shape, a paper venue, and the same calls live. |
-| `ems/execution/tape.py` | WIRED | 3 | Reads from the venue that every strategy's fills and results rest on. |
+| `ems/execution/resting.py` | WIRED | 3 | Resting orders for any strategy: one request shape, a paper venue, and the same calls live. |
+| `ems/execution/tape.py` | WIRED | 5 | Reads from the venue that every strategy's fills and results rest on. |
 | `ems/fade_1h_momentum_15m/__init__.py` | pkg | 6 | Fade 1h Momentum on 15m: a paper-only strategy on the 15-minute crypto Up/Down markets. |
 | `ems/fade_1h_momentum_15m/decide.py` | WIRED | 2 | The model hook for Fade 1h Momentum on 15m: one coin's inputs in, a :class:`Decision` out. |
 | `ems/fade_1h_momentum_15m/executor.py` | WIRED | 2 | Order execution for Fade 1h Momentum on 15m: paper child orders, their fills, settlement. |
@@ -39,18 +40,23 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `ems/fade_1h_momentum_15m/sizing.py` | WIRED | 3 | Sizing maths for Fade 1h Momentum on 15m: market anchor, Kelly stakes, scaled passive limit |
 | `ems/fees.py` | WIRED | 1 | Canonical Polymarket taker-fee math. |
 | `ems/inventory.py` | WIRED | 5 | Every strategy family in this repo. |
-| `ems/logging_setup.py` | WIRED | 12 | Structured JSON logging with structlog. Module + trade_id context. |
-| `ems/marketdata/__init__.py` | pkg | 4 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
+| `ems/kelly_horse_race/__init__.py` | pkg | 1 | Kelly horse-race: one randomised passive buy per BTC 15m Up/Down window, on paper and live. |
+| `ems/kelly_horse_race/inputs.py` | WIRED | 1 | Live inputs for Kelly horse-race: the BTC 15m window, K, X, the last hour, and the book. |
+| `ems/kelly_horse_race/ledger.py` | WIRED | 1 | The ledger for Kelly horse-race: the only code that reads or writes its two tables. |
+| `ems/kelly_horse_race/maths.py` | WIRED | 2 | The maths of Kelly horse-race: the chance of Up, the two draws, and the size. Pure: no I/O. |
+| `ems/kelly_horse_race/runner.py` | WIRED | 1 | The Kelly horse-race loop: bookkeeping, then one randomised passive buy per BTC 15m window. |
+| `ems/logging_setup.py` | WIRED | 13 | Structured JSON logging with structlog. Module + trade_id context. |
+| `ems/marketdata/__init__.py` | pkg | 5 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
 | `ems/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
 | `ems/marketdata/clob_shard.py` | WIRED | 1 | One asset x timeframe's market-channel connections: N redundant sockets, the freshest served. |
 | `ems/marketdata/clob_stream.py` | WIRED | 4 | Reconnecting connection to the Polymarket CLOB market channel (books, trades, lifecycle). |
-| `ems/marketdata/hub.py` | WIRED | 4 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
+| `ems/marketdata/hub.py` | WIRED | 5 | Live Polymarket books, trades and reference prices for strategies (the module's public API). |
 | `ems/marketdata/order_book.py` | WIRED | 3 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
 | `ems/marketdata/rest_poll.py` | WIRED | 1 | A light REST /book poll running alongside the sockets on the markets in use. |
 | `ems/marketdata/rtds_stream.py` | WIRED | 2 | Chainlink, Chainlink 60 s TWAP and Binance prices from Polymarket's RTDS WebSocket. |
 | `ems/marketdata/universe.py` | WIRED | 1 | Which Polymarket Up/Down windows to follow, and their outcome token ids. |
-| `ems/runtime_knobs.py` | WIRED | 5 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
-| `ems/strategies.py` | WIRED | 5 | Operator strategy switches: which strategies may open new positions. |
+| `ems/runtime_knobs.py` | WIRED | 6 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
+| `ems/strategies.py` | WIRED | 6 | Operator strategy switches: which strategies may open new positions. |
 | `ems/strategy_docs.py` | WIRED | 4 | One document per strategy family, kept in step with the code it describes. |
 | `main.py` | cli | 0 | Entrypoint: boots the FastAPI operator dashboard (uvicorn). |
 | `tools/fade_1h_momentum_15m/data.py` | cli | 1 | Data layer for the Fade 1h Momentum on 15m historical test. |

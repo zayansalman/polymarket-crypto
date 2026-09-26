@@ -93,6 +93,29 @@ FAMILIES: tuple[Family, ...] = (
             "coin correlation come from 3.5 days of tape."
         ),
     ),
+    Family(
+        key="kelly_horse_race",
+        label="Kelly horse-race",
+        path="ems/kelly_horse_race/",
+        what=(
+            "Once per BTC 15m Up/Down window it reads the chance of Up as a binary "
+            "option on the Chainlink TWAP-60s print: the price now against the price "
+            "to beat, with the last hour's move carried forward as the drift and its "
+            "volatility as the spread. A die weighted by that chance picks the side, "
+            "so over many windows the stake splits between Up and Down in proportion "
+            "to their chances (Kelly's horse-race rule). It rests one passive limit "
+            "buy at that side's best bid, sized at random between the venue's minimum "
+            "order and the notional cap, on paper always and on live when armed."
+        ),
+        status=RUNNING,
+        record="Paper orders from 2026-09-26",
+        switch="kelly_horse_race",
+        verdict=(
+            "Built as the operator asked: the maths as written, with randomness, and "
+            "not fitted to outcomes. The records show how its chance of Up compares "
+            "with what settles."
+        ),
+    ),
 )
 
 

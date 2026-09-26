@@ -50,6 +50,17 @@ STRATEGIES: dict[str, Strategy] = {
             "it has no live path."
         ),
     ),
+    "kelly_horse_race": Strategy(
+        name="kelly_horse_race",
+        label="Kelly horse-race",
+        description=(
+            "Once per BTC 15m Up/Down window: prices the chance of Up from the last hour's "
+            "move and volatility, rolls a die weighted by it to pick the side, and rests one "
+            "passive limit buy at that side's best bid with a random size between the "
+            "venue's minimum order and the notional cap. The same order goes to paper and, "
+            "when armed, live. Nothing crosses the spread."
+        ),
+    ),
 }
 
 """Registry order is render order. Keys are permanent: the switch is stored at

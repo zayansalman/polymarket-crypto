@@ -1,6 +1,7 @@
-"""Test doubles for the venue's public reads: the taker trade tape, the CLOB market lookup and
-the CLOB ``/book``. Replies are real ``httpx.Response`` objects shaped like the venue's, the
-tape newest record first and paged by offset."""
+"""Test doubles for the venue's public reads: the taker trade tape, the CLOB market lookup, the
+CLOB ``/book``, Gamma's events and markets, and Binance 1-minute candles. Replies are real
+``httpx.Response`` objects shaped like the real ones, the tape newest record first and paged by
+offset."""
 
 from __future__ import annotations
 
@@ -9,7 +10,10 @@ from typing import Any
 
 import httpx
 
+from ems import config as _config
 from ems.execution.tape import CLOB, DATA_API
+
+GAMMA = "https://gamma-api.polymarket.com"
 
 _TX = itertools.count()
 
@@ -34,6 +38,10 @@ class FakeVenue:
         self.books: dict[str, dict] = {}
         self.tape_status: dict[str, int] = {}
         self.book_status: dict[str, int] = {}
+        self.closes: dict[int, float] = {}  # Binance BTCUSDT 1m close, by candle open second
+        self.klines_status: int = 200
+        self.price_to_beat: dict[str, float] = {}  # Gamma eventMetadata.priceToBeat by slug
+        self.condition_ids: dict[str, str] = {}  # Gamma markets conditionId by slug
         self.calls: list[tuple[str, dict]] = []
         self._seq = itertools.count()
 
@@ -85,6 +93,24 @@ class FakeVenue:
             if cid not in self.markets:
                 return httpx.Response(404, json={"error": "not found"}, request=request)
             return httpx.Response(200, json=self.markets[cid], request=request)
+        if url == f"{_config.BINANCE_API_BASE}/api/v3/klines":
+            if self.klines_status != 200:
+                return httpx.Response(self.klines_status, json={}, request=request)
+            first = int(params["startTime"]) // 1000
+            rows = [[o * 1000, "1", "1", "1", repr(self.closes[o]), "1", o * 1000 + 59_999]
+                    for o in sorted(self.closes) if o >= first][: int(params["limit"])]
+            return httpx.Response(200, json=rows, request=request)
+        if url == f"{GAMMA}/events":
+            slug = params["slug"]
+            meta = ({"priceToBeat": self.price_to_beat[slug]}
+                    if slug in self.price_to_beat else {})
+            return httpx.Response(200, json=[{"slug": slug, "eventMetadata": meta}],
+                                  request=request)
+        if url == f"{GAMMA}/markets":
+            slug = params["slug"]
+            rows = ([{"slug": slug, "conditionId": self.condition_ids[slug]}]
+                    if slug in self.condition_ids else [])
+            return httpx.Response(200, json=rows, request=request)
         if url.endswith("/book"):
             token = params["token_id"]
             if token in self.book_status:

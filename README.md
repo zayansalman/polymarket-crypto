@@ -5,13 +5,20 @@ crypto Up/Down markets: live market data over WebSockets, paper orders that fill
 only against the real trade tape, a ledger in SQLite and a dashboard that shows
 every strategy, its numbers and its reasoning.
 
-One strategy runs today: **Fade 1h Momentum on 15m**. Every minute it prices the
-15-minute BTC, ETH, SOL and XRP windows with its own model, sizes with Kelly and
-rests scaled passive limit orders on paper. Its doc, with the maths and worked
-examples, is [docs/strategies/fade_1h_momentum_15m.md](docs/strategies/fade_1h_momentum_15m.md).
+Two strategies run today:
 
-Paper only. There is no live order path; `BOT_MODE=live` makes the strategy
-place nothing and say so on its card. Agent rules and scope are in
+- **Fade 1h Momentum on 15m.** Every minute it prices the 15-minute BTC, ETH, SOL
+  and XRP windows with its own model, sizes with Kelly and rests scaled passive
+  limit orders on paper. Doc: [docs/strategies/fade_1h_momentum_15m.md](docs/strategies/fade_1h_momentum_15m.md).
+- **Kelly horse-race.** Once per BTC 15m window it rolls a die weighted by its
+  chance of Up and rests one passive buy at that side's best bid, with a random
+  size up to $5. Doc: [docs/strategies/kelly_horse_race.md](docs/strategies/kelly_horse_race.md).
+
+Both place orders through one shared execution layer (`ems/execution/`): the
+same order shapes, fill model, risk gate and kill switch for every strategy.
+
+Paper only. There is no live order path; `BOT_MODE=live` makes Fade place nothing
+and say so on its card, and Kelly horse-race keeps trading paper only. Agent rules and scope are in
 **[AGENTS.md](AGENTS.md)**; "where do I change what" is
 **[docs/CODE_MAP.md](docs/CODE_MAP.md)**.
 

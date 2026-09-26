@@ -82,6 +82,7 @@ def test_the_running_families_are_the_ones_the_dashboard_starts() -> None:
     lifespan = (ROOT / "ems/dashboard/app.py").read_text()
     for key, module in (
         ("fade_1h_momentum_15m", "ems.fade_1h_momentum_15m.runner"),
+        ("kelly_horse_race", "ems.kelly_horse_race.runner"),
     ):
         family = next(f for f in _inv.FAMILIES if f.key == key)
         assert family.status == _inv.RUNNING, key

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Kelly horse-race and a shared execution layer (2026-09-26)
+
+- Added: `ems/execution/`, the execution layer every strategy shares. Fade's
+  tape reader, fill model, result lookup, never-cross check, kill switch and
+  PAPER/LIVE read moved there unchanged; on top of them, one resting-order
+  interface (`resting.py`: a paper venue that fills only from the real taker
+  tape through the queue ahead) and a risk gate with one leg per mode
+  (`gate.py`: kill switch, daily loss halt, per-trade and daily caps, new
+  "Risk" knobs in SETTINGS).
+- Added: Kelly horse-race (`ems/kelly_horse_race/`), on paper. Once per BTC
+  15m window it prices the chance of Up from the last hour's move and
+  volatility, rolls a die weighted by it for the side, and rests one passive
+  buy at that side's best bid with a random size between the venue's minimum
+  and $5. Its doc is `docs/strategies/kelly_horse_race.md`.
+
 ## Unreleased — one package, every dashboard card folds (2026-09-26)
 
 - Changed: the tree is one package, `ems/`, with `main.py` as the only entry

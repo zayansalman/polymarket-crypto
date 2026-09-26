@@ -63,7 +63,7 @@ async def test_enabled_map_reports_one_entry_per_strategy() -> None:
     assert await _strategies.enabled_map() == expected
 
 
-def test_only_fade_is_registered() -> None:
+def test_only_fade_and_kelly_are_registered() -> None:
     # Every other family (the BTC Up/Down loop, the maker, the daily altcoin
     # scanner) was deleted on 2026-09-26. No switch or knob outlives its code:
     # each knob is a registered strategy's, or one of the shared risk gate's limits.
@@ -71,9 +71,10 @@ def test_only_fade_is_registered() -> None:
     from ems.execution import gate
 
     gate_knobs = {name for leg in gate.LIMIT_KNOBS.values() for name in leg.values()}
-    assert list(_strategies.STRATEGIES) == [FADE]
+    assert list(_strategies.STRATEGIES) == [FADE, "kelly_horse_race"]
     assert gate_knobs <= set(runtime_knobs.KNOBS)
-    assert all(n.startswith("fade1h_") or n in gate_knobs for n in runtime_knobs.KNOBS)
+    assert all(n.startswith(("fade1h_", "kelly_horse_race_")) or n in gate_knobs
+               for n in runtime_knobs.KNOBS)
 
 
 def test_every_strategy_stores_under_its_own_runtime_key() -> None:
