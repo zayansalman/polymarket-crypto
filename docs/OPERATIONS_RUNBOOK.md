@@ -37,6 +37,12 @@ Expected:
 - Open positions are `0` or `1`.
 - Activity feed contains BTC bot events.
 - Start/Stop events are visible in structured logs and SQLite notifications.
+- The MARKET REGIME card's age is under ~3× the `Scan interval` knob (default
+  60 s). Older means the always-on regime monitor has stalled: look for
+  `regime.scan_failed` / `regime.*_unavailable` structlog events. A card that
+  says "partial data" is not a fault — it lists exactly which input was
+  missing (e.g. `book_out_of_phase` at a window edge, `book_absent` with the
+  loop stopped and no venue tokens).
 
 ## Common Issues
 

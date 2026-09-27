@@ -179,6 +179,47 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_shadow_positions_window
   ON daily_shadow_positions(window_slug);
 CREATE INDEX IF NOT EXISTS idx_daily_shadow_positions_asset
   ON daily_shadow_positions(asset);
+
+-- Market regime overview (polymarket_bot/regime/). One row per monitor scan:
+-- the computed features, their a-priori bands, and the advisory strategy
+-- feasibility verdicts, all as JSON so the schema never needs a migration
+-- when a feature is added. Append-only history — a future strategy router is
+-- backtested against these rows joined to each strategy's own ledger
+-- (window_slug for the 5m family, created_ts for the daily family), so rows
+-- are never rewritten. run_id/scan_seq make monitor restarts and gaps
+-- detectable. Advisory only: nothing on the trading path reads this table.
+CREATE TABLE IF NOT EXISTS regime_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  created_ts INTEGER NOT NULL,
+  run_id TEXT NOT NULL,
+  scan_seq INTEGER NOT NULL,
+  asset TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  window_slug TEXT,
+  grade TEXT NOT NULL,
+  headline TEXT NOT NULL,
+  recommendation TEXT NOT NULL DEFAULT '',
+  thresholds_version TEXT NOT NULL,
+  bands_json TEXT NOT NULL,
+  features_json TEXT NOT NULL,
+  fits_json TEXT NOT NULL,
+  quality_json TEXT NOT NULL,
+  sources_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_regime_snapshots_asset_ts
+  ON regime_snapshots(asset, created_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_regime_snapshots_asset_window
+  ON regime_snapshots(asset, window_slug);
+
+-- The threshold VALUES behind each regime_snapshots.thresholds_version, so
+-- history can be re-banded reproducibly without git archaeology.
+CREATE TABLE IF NOT EXISTS regime_threshold_versions (
+  version TEXT PRIMARY KEY,
+  thresholds_json TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL
+);
 """
 
 LIVE_ORDERS_COLUMN_MIGRATIONS = {

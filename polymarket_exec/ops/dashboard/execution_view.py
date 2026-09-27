@@ -23,6 +23,7 @@ from polymarket_exec.ops.dashboard.panels import (
     market,
     market_selector,
     performance,
+    regime,
     ribbon,
     settings as settings_panel,
     tca,
@@ -99,6 +100,11 @@ async def execution_view_html() -> str:
     daily_open = await data.daily_positions(state="open")
     daily_closed = await data.daily_positions(state="settled")
     daily_perf = data.performance(daily_closed)
+    # Regime overview (polymarket_bot/regime): scoped to the selected asset.
+    from polymarket_bot import market_selection as _selection
+
+    selected_asset = (await _selection.get_selection()).asset
+    regime_latest = await data.latest_regime(asset=selected_asset)
 
     # ---- panels ----
     from polymarket_exec.execution.gate import (
@@ -140,6 +146,7 @@ async def execution_view_html() -> str:
         current_price=current_price,
     )
     market_html = market.render(tick, open_pos)
+    regime_html = regime.render(regime_latest, asset=selected_asset)
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
         style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
@@ -161,6 +168,7 @@ async def execution_view_html() -> str:
         + "<div class='execution-grid'>"
         + controls_html
         + market_html
+        + regime_html
         + decision_html
         + performance_html
         + tca_html
