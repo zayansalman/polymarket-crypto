@@ -22,7 +22,12 @@ from ems.dashboard.app import app
 
 @pytest.fixture
 def client() -> TestClient:
-    with TestClient(app) as c:
+    """Like the page: a local host name, and the page's token on every POST."""
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        text = c.get("/").text
+        marker = 'name="dashboard-token" content="'
+        start = text.index(marker) + len(marker)
+        c.headers["X-Dashboard-Token"] = text[start:text.index('"', start)]
         yield c
 
 
@@ -40,8 +45,8 @@ class TestFullPageLoad:
 
     def test_ems_panels_present(self, client: TestClient):
         text = client.get("/").text
-        for panel in ("FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M", "SETTINGS",
-                      "execution-grid"):
+        for panel in ("FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M", "KELLY HORSE-RACE",
+                      "SETTINGS", "execution-grid"):
             assert panel in text
 
     def test_ems_content_container(self, client: TestClient):
@@ -60,10 +65,10 @@ class TestButtonInteractivity:
     def test_refresh_button(self, client: TestClient):
         assert "handleRefresh()" in client.get("/").text
 
-    def test_no_start_stop_or_mode_controls(self, client: TestClient):
+    def test_no_start_stop_but_a_paper_live_control(self, client: TestClient):
         text = client.get("/").text
         assert "handleStart()" not in text and "handleStop()" not in text
-        assert "setMode(" not in text
+        assert "setMode('live')" in text
 
 
 class TestApiRoundTrip:

@@ -71,6 +71,7 @@ from typing import Any
 import aiosqlite
 
 from ems import db as _db  # type: ignore[import-untyped]
+from ems.execution.queue import Level, ahead_of
 
 SIDES = ("Up", "Down")
 KINDS = ("entry", "hedge")
@@ -81,7 +82,6 @@ RESTING_STATES = ("resting", "partial")
 PAPER = "paper"
 RECENT_DECISIONS_MAX = 500
 _SHARES_EPS = 1e-9
-_PRICE_EPS = 1e-9
 
 # Held-back reasons (``PlaceResult.held_back``).
 NOT_HELD = "not_held"  # a sale of shares that are not held, or already offered by another sell
@@ -122,35 +122,6 @@ PRIOR_NOTE = (
 # ---------------------------------------------------------------------------
 # Value types
 # ---------------------------------------------------------------------------
-
-
-Level = tuple[float, float]  # (price, shares)
-
-
-def _better_or_equal(order_side: str, px: float, price: float) -> bool:
-    """True if a displayed level at ``px`` is at our price or better, so it is ahead of us:
-    a bid at or above our buy, an ask at or below our sell."""
-    if order_side == "BUY":
-        return px >= price - _PRICE_EPS
-    return px <= price + _PRICE_EPS
-
-
-def ahead_of(order_side: str, price: float, levels: Iterable[Sequence[float]]) -> tuple[Level, ...]:
-    """The displayed price levels ahead of a new order at ``price``, best first.
-
-    ``levels`` are (price, shares) pairs from the side of the book the order rests on (bids
-    for a BUY, asks for a SELL), in any order; levels worse than ours are behind us and are
-    dropped. Raises ValueError for a level that is not a price and a size.
-    """
-    out: list[Level] = []
-    for level in levels:
-        px, size = float(level[0]), float(level[1])
-        if not (math.isfinite(px) and 0.0 <= px <= 1.0 and math.isfinite(size) and size >= 0.0):
-            raise ValueError(f"a price level must be a price and a size, got {tuple(level)!r}")
-        if size > 0.0 and _better_or_equal(order_side, px, price):
-            out.append((px, size))
-    out.sort(key=lambda lv: -lv[0] if order_side == "BUY" else lv[0])
-    return tuple(out)
 
 
 @dataclass(frozen=True)

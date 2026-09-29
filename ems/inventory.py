@@ -61,6 +61,10 @@ class Family:
     verdict: str = ""
     """The one-line case for keeping or deleting it. Blank for the ones that
     are plainly working."""
+    shared: tuple[str, ...] = ()
+    """Repo-relative files outside ``path`` that its behaviour depends on (the
+    shared execution layer). Its doc answers for them too: change one and the
+    doc must be re-stamped."""
 
 
 FAMILIES: tuple[Family, ...] = (
@@ -86,11 +90,50 @@ FAMILIES: tuple[Family, ...] = (
             "Sep 17-20 tape, learning from every settled window"
         ),
         switch="fade_1h_momentum_15m",
+        shared=(
+            "ems/execution/controls.py",
+            "ems/execution/queue.py",
+            "ems/execution/tape.py",
+        ),
         verdict=(
             "Paper only. Wired before the historical test at the operator's "
             "call (paper-trade and learn): the paper record, not a backtest, "
             "shows whether the maths pays. The starting anchor weights and "
             "coin correlation come from 3.5 days of tape."
+        ),
+    ),
+    Family(
+        key="kelly_horse_race",
+        label="Kelly horse-race",
+        path="ems/kelly_horse_race/",
+        what=(
+            "Once per BTC 15m Up/Down window it reads the chance of Up as a binary "
+            "option on the Chainlink TWAP-60s print: the price now against the price "
+            "to beat, with the last hour's move carried forward as the drift and its "
+            "volatility as the spread. A die weighted by that chance picks the side, "
+            "so over many windows the stake splits between Up and Down in proportion "
+            "to their chances (Kelly's horse-race rule). It rests one passive limit "
+            "buy at that side's best bid, sized at random between the venue's minimum "
+            "order and the notional cap, on paper always and on live when armed."
+        ),
+        status=RUNNING,
+        record="Paper orders from 2026-09-26; live only while the operator arms it",
+        switch="kelly_horse_race",
+        shared=(
+            "ems/execution/clob.py",
+            "ems/execution/controls.py",
+            "ems/execution/endpoints.py",
+            "ems/execution/gate.py",
+            "ems/execution/journal.py",
+            "ems/execution/live_control.py",
+            "ems/execution/queue.py",
+            "ems/execution/resting.py",
+            "ems/execution/tape.py",
+        ),
+        verdict=(
+            "Built as the operator asked: the maths as written, with randomness, and "
+            "not fitted to outcomes. The records show how its chance of Up compares "
+            "with what settles."
         ),
     ),
 )

@@ -20,6 +20,7 @@ Two read paths, matching how each caller needs it:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -110,6 +111,48 @@ KNOBS: dict[str, Knob] = {
         "runtime.fade_1h.trade_xrp", True, "bool", "Trade XRP",
         group="Fade 1h Momentum on 15m",
     ),
+    # Kelly horse-race: one randomised passive buy per BTC 15m window (ems/kelly_horse_race/).
+    "kelly_horse_race_max_notional_usd": Knob(
+        "runtime.kelly_horse_race.max_notional_usd", 5.0, "float",
+        "Largest order: size is drawn up to this", 0.01, 10_000.0, unit="USD",
+        group="Kelly horse-race",
+    ),
+    "kelly_horse_race_poll_interval_seconds": Knob(
+        "runtime.kelly_horse_race.poll_interval_seconds", 5.0, "float",
+        "Pass interval", 1.0, 600.0, unit="s", group="Kelly horse-race",
+    ),
+    # The risk gate every strategy's resting orders pass (ems/execution/gate.py), one leg per
+    # mode. A loss halt or daily cap of 0 is off. New keys (runtime.risk.*): the deleted live
+    # executor's runtime.max_trade_usd, runtime.live.* and runtime.paper.* rows meant other
+    # things (a cap overridden by a share count, a trailing loss floor), so they are not read.
+    "paper_max_trade_usd": Knob(
+        "runtime.risk.paper.max_trade_usd", 5.0, "float",
+        "Paper: largest single order", 0.01, 100_000.0, unit="USD", group="Risk",
+    ),
+    "paper_daily_notional_cap_usd": Knob(
+        "runtime.risk.paper.daily_notional_cap_usd", 0.0, "float",
+        "Paper: most placed in a UTC day (0 = no cap)", 0.0, 10_000_000.0, unit="USD",
+        group="Risk",
+    ),
+    "paper_daily_loss_halt_usd": Knob(
+        "runtime.risk.paper.daily_loss_halt_usd", 0.0, "float",
+        "Paper: stop placing after losing this much in a UTC day (0 = off)", 0.0,
+        10_000_000.0, unit="USD", group="Risk",
+    ),
+    "live_max_trade_usd": Knob(
+        "runtime.risk.live.max_trade_usd", 3.0, "float",
+        "Live: largest single order", 0.01, 1_000.0, unit="USD", group="Risk",
+    ),
+    "live_daily_notional_cap_usd": Knob(
+        "runtime.risk.live.daily_notional_cap_usd", 0.0, "float",
+        "Live: most placed in a UTC day (0 = no cap)", 0.0, 100_000.0, unit="USD",
+        group="Risk",
+    ),
+    "live_daily_loss_halt_usd": Knob(
+        "runtime.risk.live.daily_loss_halt_usd", 10.0, "float",
+        "Live: stop placing after losing this much in a UTC day (0 = off)", 0.0, 100_000.0,
+        unit="USD", group="Risk",
+    ),
 }
 
 # In-memory mirror of the last `refresh_cache()` read, for sync call sites.
@@ -140,6 +183,8 @@ def _coerce(name: str, value: Any) -> Any:
     knob = KNOBS[name]
     if knob.kind == "float":
         value = float(value)
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite number")
     elif knob.kind == "int":
         value = int(float(value))
     elif knob.kind == "bool":

@@ -167,6 +167,167 @@ CREATE TABLE IF NOT EXISTS fade_dials (
   loglik       REAL,
   note         TEXT
 );
+
+-- The execution layer every strategy shares (ems/execution/). Timestamps are integer epoch
+-- seconds.
+
+-- The paper venue's book (ems/execution/resting.py, the only reader and writer): one row per
+-- passive limit BUY any strategy rested on paper. It rests from placed_ts until its cancel
+-- or its stop (the GTD expiry less the venue's 60 s) and fills only from the taker trade
+-- tape, through the depth that was ahead of it (queue_ahead). final_ts: its whole resting
+-- stretch of tape has been read, so nothing more can fill it.
+CREATE TABLE IF NOT EXISTS paper_resting_orders (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy           TEXT NOT NULL,
+  condition_id       TEXT NOT NULL,
+  token_id           TEXT NOT NULL,
+  outcome            TEXT NOT NULL CHECK (outcome IN ('Up', 'Down')),
+  up_token           TEXT NOT NULL,
+  down_token         TEXT NOT NULL,
+  price              REAL NOT NULL,
+  size               REAL NOT NULL,
+  queue_ahead        REAL NOT NULL,
+  levels_ahead_json  TEXT,
+  placed_ts          INTEGER NOT NULL,
+  stop_ts            INTEGER NOT NULL,
+  expires_ts         INTEGER NOT NULL,
+  cancelled_ts       INTEGER,
+  cancel_reason      TEXT,
+  flow_cursor_ts     INTEGER NOT NULL,
+  crossed            REAL NOT NULL DEFAULT 0,
+  filled_size        REAL NOT NULL DEFAULT 0,
+  filled_ts          INTEGER,
+  completed_ts       INTEGER,
+  final_ts           INTEGER,
+  forced             INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_resting_orders_open
+  ON paper_resting_orders(final_ts, condition_id);
+
+-- The risk gate's record (ems/execution/gate.py), per mode: each order's notional when
+-- placed (commit), the unfilled part given back once it can fill no more (credit), and its
+-- settled P&L (realize). One row per kind per order, so nothing is counted twice.
+CREATE TABLE IF NOT EXISTS risk_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          INTEGER NOT NULL,
+  mode        TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+  strategy    TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('commit', 'credit', 'realize')),
+  order_ref   TEXT NOT NULL,
+  amount_usd  REAL NOT NULL,
+  UNIQUE (mode, kind, order_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_risk_events_day
+  ON risk_events(mode, kind, ts);
+
+-- The live venue's journal (ems/execution/journal.py): every live placement and cancel,
+-- including the refused and failed ones, with the strategy in details_json. The columns are
+-- those of the deleted live executor's table, so an existing database keeps its rows.
+CREATE TABLE IF NOT EXISTS live_orders (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at        TEXT NOT NULL,
+  window_slug       TEXT,
+  token_id          TEXT,
+  intent            TEXT NOT NULL,
+  side              TEXT NOT NULL,
+  price             REAL,
+  size              REAL,
+  notional_usd      REAL,
+  order_type        TEXT,
+  status            TEXT NOT NULL,
+  clob_order_id     TEXT,
+  error             TEXT,
+  details_json      TEXT,
+  mode              TEXT,
+  placement_status  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_orders_created
+  ON live_orders(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_live_orders_status
+  ON live_orders(status);
+
+-- Kelly horse-race (ems/kelly_horse_race/, read and written only through its ledger.py).
+
+-- One row per BTC 15m window decided: every input, both draws, the book, the order sent to
+-- every active endpoint (or why none was), and the window's result once settled.
+CREATE TABLE IF NOT EXISTS kelly_horse_race_decisions (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  window_slug       TEXT NOT NULL UNIQUE,
+  condition_id      TEXT,
+  up_token          TEXT,
+  down_token        TEXT,
+  window_start      INTEGER NOT NULL,
+  window_end        INTEGER NOT NULL,
+  ts                INTEGER NOT NULL,
+  k_price           REAL,
+  k_source          TEXT,
+  x_price           REAL,
+  x_obs_ts          INTEGER,
+  r60               REAL,
+  sigma_h           REAL,
+  tau_h             REAL,
+  z                 REAL,
+  p_up              REAL,
+  u1                REAL,
+  side              TEXT CHECK (side IN ('Up', 'Down')),
+  u2                REAL,
+  token_id          TEXT,
+  best_bid          REAL,
+  best_ask          REAL,
+  bid_size          REAL,
+  tick_size         REAL,
+  min_order_size    REAL,
+  max_notional_usd  REAL,
+  price             REAL,
+  shares            REAL,
+  notional_usd      REAL,
+  reason            TEXT,
+  outcome           TEXT CHECK (outcome IN ('Up', 'Down')),
+  settled_ts        INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_kelly_horse_race_decisions_due
+  ON kelly_horse_race_decisions(outcome, window_end);
+
+-- One row per order per mode (paper, live) for a decision, blocked ones included with the
+-- gate's reason. state: blocked, rejected, resting, filled, cancelled, expired. final: the
+-- venue can fill it no more. credited: its unfilled notional was given back to the gate.
+CREATE TABLE IF NOT EXISTS kelly_horse_race_orders (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id       INTEGER NOT NULL,
+  window_slug       TEXT NOT NULL,
+  mode              TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+  venue_order_id    TEXT,
+  token_id          TEXT NOT NULL,
+  outcome           TEXT NOT NULL CHECK (outcome IN ('Up', 'Down')),
+  outcome_index     INTEGER NOT NULL,
+  price             REAL NOT NULL,
+  size              REAL NOT NULL,
+  notional_usd      REAL NOT NULL,
+  queue_ahead       REAL NOT NULL,
+  placed_ts         INTEGER,
+  window_end_ts     INTEGER NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('blocked', 'rejected', 'unknown', 'resting',
+                                                   'filled', 'cancelled', 'expired')),
+  reason            TEXT,
+  filled_size       REAL NOT NULL DEFAULT 0,
+  closed_ts         INTEGER,
+  final             INTEGER NOT NULL DEFAULT 0,
+  forced            INTEGER NOT NULL DEFAULT 0,
+  credited          INTEGER NOT NULL DEFAULT 0,
+  won               INTEGER,
+  payout_usd        REAL,
+  pnl_usd           REAL,
+  settled_ts        INTEGER,
+  UNIQUE (decision_id, mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kelly_horse_race_orders_open
+  ON kelly_horse_race_orders(final, mode);
 """
 
 # Fade 1h Momentum on 15m tables. Each dict lists every column an older copy of the table
@@ -218,6 +379,16 @@ FADE_ORDER_COLUMN_MIGRATIONS = {
     "settled_ts": "INTEGER",
 }
 
+# Columns the shared layer's tables gained after they were first created.
+PAPER_RESTING_ORDER_COLUMN_MIGRATIONS = {
+    "completed_ts": "INTEGER",
+}
+
+LIVE_ORDER_COLUMN_MIGRATIONS = {
+    "mode": "TEXT",
+    "placement_status": "TEXT",
+}
+
 FADE_DIALS_COLUMN_MIGRATIONS = {
     "n_windows": "INTEGER NOT NULL DEFAULT 0",
     "loglik": "REAL",
@@ -256,6 +427,8 @@ async def init_db() -> None:
         await _migrate_columns(db, "fade_decisions", FADE_DECISION_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "fade_orders", FADE_ORDER_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "fade_dials", FADE_DIALS_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "paper_resting_orders", PAPER_RESTING_ORDER_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "live_orders", LIVE_ORDER_COLUMN_MIGRATIONS)
         await db.commit()
 
 

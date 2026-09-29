@@ -88,15 +88,18 @@ def doc_path(key: str) -> Path:
 
 
 def tracked_files(fam: _inv.Family) -> list[Path]:
-    """The code a family's doc answers for: its file, or every .py under its package."""
+    """The code a family's doc answers for: its file, or every .py under its package, and
+    the shared files it depends on (``Family.shared``)."""
     if not fam.path:
         return []
     target = ROOT / fam.path
+    own: list[Path] = []
     if target.is_file():
-        return [target]
-    if target.is_dir():
-        return sorted(p for p in target.rglob("*.py") if "__pycache__" not in p.parts)
-    return []
+        own = [target]
+    elif target.is_dir():
+        own = sorted(p for p in target.rglob("*.py") if "__pycache__" not in p.parts)
+    shared = [ROOT / s for s in fam.shared if (ROOT / s).is_file() and ROOT / s not in own]
+    return own + sorted(shared)
 
 
 def fingerprint(fam: _inv.Family) -> str:
@@ -126,8 +129,11 @@ def _switch_text(fam: _inv.Family) -> str:
 def generated_block(fam: _inv.Family) -> str:
     files = tracked_files(fam)
     code = f"`{fam.path}`" if fam.path else "source deleted"
+    shared = [s for s in fam.shared if ROOT / s in files]
     if len(files) > 1:
         code += f" — {len(files)} files"
+    if shared:
+        code += " (" + ", ".join(f"`{s}`" for s in shared) + " shared)"
     rows = [
         ("Name", fam.label),
         ("Key", f"`{fam.key}`"),

@@ -239,7 +239,7 @@ function setKnob(name, kind) {
   var label = (el.getAttribute('aria-label') || name);
   fetch('/api/runtime-config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': dashboardToken() },
     body: JSON.stringify({ key: name, value: v })
   })
     .then(function(r) { return r.json(); })
@@ -254,6 +254,38 @@ function setKnob(name, kind) {
     .catch(function(err) { showToast('Update failed: ' + err.message, 'error'); });
 }
 
+function dashboardToken() {
+  const meta = document.querySelector('meta[name="dashboard-token"]');
+  return meta ? meta.getAttribute('content') : '';
+}
+
+// PAPER/LIVE: LIVE needs the token this page was served with, so only a click here selects
+// it. The server says whether LIVE is armed and, if not, why.
+function setMode(mode) {
+  fetch('/api/mode', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Dashboard-Token': dashboardToken()},
+    body: JSON.stringify({mode: mode}),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.status !== 'ok') { showToast(res.detail || 'Mode not changed', 'error'); return; }
+      document.querySelectorAll('.mode-opt').forEach(b => {
+        b.classList.toggle('active', b.classList.contains(res.mode));
+      });
+      const live = document.querySelector('.mode-opt.live');
+      if (live) {
+        live.dataset.armed = res.live_armed ? '1' : '0';
+        live.title = 'LIVE: Kelly horse-race sends post-only orders to the exchange while armed. '
+          + 'Fade places nothing while LIVE is selected. ' + res.detail;
+      }
+      const toggle = document.querySelector('.mode-toggle');
+      if (toggle) { toggle.title = res.detail; }
+      showToast(res.mode.toUpperCase() + ' — ' + res.detail, res.live_armed ? 'success' : 'info', 6000);
+    })
+    .catch(err => showToast('Mode not changed: ' + err, 'error'));
+}
+
 function setStrategy(name) {
   var el = document.getElementById('strategy-' + name);
   if (!el) return;
@@ -261,7 +293,7 @@ function setStrategy(name) {
   var label = (el.getAttribute('aria-label') || name);
   fetch('/api/runtime-config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': dashboardToken() },
     body: JSON.stringify({ key: 'strategy', value: { name: name, enabled: on } })
   })
     .then(function(r) { return r.json(); })

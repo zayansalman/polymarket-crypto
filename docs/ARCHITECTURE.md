@@ -24,9 +24,17 @@ module status in [FILE_MAP.md](FILE_MAP.md).
 
 - **`ems/marketdata/`** owns every socket. Strategies ask for a market with
   `hub.want(...)` and read `quote`, `book_top` or `listen`; they never open connections.
-- **`ems/fade_1h_momentum_15m/`** is the one strategy. Its maths (`model.py`, `sizing.py`,
+- **`ems/fade_1h_momentum_15m/`** is one strategy. Its maths (`model.py`, `sizing.py`,
   `decide.py`) is pure; `runner.py` does the I/O; `executor.py` fills paper orders from the
   real trade tape; `ledger.py` is the only writer of the `fade_*` tables.
+- **`ems/kelly_horse_race/`** is the other: one randomised passive buy per BTC 15m window.
+  Its maths (`maths.py`) is pure; `inputs.py` reads; `runner.py` sends one order to every
+  active endpoint through the shared layer; `ledger.py` is the only writer of the
+  `kelly_horse_race_*` tables.
+- **`ems/execution/`** is the execution layer every strategy shares: resting-order venues
+  behind one interface (`resting.py`), the risk gate with one leg per mode (`gate.py`), the
+  fill model (`queue.py`), the trade tape and result reads (`tape.py`), and the checks every
+  placement makes first: PAPER/LIVE mode, kill switch, never cross the spread (`controls.py`).
 - **`ems/dashboard/`** reads the ledger and the hub snapshot and renders cards. Every card
   is a pure `render(...) -> str`; `execution_view.py` loads the data once.
 - **Foundation:** `config.py` (env), `db.py` (schema + additive migrations),
@@ -43,12 +51,20 @@ the runner, and replayed by the research scripts under `tools/fade_1h_momentum_1
 A paper order rests at a price level and fills only when the CLOB trade stream prints a
 trade through it, with the depth ahead of it in the queue accounted for. No fill is invented
 from a mid price, so the paper ledger is a lower bound on what a real order would have done.
+Every strategy uses the same fill model (`ems/execution/queue.py:allocate_fills`).
 
 ### One executor interface
-`runner.py` asks an `Executor` to rest, cancel and settle. Paper is the only implementation.
-Any other requested mode, or the kill switch file, yields an executor that places nothing
-and says why on the card, while the bookkeeper keeps filling and settling what was already
-placed.
+Fade's `runner.py` asks an `Executor` to rest, cancel and settle; paper is its only
+implementation. Any other requested mode, or the kill switch file, yields an executor that
+places nothing and says why on the card, while the bookkeeper keeps filling and settling what
+was already placed.
+
+Kelly horse-race uses the shared layer's `RestingVenue` instead: the paper venue
+(`execution/resting.py`) and the live one (`execution/clob.py`) take the same calls, and
+`execution/endpoints.py` says each pass which may take new orders. The same order goes to
+every active endpoint through its own risk gate leg; live is active only while armed
+(`execution/live_control.py`: LIVE selected and clicked in this process, a wallet that
+passes).
 
 ### Switches and knobs, not restarts
 The strategy switch (`ems/strategies.py`) and every runtime knob (`ems/runtime_knobs.py`)

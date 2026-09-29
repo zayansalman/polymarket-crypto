@@ -32,6 +32,7 @@ from ems.fade_1h_momentum_15m.inputs import (
     Book, Inputs, PriceNow, Problem, WindowAverage,
 )
 from ems.fade_1h_momentum_15m.ledger import NewOrder
+from tests.unit.venue_fakes import legs_of
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 START = HOUR + 900  # the hour's second quarter
@@ -68,6 +69,9 @@ class FakeVenue:
         request = httpx.Request("GET", url)
         if url == f"{ex.DATA_API}/trades":
             rows = sorted(self.tape.get(params["market"], []), key=lambda r: -r["timestamp"])
+            if str(params.get("takerOnly", "true")).lower() != "true":
+                # The combined list: each taker record with the maker record it traded with.
+                rows = [row for rec in rows for row in (rec, *legs_of(rec))]
             offset, limit = int(params["offset"]), int(params["limit"])
             return httpx.Response(200, json=rows[offset:offset + limit], request=request)
         if url.startswith(f"{ex.CLOB}/markets/"):

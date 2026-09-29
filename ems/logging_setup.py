@@ -16,6 +16,14 @@ _SECRET_ENV_VARS = (
     "POLYMARKET_PASSPHRASE",
 )
 _REDACTION = "<redacted:secret>"
+# Secrets known only at run time (the API credentials the live venue derives from the key).
+_REGISTERED: set[str] = set()
+
+
+def register_secret(value: object) -> None:
+    """Scrub ``value`` from every sink from now on, like the env secrets above."""
+    if isinstance(value, str) and len(value.strip()) >= 16:
+        _REGISTERED.add(value.strip())
 
 
 def _secret_values() -> set[str]:
@@ -25,7 +33,7 @@ def _secret_values() -> set[str]:
     ids, condition ids, token ids and tx hashes are also 0x+64hex, and masking
     by pattern would destroy legitimate, non-secret log/journal fields.
     """
-    out: set[str] = set()
+    out: set[str] = set(_REGISTERED)
     for name in _SECRET_ENV_VARS:
         v = (os.environ.get(name) or "").strip()
         if len(v) < 16:  # ignore empty / trivially short (paper mode)

@@ -42,3 +42,24 @@ def _no_fade_1h_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_fade_runner, "_STATUS",
                         {"state": "not_started", "last_pass_ts": None, "last_error": None})
 
+
+@pytest.fixture(autouse=True)
+def _no_kelly_horse_race_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dashboard tests boot the app lifespan; keep Kelly horse-race idle.
+
+    Same shape as ``_no_fade_1h_runner``: the real loop stays reachable as
+    ``real_run_forever`` for the runner's own tests, and every test starts from a
+    fresh card state.
+    """
+    from ems.kelly_horse_race import runner as _kelly_runner
+
+    async def _idle(stop_event=None) -> None:  # type: ignore[no-untyped-def]
+        if stop_event is not None:
+            await stop_event.wait()
+
+    monkeypatch.setattr(_kelly_runner, "real_run_forever", _kelly_runner.run_forever,
+                        raising=False)
+    monkeypatch.setattr(_kelly_runner, "run_forever", _idle)
+    monkeypatch.setattr(_kelly_runner, "_STATUS",
+                        {"state": "not_started", "last_pass_ts": None, "last_error": None})
+

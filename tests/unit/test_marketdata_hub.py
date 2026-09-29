@@ -787,7 +787,7 @@ def test_dashboard_lifespan_registers_and_clears_the_hub(
 
     from ems.dashboard.app import app
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         assert isinstance(hub_mod.current(), hub_mod.MarketDataHub)
         page = client.get("/").text
         assert "Polymarket books" in page and "Chainlink 60s TWAP" in page  # FEEDS card

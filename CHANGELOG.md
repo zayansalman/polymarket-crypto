@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — Kelly horse-race and a shared execution layer (2026-09-26)
+
+- Added: `ems/execution/`, the execution layer every strategy shares. Fade's
+  tape reader, fill model, result lookup, never-cross check, kill switch and
+  PAPER/LIVE read moved there unchanged; on top of them, one resting-order
+  interface (`resting.py`: a paper venue that fills only from the real taker
+  tape through the queue ahead) and a risk gate with one leg per mode
+  (`gate.py`: kill switch, daily loss halt, per-trade and daily caps, new
+  "Risk" knobs in SETTINGS).
+- Added: Kelly horse-race (`ems/kelly_horse_race/`), on paper. Once per BTC
+  15m window it prices the chance of Up from the last hour's move and
+  volatility, rolls a die weighted by it for the side, and rests one passive
+  buy at that side's best bid with a random size between the venue's minimum
+  and $5. Its doc is `docs/strategies/kelly_horse_race.md`.
+- Added: Kelly horse-race's live leg, as the operator decided and AGENTS.md
+  records under "Live trading": BTC 15m only, post-only GTD buys through
+  `ems/execution/clob.py`, every placement and cancel journaled to
+  `live_orders`. It is armed only while LIVE is selected and clicked in the
+  dashboard in this process, the wallet config passes and the strategy's switch
+  is on. The top bar has a PAPER/LIVE control again; `BOT_MODE=live` alone never
+  trades. The CLOB client is the optional `live` extra.
+- Security: the dashboard answers only `127.0.0.1`/`localhost` host names
+  (plus `DASHBOARD_ALLOWED_HOSTS`), and every settings write (knobs, switches,
+  PAPER/LIVE) needs the page's token, a JSON body and no foreign `Origin`, so a
+  web page can neither change the risk caps nor arm LIVE.
+- Live safety: the switch, the kill switch and LIVE are checked again right
+  before an order goes. A send with no reply is searched for on the exchange,
+  never sent twice, and holds new live orders until found or its window stops.
+  An empty status reply no longer closes a live order, and failed cancels reach
+  the card.
+
 ## Unreleased — one package, every dashboard card folds (2026-09-26)
 
 - Changed: the tree is one package, `ems/`, with `main.py` as the only entry
