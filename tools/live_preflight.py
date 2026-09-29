@@ -11,8 +11,13 @@ credentials, and it sends no order.
 
 from __future__ import annotations
 
-from ems import config as _config
-from ems.execution import clob
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ems import config as _config  # noqa: E402
+from ems.execution import clob  # noqa: E402
 
 
 def main() -> int:
