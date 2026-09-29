@@ -30,10 +30,16 @@ It is ported without behaviour changes except where noted.
   `takerOnly=true`). An order fills only once taker volume has traded through the queue that
   was ahead of it: `filled = min(size, max(0, crossed - queue_ahead))`, counted with the
   maker's `crossed_volume` over trades after placement and before cancel or window end.
+  (Superseded 2026-09-29: paper orders fill from the price levels each trade reached, read from
+  the venue's per-order records, and a trade below the order's price fills it whatever was
+  ahead; see "The order" in `docs/strategies/kelly_horse_race.md`.)
 - `ClobRestingVenue`: GTD limit BUY with `post_only=True`, so the venue rejects any order that
   would cross. Expiry is the window end. Fills come from `get_order` `size_matched`. Cancels go
   by order id, never `cancel_all`. Every placement and cancel is journaled to `live_orders`,
   with the strategy name in `details`. The kill-switch file blocks placement.
+  (Not in this design, added in the build: a send with no reply was searched for among the
+  exchange's open orders. Superseded 2026-09-29: it is asked for by its order id, worked out
+  before it is sent, in any state; see "The order" in `docs/strategies/kelly_horse_race.md`.)
 
 **Changed from the source: protected order ids no longer depend on one strategy.** When the
 `LiveExecutor` boots, it cancels every open order on the account. Resting orders owned by
@@ -68,7 +74,7 @@ Inputs, at decision time `t` in window `[t0, t1]`:
 
 | input | source |
 |---|---|
-| `K`, price to beat | RTDS `chainlink_twap60` print at `t0` (the hub's price buffer); if missing, Gamma `eventMetadata.priceToBeat`; if both are missing, no decision this window, recorded |
+| `K`, price to beat | RTDS `chainlink_twap60` print at `t0` (the hub's price buffer); if missing, Gamma `eventMetadata.priceToBeat`; if both are missing, no decision this window, recorded (superseded 2026-09-27: Gamma writes `priceToBeat` only at the window end, so there is no in-window fallback and a missed opening print skips the window; see `docs/strategies/kelly_horse_race.md`) |
 | `X`, price now | latest RTDS `chainlink_twap60` print |
 | `r60`, the 1h direction | Binance BTCUSDT 1m klines, last 61 closed bars: `ln(c60 / c0)` |
 | `sigma_h`, hourly volatility | same bars: `sqrt(sum_i ln(c_i / c_{i-1})^2)` over the 60 returns |
@@ -192,6 +198,8 @@ branch. What changed from the text above, and why:
   `cancel`; `closed_on_venue` is `OrderView.closed`).
 - **Paper fills.** The shared `allocate_fills`, fade's model: for one buy at the best bid it is
   the formula above; orders of every strategy on one market go through the tape together.
+  (Superseded 2026-09-29: see the note under `PaperRestingVenue` above. Fade's paper orders are
+  kept in their own table and filled from the same trades separately.)
 - **Protected ids and the boot sweep.** Not built: nothing in the tree cancels all orders at
   boot any more, so there is nothing to protect them from. The live venue cancels by id only.
 - **Risk.** A new gate, one leg per mode, totals from a `risk_events` table; limits are

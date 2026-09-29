@@ -85,7 +85,7 @@ trading"). Orders already filled keep settling in every state.
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1146.
+- **Tests:** 1215.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->
 
@@ -110,13 +110,13 @@ trading"). Orders already filled keep settling in every state.
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
 | `ems/db.py` | WIRED | 14 | SQLite storage for the local Polymarket crypto trading lab. |
 | `ems/execution/__init__.py` | pkg | 9 | The execution layer every strategy shares: how a resting order meets the venue. |
-| `ems/execution/clob.py` | WIRED | 2 | The live resting-order venue: post-only good-till-date limit BUYs on the Polymarket CLOB. |
+| `ems/execution/clob.py` | WIRED | 3 | The live resting-order venue: post-only good-till-date limit BUYs on the Polymarket CLOB. |
 | `ems/execution/controls.py` | WIRED | 8 | What every placement checks first: the operator's mode, the kill switch and the spread. |
 | `ems/execution/endpoints.py` | WIRED | 1 | Which venues may take new orders this pass: one endpoint per mode, each with its gate leg. |
 | `ems/execution/gate.py` | WIRED | 2 | The pre-trade risk gate every strategy's orders pass: one leg per mode, paper and live. |
 | `ems/execution/journal.py` | WIRED | 1 | The live venue's journal: one ``live_orders`` row for every live placement and cancel. |
 | `ems/execution/live_control.py` | WIRED | 3 | Whether LIVE is armed, and the one live venue the process opens. |
-| `ems/execution/queue.py` | WIRED | 4 | Queue maths for resting orders: the depth ahead of an order, and how the taker tape fills it. |
+| `ems/execution/queue.py` | WIRED | 4 | Queue maths for resting orders: the depth ahead of an order, and how the trade tape fills it. |
 | `ems/execution/resting.py` | WIRED | 5 | Resting orders for any strategy: one request shape, a paper venue, and the same calls live. |
 | `ems/execution/tape.py` | WIRED | 5 | Reads from the venue that every strategy's fills and results rest on. |
 | `ems/fade_1h_momentum_15m/__init__.py` | pkg | 6 | Fade 1h Momentum on 15m: a paper-only strategy on the 15-minute crypto Up/Down markets. |

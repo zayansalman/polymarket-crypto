@@ -8,7 +8,7 @@
 | Status | running now |
 | Switch | `fade_1h_momentum_15m` on the MY STRATEGIES card |
 | Code | `ems/fade_1h_momentum_15m/` — 12 files (`ems/execution/controls.py`, `ems/execution/queue.py`, `ems/execution/tape.py` shared) |
-| Code fingerprint | `6f3ba8b00554` |
+| Code fingerprint | `5c4daa770b26` |
 <!-- END GENERATED:strategy -->
 
 ## At a glance
@@ -65,7 +65,7 @@ Every minute, for each of BTC, ETH, SOL and XRP, on paper:
 4. Price a parent buy order on each side: child orders at price levels from the best bid down to 15c under it (Settings), sized by Kelly. Rest the side that adds the most expected log growth, or nothing. The side is not simply where $p$ leans: a Down buy can pay while $p$ leans Up, when the market leans further.
 5. Holding shares, the choices are: buy more of that side, offer some of them with a resting sell at or above the best ask ($x^*$ above), or do nothing. The other side is never bought while one side is held.
 6. Size the four coins together, because they tend to settle the same way (an Up bet and a Down bet offset each other). Cap each child order, round down to the venue's share step and 5-share minimum, fit the buys into the free cash, and bring the resting paper orders in line. An unchanged order keeps its place in the queue. Nothing crosses the spread, so no fee is paid.
-7. Paper orders fill only from the real trade tape, after the depth ahead of them at each price level. Every window settles from the venue. After each settled window, all eight dials take one step toward the result (recursive maximum likelihood, about two days of memory).
+7. Paper orders fill only from the venue's real trades, price level by price level: at the order's price once the depth displayed there has traded, or at once when a trade goes below it. Every window settles from the venue. After each settled window, all eight dials take one step toward the result (recursive maximum likelihood, about two days of memory).
 
 Fitted on Binance data before 2026-09-17: $\theta = -0.043$ (a very slight fade), and the snap-back pull grows through the hour ($\lambda = -1.62$). It started from dials fitted on the Sep 17–20 tape: the market and the model each carry about half the weight ($w_M = 0.45$, $w_S = 0.57$) and the four coins move together ($\rho = 0.75$). There is no live order path.
 
@@ -129,8 +129,10 @@ card). Every minute it:
 - keeps checking fills, settles every window from the venue, traded or not, and after each
   settled window moves the dials one step toward the result (a new dials version each time).
 
-It never crosses the spread and pays no fee. A paper order fills only when the real trade tape
-reaches it through the depth ahead of it, price level by price level, and partial fills count.
+It never crosses the spread and pays no fee. A paper order fills only from the venue's real
+trades, read price level by price level: trades at its price once they have worked through the
+depth displayed ahead of it there, or a trade below its price, which shows that depth is gone.
+Partial fills count.
 There is no live order path: with LIVE selected it places nothing and says so on the card.
 
 What the card shows, top to bottom:
@@ -320,12 +322,34 @@ correlation $\rho$, learned on their Up results. A Down bet loads on the shared 
 opposite sign, so two Up bets are shrunk and an Up bet next to a Down bet is not. The joint sizing
 only ever shrinks a coin's buy. Sells are not shrunk.
 
-**Paper orders.** An order rests from the second after it is written. It fills only from the real
-trade tape. Trades at better prices use up the depth ahead of it, price level by price level; a
-trade at or through its own price then works through its own level and fills it, in part or in
-full. A sell fills from takers buying its token at its price or above. Each pass keeps the
-orders already resting at a wanted price, so they keep their place in the queue, cancels the
-rest and places the difference. Side, price and size are all continuous in the inputs.
+**Paper orders.** An order rests from the second after it is written. It fills only from the
+venue's real trades, read price level by price level. Besides one record per trade at its
+average price, the venue lists one record for every resting order a trade filled, at that
+order's own price, so a sale that swept several bids shows how many shares traded at each price
+level. For a buy:
+
+- A trade at any price shows nothing was bid above that price when it traded, so the depth
+  displayed above it is gone.
+- A sale at the order's price works through the depth displayed at that price when the order was
+  placed, then fills the order, in part or in full.
+- A sale below the order's price fills the rest of it, up to that sale's size, whatever depth was
+  displayed ahead. Nothing trades below a bid while that bid still rests, so the depth ahead had
+  traded or been pulled, and a real order at that price would have filled. These are the fills
+  that come as the price runs through the bid.
+
+A sell works the same way on the other side of the book: buyers of its token at its price work
+through the shares offered there first, and a buy above its price fills the rest of it. The
+venue writes a price as notional over size, so a trade at 24c can print as 0.2399999981; prices
+are rounded to 5 decimals first, so such a trade counts at its price level. The list of trades is
+read back up to about 10,500 trades, more than the busiest window seen (7,017). The list with the
+per-order records holds about 2.8 records a trade, so it reaches back only about 3,700 trades. A
+stretch deeper than that, after a restart or when the tape falls several minutes behind in a busy
+window, is read one record per trade at its average price. Such a trade at the order's price
+counts in full; beyond it, it clears the depth ahead but fills nothing, since how much of it
+reached the order's price is unknown. The card then says fills there may be over- or
+under-counted. Each pass keeps the orders already resting at a wanted price, so they keep their
+place in the queue, cancels the rest and places the difference. Side, price and size are all
+continuous in the inputs.
 
 **Worked examples** (the app's own code on the test windows in `tests/unit/test_fade1h_decide.py`,
 half Kelly, a 100 USD bankroll):
@@ -928,11 +952,18 @@ describes. The six errors the check found in the first draft, all fixed:
 - The market's price along a simulated path is a drift and Brownian noise calibrated to today's
   mid; a real book can gap past a price level. Paper fills come from the real tape, so the record
   shows the difference.
-- The maths counts a level as filled when the market's mid reaches it. The paper fills need real
-  trades through the depth ahead of the order. The two rules are not the same yet, so the maths
-  can expect more fills than the paper record gets.
+- The maths counts a level as filled when the market's mid reaches it. The paper fills need a
+  real trade below the order's price, or real trades at its price through the depth ahead of it.
+  The two rules are not the same yet, so the maths can expect more fills than the paper record
+  gets.
 - The paper queue sees only the depth displayed in the book when the order is placed. It does not
-  see orders that join ahead later, or cancels ahead of it.
+  see orders that join ahead later, or cancels ahead of it until a trade beyond its price shows
+  they are gone.
+- In a stretch too deep for the venue's per-order records, a trade beyond an order's price is read
+  only at its average and fills nothing, so fills there are under-counted, and a sweep whose
+  average lands exactly on the order's price is counted in full. The card says so when it happens.
+- Its paper orders and Kelly horse-race's are filled from the same trades separately, so on BTC
+  one trade can fill an order of each, together beyond the trade's size.
 - Switching sides waits for the tape: a buy of the other side waits until the tape shows the held
   shares sold and no cancelled order on that side filled late (a few minutes).
 - The joint sizing only shrinks a coin's buy; an Up bet next to a Down bet could carry more than
@@ -1004,6 +1035,9 @@ describes. The six errors the check found in the first draft, all fixed:
 
 ## Changelog
 
+- 2026-09-29 · `5c4daa770b26` · Docstrings only: the execution package describes the per-level fill read
+- 2026-09-29 · `40d267b8824e` · Shared fill model: paper orders fill from the price levels each trade reached (the venue's per-order records), and a trade beyond an order's price fills it whatever depth was ahead; a stretch too deep for those records is read at trade averages and the card says so.
+- 2026-09-27 · `99dbb8782592` · Shared fill model: a taker price a hair off its price level (a market buy printed as 0.2399999981) now counts at that level, and the tape is read back about 10,500 trades (1,000 a page), so a busy window reads from its start. Fade's own code is unchanged.
 - 2026-09-26 · `6f3ba8b00554` · Shared controls.py gained OutcomeUnknown for the live venue; Fade's behaviour is unchanged.
 - 2026-09-26 · `7e11ca7b9cd8` · Its doc now also answers for the shared code it uses in ems/execution/ (controls.py, queue.py, tape.py): the fill model records when an order completes (done_ts), which fade does not read. Behaviour unchanged.
 - 2026-09-26 · `a0c549de8d0d` · The tape reader, fill allocation, result lookup, never-cross check, kill switch and PAPER/LIVE read moved to ems/execution/ (queue.py, tape.py, controls.py), shared with every strategy; the executor re-exports what callers used. Behaviour unchanged.
