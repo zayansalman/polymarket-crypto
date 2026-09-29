@@ -1,7 +1,8 @@
 """The paper resting-order venue (``ems/execution/resting.py``) against a fake trade tape.
 
-The queue ahead, the window-end cap and the cancel cap; when an order is final; two orders on
-one outcome sharing a trade; and every refusal writing nothing.
+The queue ahead, a sweep through our level and a trade below it, the window-end cap and the
+cancel cap; when an order is final; two orders on one outcome sharing a trade; and every
+refusal writing nothing.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import pytest_asyncio
 
 from ems import config as _config
 from ems import db as _db
-from ems.execution import resting
+from ems.execution import resting, tape
 from ems.execution.controls import PlacementRefused
 from tests.unit.venue_fakes import FakeVenue, trade
 
@@ -77,6 +78,7 @@ async def test_place_writes_the_order_resting_from_the_next_second(temp_db, venu
     (dict(size=5.001), "bad_order"),             # not hundredths of a share
     (dict(token_id="other"), "bad_order"),       # not one of the window's tokens
     (dict(expires_ts=START + 70), "too_late"),   # the venue would stop it at once
+    (dict(expires_ts=START + 190), "too_late"),  # the exchange wants 3 minutes ahead
 ])
 async def test_refusals_write_nothing(temp_db, venue, kw, reason) -> None:
     paper = resting.PaperRestingVenue(venue)
@@ -84,6 +86,18 @@ async def test_refusals_write_nothing(temp_db, venue, kw, reason) -> None:
         await paper.place(request(**kw), now=START + 10)
     assert refused.value.reason == reason
     assert await rows() == []
+
+
+async def test_paper_refuses_what_the_exchange_would_as_expiring_too_soon(temp_db, venue) -> None:
+    """Polymarket refuses a GTD order that expires less than 3 minutes ahead. Both venues
+    share this check, so paper never keeps an order the live venue could not place."""
+    paper = resting.PaperRestingVenue(venue)
+    latest = END - resting.GTD_MIN_AHEAD_S - resting.GTD_SEND_MARGIN_S
+    with pytest.raises(PlacementRefused) as refused:
+        await paper.place(request(), now=latest + 1)
+    assert refused.value.reason == "too_late" and await rows() == []
+    placed = await paper.place(request(), now=latest + 0.9)
+    assert placed.placed_ts == latest + 1
 
 
 async def test_kill_switch_blocks_placement(temp_db, venue) -> None:
@@ -117,6 +131,62 @@ async def test_trades_above_our_price_never_fill(temp_db, venue) -> None:
     venue.add(CID, sell_up(START + 20, 50.0, price=0.41), nudge(START + 30))
     view = (await paper.fills([placed.order_id], now=START + 60))[placed.order_id]
     assert view.filled_size == 0.0
+
+
+async def test_a_sweep_through_our_level_fills_us_there(temp_db, venue) -> None:
+    """A taker sells 70 Up at an average of 0.4114: 40 to a bid at 0.42 placed after ours, 30
+    to the bids at our 0.40. Read as one record at its average it never reached us; read level
+    by level, 30 traded at our price: the 10 ahead, then our 5."""
+    paper = resting.PaperRestingVenue(venue)
+    placed = await paper.place(request(queue_ahead=10.0, size=5.0), now=START + 10)
+    venue.add(CID, trade(START + 20, "Up", "SELL", 70.0, 0.4114285714, cid=CID, up=UP,
+                         down=DOWN, legs=[("Up", "BUY", 40.0, 0.42), ("Up", "BUY", 30.0, 0.40)]),
+              nudge(START + 30))
+    view = (await paper.fills([placed.order_id], now=START + 60))[placed.order_id]
+    assert view.filled_size == pytest.approx(5.0) and view.closed_ts == START + 20
+    assert paper.last_errors == []
+
+
+async def test_a_trade_below_our_bid_fills_it_whatever_the_queue_ahead(temp_db, venue) -> None:
+    """A real order's queue (1,572.59 shown at 0.48, btc-updown-15m-1790507700): a sale at
+    0.47 means nothing was left at 0.48, whether the wall traded or was pulled."""
+    paper = resting.PaperRestingVenue(venue)
+    placed = await paper.place(request(price=0.48, best_ask=0.50, queue_ahead=1572.59,
+                                       size=6.68), now=START + 10)
+    venue.add(CID, sell_up(START + 65, 20.0, price=0.47), nudge(START + 70))
+    view = (await paper.fills([placed.order_id], now=START + 90))[placed.order_id]
+    assert view.filled_size == pytest.approx(6.68)
+    assert view.state == resting.FILLED and view.closed_ts == START + 65
+
+
+async def test_a_trade_read_at_its_average_below_our_bid_fills_nothing(temp_db, venue) -> None:
+    """A sale of 1,001 Up whose price levels could not be read (1,000 at 0.40 and 1 at 0.20,
+    average 0.3998): it traded below our 0.40, so the 1,000 ahead of us are gone, but how much
+    of it reached our price is unknown, so none of it is ours. The next sale at 0.40 is."""
+    paper = resting.PaperRestingVenue(venue)
+    placed = await paper.place(request(queue_ahead=1000.0, size=5.0), now=START + 10)
+    venue.add(CID, trade(START + 20, "Up", "SELL", 1001.0, 400.2 / 1001, cid=CID, up=UP,
+                         down=DOWN, legs=[("Up", "BUY", 1000.0, 0.40)]),
+              sell_up(START + 30, 3.0), nudge(START + 40))
+    view = (await paper.fills([placed.order_id], now=START + 60))[placed.order_id]
+    assert view.filled_size == pytest.approx(3.0)
+    (note,) = paper.last_errors
+    assert note.endswith("so fills there may be over- or under-counted.")
+
+
+async def test_a_stretch_too_deep_for_its_levels_is_read_at_averages_and_said(
+    temp_db, venue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The combined list pages back only so far (here 1,950 records, not 10,500): the older
+    trades are read at their average price, not refused, and the card is told."""
+    monkeypatch.setattr(tape, "TAPE_MAX_OFFSET", 950)
+    paper = resting.PaperRestingVenue(venue)
+    placed = await paper.place(request(queue_ahead=0.0, size=1500.0), now=START + 10)
+    venue.add(CID, *(sell_up(START + 20 + i // 4, 1.0) for i in range(1200)), nudge(START + 400))
+    view = (await paper.fills([placed.order_id], now=START + 450))[placed.order_id]
+    assert view.filled_size == pytest.approx(1200.0)
+    (note,) = paper.last_errors
+    assert "read at their average price only" in note
 
 
 async def test_the_window_end_caps_the_fills(temp_db, venue) -> None:

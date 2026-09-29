@@ -19,6 +19,7 @@ from ems import db as _db
 from ems.fade_1h_momentum_15m import executor as ex
 from ems.fade_1h_momentum_15m import ledger
 from ems.fade_1h_momentum_15m.ledger import NewOrder
+from tests.unit.venue_fakes import feed, maker
 
 HOUR = 1_789_934_400  # a UTC hour boundary
 START = HOUR + 900  # the hour's second quarter
@@ -32,7 +33,7 @@ LAG = 900  # the default tape lag allowance
 
 
 class FakeVenue:
-    """The data-api trade tape and the CLOB market lookup, in memory."""
+    """The data-api trade tape (both its lists) and the CLOB market lookup, in memory."""
 
     def __init__(self) -> None:
         self.tape: dict[str, list[dict]] = {}
@@ -62,20 +63,20 @@ class FakeVenue:
     def clob_calls(self) -> list[str]:
         return [url for url, _, _ in self.calls if url.startswith(f"{ex.CLOB}/markets/")]
 
-    def _page(self, cid: str, offset: int, limit: int) -> list[dict]:
-        records = sorted(self.tape.get(cid, []), key=lambda r: (-r["timestamp"], -r["_seq"]))
-        return [{k: v for k, v in r.items() if k != "_seq"} for r in records[offset:offset + limit]]
+    def _page(self, cid: str, offset: int, limit: int, taker_only: bool = True) -> list[dict]:
+        return feed(self.tape.get(cid, []), taker_only=taker_only)[offset:offset + limit]
 
     async def get(self, url, *, params=None, headers=None, timeout=None):
         params = dict(params or {})
         self.calls.append((url, params, dict(headers or {})))
         request = httpx.Request("GET", url)
         if url == f"{ex.DATA_API}/trades":
-            assert params["takerOnly"] == "true"
+            assert params["takerOnly"] in ("true", "false")
             cid = params["market"]
             if cid in self.tape_status:
                 return httpx.Response(self.tape_status[cid], json={}, request=request)
-            page = self._page(cid, int(params["offset"]), int(params["limit"]))
+            page = self._page(cid, int(params["offset"]), int(params["limit"]),
+                              params["takerOnly"] == "true")
             return httpx.Response(200, json=page, request=request)
         if url.startswith(f"{ex.CLOB}/markets/"):
             cid = url.rsplit("/", 1)[1]
@@ -120,15 +121,20 @@ def down_of(asset: str = "btc", start: int = START) -> str:
 
 
 def trade(ts: int, outcome: str, side: str, size: float, price: float, *,
-          asset: str = "btc", start: int = START) -> dict:
-    """One taker record, shaped like the data-api's."""
-    return {
+          asset: str = "btc", start: int = START, legs: tuple = ()) -> dict:
+    """One taker record, shaped like the data-api's. ``legs`` are the maker orders it traded
+    with, as (outcome, the maker's side, size, price); left empty, one maker at its price."""
+    rec = {
         "timestamp": ts, "side": side, "size": size, "price": price,
         "asset": up_of(asset, start) if outcome == "Up" else down_of(asset, start),
         "outcome": outcome, "outcomeIndex": 0 if outcome == "Up" else 1,
         "conditionId": cid_of(asset, start), "proxyWallet": "0xtaker",
         "transactionHash": f"0xtx{next(_TX)}",
     }
+    if legs:
+        rec["_legs"] = [maker(rec, *leg, asset=up_of(asset, start) if leg[0] == "Up"
+                              else down_of(asset, start)) for leg in legs]
+    return rec
 
 
 def nudge(ts: int, *, asset: str = "btc", start: int = START) -> dict:
@@ -245,10 +251,10 @@ def test_each_record_sells_into_exactly_one_outcome_like_the_maker_rule() -> Non
 
 def test_one_record_fills_our_child_orders_top_down_and_never_beyond_its_size() -> None:
     high, low = _queued(1, 0.45, depth=10.0), _queued(2, 0.40, depth=25.0)
-    flows = ex.allocate_fills([ex.TapePrint(10, "Up", "SELL", 50.0, 0.39)], [low, high])
-    # The higher price level works through its 10-share queue, then takes its 20.
+    flows = ex.allocate_fills([ex.TapePrint(10, "Up", "SELL", 50.0, 0.40)], [low, high])
+    # It traded below the higher price level, so that one takes its 20 whatever its queue.
     assert (flows[1].filled, flows[1].crossed, flows[1].fill_ts) == (20.0, 50.0, 10)
-    # The lower one sees only the 30 left: 25 of queue, then 5 for us.
+    # The lower one, at the record's price, sees only the 30 left: 25 of queue, then 5 for us.
     assert (flows[2].filled, flows[2].crossed, flows[2].fill_ts) == (5.0, 30.0, 10)
     assert flows[1].filled + flows[2].filled <= 50.0
     assert flows[2].levels == ((0.40, 0.0),)
@@ -300,7 +306,7 @@ async def test_child_orders_fill_top_down_through_the_ledger(fade_db, venue) -> 
     paper = ex.PaperExecutor(venue)
     high, low = await rest(paper, bid(slug, price=0.45, shares=20, depth=10, level=0),
                            bid(slug, price=0.40, shares=20, depth=25, level=1), at=START + 10)
-    venue.add(cid_of(), trade(START + 30, "Up", "SELL", 50.0, 0.39), nudge(START + 60))
+    venue.add(cid_of(), trade(START + 30, "Up", "SELL", 50.0, 0.40), nudge(START + 60))
 
     report = await paper.sync_fills(now=START + 120)
 
@@ -424,6 +430,61 @@ async def test_flow_stops_at_the_window_end(fade_db, venue) -> None:
     assert (row["cancelled_ts"], row["flow_cursor_ts"]) == (END, END)
 
 
+@pytest.mark.asyncio
+async def test_a_sweep_through_our_bid_fills_it_at_our_level(fade_db, venue) -> None:
+    """A taker sells 70 Up at an average of 0.4114: 40 to a bid at 0.42 above ours, 30 to the
+    bids at our 0.40. Its average is above us, but 30 traded at our level: the 20 ahead of
+    us, then 10 for us."""
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    (order_id,) = await rest(paper, bid(slug, price=0.40, shares=10, depth=20), at=START + 10)
+    venue.add(cid_of(), trade(START + 30, "Up", "SELL", 70.0, 0.4114285714,
+                              legs=[("Up", "BUY", 40.0, 0.42), ("Up", "BUY", 30.0, 0.40)]),
+              nudge(START + 40))
+
+    report = await paper.sync_fills(now=START + 60)
+
+    assert [(f.order_id, f.shares, f.ts) for f in report.fills] == [
+        (order_id, 10.0, START + 30)]
+    assert report.errors == []
+
+
+@pytest.mark.asyncio
+async def test_a_trade_below_our_bid_fills_it_whatever_the_queue_ahead(fade_db, venue) -> None:
+    """300 shown at our 0.40, 12 of them trade, then a sale at 0.39: the rest of the 300 were
+    pulled, so a real bid at 0.40 has filled."""
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    (order_id,) = await rest(paper, bid(slug, price=0.40, shares=10, depth=300), at=START + 10)
+    venue.add(cid_of(), trade(START + 20, "Up", "SELL", 12.0, 0.40),
+              trade(START + 30, "Down", "BUY", 6.0, 0.61), nudge(START + 40))
+
+    report = await paper.sync_fills(now=START + 60)
+
+    assert [(f.shares, f.ts) for f in report.fills] == [(6.0, START + 30)]
+    row = await order_row(order_id)
+    assert (row["filled_shares"], row["crossed"]) == (6.0, 18.0)
+    assert ledger.load_levels(row) == ((0.40, 0.0),)
+
+
+@pytest.mark.asyncio
+async def test_trades_whose_levels_were_not_read_are_said_so(fade_db, venue) -> None:
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    await rest(paper, bid(slug, price=0.40, shares=10), at=START + 10)
+    # Its maker records do not add up to its size: it is read at its average price only.
+    venue.add(cid_of(), trade(START + 30, "Up", "SELL", 70.0, 0.4114285714,
+                              legs=[("Up", "BUY", 40.0, 0.42)]), nudge(START + 40))
+
+    report = await paper.sync_fills(now=START + 60)
+
+    assert report.fills == []
+    assert report.errors == [
+        f"{slug}: 1 trade(s) were read at their average price only (their price levels could "
+        "not be read), so fills there may be over- or under-counted."
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Sales of shares held (the hedge)
 # ---------------------------------------------------------------------------
@@ -454,7 +515,7 @@ async def test_a_sale_fills_from_buyers_of_our_token_or_sellers_of_the_other(
     assert (await order_row(sale_id))["order_side"] == "SELL"
     venue.add(
         cid_of(),
-        trade(START + 60, "Up", "BUY", 2.0, 0.59),  # takes 2 of the 3 at 0.58, never us
+        trade(START + 60, "Up", "BUY", 2.0, 0.59),  # an ask at 0.59: the 3 at 0.58 were gone
         trade(START + 61, "Down", "SELL", 4.0, 0.40),  # the mirror: Up bought at 0.60
         trade(START + 62, "Up", "BUY", 10.0, 0.61),  # an Up buy through our price
         trade(START + 63, "Up", "SELL", 5.0, 0.40),  # a sale of Up: never fills a sale
@@ -463,11 +524,11 @@ async def test_a_sale_fills_from_buyers_of_our_token_or_sellers_of_the_other(
 
     report = await paper.sync_fills(now=START + 100)
 
-    # At START + 61: 1 left at 0.58, 2 at 0.60, then 1 for us. At START + 62: the other 5.
+    # At START + 61: the 2 at 0.60, then 2 for us. At START + 62: the other 4.
     assert [(f.order_side, f.side, f.price, f.shares, f.ts) for f in report.fills] == [
         ("SELL", "Up", 0.60, 6.0, START + 61)]
     row = await order_row(sale_id)
-    assert (row["state"], row["filled_shares"], row["crossed"]) == ("filled", 6.0, 13.0)
+    assert (row["state"], row["filled_shares"], row["crossed"]) == ("filled", 6.0, 14.0)
     (pos,) = await ledger.open_positions()
     assert (pos["shares"], pos["sold_shares"], pos["proceeds_usd"]) == (
         4.0, 6.0, pytest.approx(3.6))
@@ -479,6 +540,25 @@ async def test_a_sale_fills_from_buyers_of_our_token_or_sellers_of_the_other(
     # 10 bought at 0.40, 6 sold at 0.60, the 4 kept pay $1.
     assert settled.net_pnl == pytest.approx(4 * 1.0 + 6 * 0.60 - 10 * 0.40)
     assert (settled.sold_shares, settled.sale_proceeds_usd) == (6.0, pytest.approx(3.6))
+
+
+@pytest.mark.asyncio
+async def test_a_sale_fills_when_a_taker_buys_through_its_price(fade_db, venue) -> None:
+    """A sale of Up at 0.60 behind 500 shown at 0.60: a taker buying Up at 0.61 means the asks
+    at 0.60 were gone, so a real sale there has filled."""
+    slug = await window()
+    paper = ex.PaperExecutor(venue)
+    await _holding(paper, slug)
+    sale_id = await paper.place_sell(sale(slug, price=0.60, shares=6.0, levels=((0.60, 500.0),)),
+                                     best_bid=0.55, now=START + 50)
+    venue.add(cid_of(), trade(START + 60, "Up", "BUY", 4.0, 0.61), nudge(START + 80))
+
+    report = await paper.sync_fills(now=START + 100)
+
+    assert [(f.order_side, f.price, f.shares, f.ts) for f in report.fills] == [
+        ("SELL", 0.60, 4.0, START + 60)]
+    row = await order_row(sale_id)
+    assert (row["filled_shares"], ledger.load_levels(row)) == (4.0, ((0.60, 0.0),))
 
 
 @pytest.mark.asyncio
@@ -670,7 +750,7 @@ async def test_the_queue_ahead_trades_first_across_passes(fade_db, venue) -> Non
     assert (first.fills, row["crossed"], row["filled_shares"], row["state"]) == (
         [], 20.0, 0.0, "resting")
 
-    venue.add(cid_of(), trade(START + 70, "Up", "SELL", 25.0, 0.39), nudge(START + 90))
+    venue.add(cid_of(), trade(START + 70, "Up", "SELL", 25.0, 0.40), nudge(START + 90))
     second = await paper.sync_fills(now=START + 100)
     row = await order_row(order_id)
     assert [(f.shares, f.ts) for f in second.fills] == [(10.0, START + 70)]
@@ -821,17 +901,17 @@ async def test_long_tapes_are_paged_with_overlap_and_counted_once(fade_db, venue
     slug = await window()
     paper = ex.PaperExecutor(venue)
     (order_id,) = await rest(paper, bid(slug, price=0.40, shares=5000), at=START + 10)
-    venue.add(cid_of(), *(trade(START + 10 + i // 2, "Up", "SELL", 1.0, 0.40)
-                          for i in range(1200)))
+    venue.add(cid_of(), *(trade(START + 10 + i // 4, "Up", "SELL", 1.0, 0.40)
+                          for i in range(2400)))
 
     await paper.sync_fills(now=START + 700)
 
-    offsets = [int(p["offset"]) for p in venue.tape_calls()]
+    offsets = [int(p["offset"]) for p in venue.tape_calls() if p["takerOnly"] == "true"]
     assert offsets == [0, ex.TAPE_PAGE - ex.TAPE_PAGE_OVERLAP,
                        2 * (ex.TAPE_PAGE - ex.TAPE_PAGE_OVERLAP)]
-    # Every record once, except the two from the write's own second (before the order rested)
-    # and the newest second's two, which wait for the next read.
-    assert (await order_row(order_id))["filled_shares"] == 1196.0
+    # Every record once, except the four from the write's own second (before the order rested)
+    # and the newest second's four, which wait for the next read.
+    assert (await order_row(order_id))["filled_shares"] == 2392.0
 
 
 @pytest.mark.asyncio
@@ -839,13 +919,13 @@ async def test_a_tape_that_shifts_while_being_paged_is_thrown_away(fade_db, venu
     slug = await window()
     paper = ex.PaperExecutor(venue)
     (order_id,) = await rest(paper, bid(slug, price=0.40, shares=5000), at=START + 10)
-    venue.add(cid_of(), *(trade(START + 10 + i // 2, "Up", "SELL", 1.0, 0.40)
-                          for i in range(700)))
+    venue.add(cid_of(), *(trade(START + 10 + i // 4, "Up", "SELL", 1.0, 0.40)
+                          for i in range(1400)))
     real_page = venue._page
 
-    def stale_second_page(cid: str, offset: int, limit: int) -> list[dict]:
+    def stale_second_page(cid: str, offset: int, limit: int, taker_only: bool = True):
         # A reply from an older copy of the tape: page two skips past the overlap.
-        return real_page(cid, offset + 200 if offset else 0, limit)
+        return real_page(cid, offset + 200 if offset else 0, limit, taker_only)
 
     venue._page = stale_second_page  # type: ignore[method-assign]
     report = await paper.sync_fills(now=START + 700)

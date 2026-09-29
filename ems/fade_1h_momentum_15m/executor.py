@@ -17,10 +17,12 @@ Every fill is a passive fill at our own price, with no fee.
 
 How a paper order fills
 -----------------------
-By the venue's public taker trade tape, through the depth that was ahead of the order price
-level by level. That fill model, the tape reader, the result lookup, the never-cross check and
-the kill switch are shared by every strategy and live in ``ems/execution/`` (``queue.py``,
-``tape.py``, ``controls.py``); this module keeps each order's cursor and settles the windows.
+By the venue's public trade tape, read price level by price level, through the depth that was
+ahead of the order price level by level; a trade below the order's price fills it whatever
+depth was shown ahead. That fill model, the tape reader, the result lookup, the never-cross
+check and the kill switch are shared by every strategy and live in ``ems/execution/``
+(``queue.py``, ``tape.py``, ``controls.py``); this module keeps each order's cursor and settles
+the windows.
 
 For each order the tape is read from where its last read stopped (its cursor, first its
 placement) up to when it stopped resting (its cancel, else its window end), and never past what
@@ -81,7 +83,7 @@ from ems.execution.tape import (
     TapeRead,
     TapeUnavailable,
     market_outcome,
-    read_taker_tape,
+    read_fill_tape,
     tape_newest_ts,
 )
 # Moved to ems/execution/ (shared by every strategy); still importable from here.
@@ -438,7 +440,7 @@ class PaperBookkeeper:
 
     async def _read(self, cid: str, rows: list[dict], report: FillReport) -> TapeRead:
         first = rows[0]
-        tape = await read_taker_tape(
+        tape = await read_fill_tape(
             self._client, cid, since=min(int(r["flow_from"]) for r in rows),
             up_token=first.get("up_token"), down_token=first.get("down_token"),
         )
@@ -450,6 +452,14 @@ class PaperBookkeeper:
             )
             log.warning("fade1h.tape_records_skipped", window=first["window_slug"],
                         skipped=tape.skipped)
+        if tape.averaged:
+            report.errors.append(
+                f"{first['window_slug']}: {tape.averaged} trade(s) were read at their average "
+                "price only (their price levels could not be read), so fills there may be "
+                "over- or under-counted."
+            )
+            log.warning("fade1h.tape_trades_averaged", window=first["window_slug"],
+                        averaged=tape.averaged)
         return tape
 
     async def _freshness(self, reads: Mapping[str, TapeRead],

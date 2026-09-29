@@ -9,17 +9,25 @@ branches on the mode and paper and live cannot drift apart.
 Every order is a passive limit BUY that only rests: one that would meet the best ask is refused
 before anything is written, and while the kill switch file exists nothing is placed. An order
 is good till a date (GTD): its expiry is the end of its window, and the venue stops it
-``GTD_STOP_S`` (60 s) before that, as Polymarket does.
+``GTD_STOP_S`` (60 s) before that, as Polymarket does. Polymarket also refuses one that expires
+less than ``GTD_MIN_AHEAD_S`` (3 minutes) ahead, so both venues refuse it before it is sent.
 
 How a paper order fills
 -----------------------
-From the venue's public taker trade tape, through the depth that was displayed at its price or
-better when it was placed (``queue_ahead``), by the fill model every strategy shares
-(``ems/execution/queue.py:allocate_fills``). For a lone buy that is
-``filled = min(size, max(0, crossed - queue_ahead))``, where ``crossed`` is the taker volume
-that reached its price after it was placed and before it stopped resting. Orders of different
-strategies on the same outcome are run through the tape together, so one trade never fills two
-paper orders beyond its size. Each fill is at the order's own price, with no fee.
+From the venue's public trade tape, read price level by price level
+(``ems/execution/tape.py:read_fill_tape``), through the depth that was displayed at its price
+or better when it was placed (``queue_ahead``), by the fill model every strategy shares
+(``ems/execution/queue.py:allocate_fills``). A trade at a price shows nothing was bid above it,
+so the depth shown above that price is gone. For a lone buy, trades at its price fill it as
+``filled = min(size, max(0, crossed - queue_ahead))``, where ``crossed`` is the volume that
+reached its price after it was placed and before it stopped resting and ``queue_ahead`` the
+depth shown at its own price; a trade below its price means its level was empty, so it fills
+the rest of the order (up to that trade's size) whatever depth was shown ahead. Every order
+placed through this venue on the same market is run through the tape together, whichever
+strategy placed it, so one trade never fills two of them beyond its size. A strategy that keeps
+its own paper orders (Fade 1h Momentum on 15m, in ``fade_orders``) runs them through the same
+tape separately, so one trade can fill one of its orders and one of this venue's both. Each
+fill is at the order's own price, with no fee.
 
 An order rests from the second after it is written and stops at the second its cancel is
 written, or at its stop. Its stretch of tape is read from where the last read ended, never past
@@ -54,7 +62,7 @@ from ems import db as _db  # type: ignore[import-untyped]
 from ems.execution import controls as _controls
 from ems.execution.controls import PlacementRefused
 from ems.execution.queue import SIDES, QueuedOrder, allocate_fills
-from ems.execution.tape import HttpClient, TapeRead, read_taker_tape, tape_newest_ts
+from ems.execution.tape import HttpClient, TapeRead, read_fill_tape, tape_newest_ts
 
 log = structlog.get_logger(__name__)
 
@@ -64,6 +72,10 @@ MODES = (PAPER, LIVE)
 
 # Polymarket stops a GTD order this long before the expiry it was given.
 GTD_STOP_S = 60
+# Polymarket refuses a GTD order whose expiry is less than this far ahead.
+GTD_MIN_AHEAD_S = 180
+# Added to GTD_MIN_AHEAD_S for the time an order takes to reach the exchange.
+GTD_SEND_MARGIN_S = 5
 SHARE_STEP = 0.01
 DEFAULT_MAX_TAPE_LAG_S = 900
 DEFAULT_FORCE_FINAL_AFTER_S = 3600
@@ -202,10 +214,11 @@ def validate_request(request: PlaceRequest, now: float) -> None:
                 and price - _EPS <= level_price < 1.0):
             raise PlacementRefused("bad_order", "Each level ahead must be a bid at the order's "
                                    "price or better, with a number of shares.")
-    if int(request.expires_ts) - GTD_STOP_S <= math.floor(now) + 1:
+    # Also covers the 60 s GTD stop: an order that passes rests for two minutes at least.
+    if int(request.expires_ts) < math.floor(now) + GTD_MIN_AHEAD_S + GTD_SEND_MARGIN_S:
         raise PlacementRefused(
-            "too_late", "The venue stops an order 60 s before its expiry, so this one would "
-            "never rest."
+            "too_late", "Polymarket refuses an order that expires less than 3 minutes ahead, "
+            "so this one would not be taken."
         )
     _controls.check_passive(request, {request.token_id: request.best_ask}, {})
 
@@ -426,20 +439,29 @@ class PaperRestingVenue:
         for row in rows:
             if int(row["id"]) not in through:
                 markets.setdefault(str(row["condition_id"]), []).append(row)
-        # Every order on a market is run through its tape together, whichever strategy placed
-        # it, so one trade never fills two paper orders beyond its size.
+        # Every order on a market placed through this venue is run through its tape together,
+        # whichever strategy placed it, so one trade never fills two of them beyond its size.
+        # (Fade's paper orders are kept and filled apart, in fade_orders.)
         for cid in markets:
             markets[cid] = await self._market_rows(cid)
         reads: dict[str, TapeRead] = {}
         for cid, group in markets.items():
             try:
-                reads[cid] = await read_taker_tape(
+                reads[cid] = await read_fill_tape(
                     self._client, cid, since=min(int(r["flow_cursor_ts"]) for r in group),
                     up_token=group[0]["up_token"], down_token=group[0]["down_token"],
                 )
             except Exception as exc:  # noqa: BLE001 - one market must not stop the others
                 self.last_errors.append(f"{cid[:10]}: {exc}. Fills are checked again next pass.")
                 log.warning("paper_venue.tape_unread", market=cid, error=str(exc))
+                continue
+            if reads[cid].averaged:
+                self.last_errors.append(
+                    f"{cid[:10]}: {reads[cid].averaged} trade(s) were read at their average "
+                    "price only (their price levels could not be read), so fills there may be "
+                    "over- or under-counted.")
+                log.warning("paper_venue.tape_trades_averaged", market=cid,
+                            averaged=reads[cid].averaged)
         fresh = await self._freshness(reads, markets, clock)
         for cid, tape in reads.items():
             await self._apply(markets[cid], tape, clock, fresh)
