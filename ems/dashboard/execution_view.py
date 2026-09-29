@@ -7,6 +7,7 @@ HTML function — see the panels package for the panel-specific logic.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from ems.db import get_config
@@ -19,6 +20,7 @@ from ems.dashboard.panels import (
     fade_1h as fade_1h_panel,
     feeds,
     kelly_horse_race as kelly_panel,
+    lc2004_kronos_btc_24h as lc2004_panel,
     settings as settings_panel,
     strategies as strategies_panel,
     strategy_card as strategy_card_panel,
@@ -130,6 +132,50 @@ async def kelly_horse_race_data() -> dict[str, Any]:
     return out
 
 
+async def lc2004_forecast_data(now: float | None = None) -> dict[str, Any]:
+    """Everything the lc2004-Kronos BTC 24h forecast card shows, as ``lc2004_panel.render``
+    kwargs.
+
+    The current window's newest forecast and its hour-by-hour history from the ledger, the
+    forecast loop's status from memory, the Settings switch, and whether the model weights
+    are in place (read fresh: a few file checks). A failed read becomes ``load_error``. The
+    card is display-only, not a strategy: it has no switch on MY STRATEGIES and no inventory
+    entry (Zayan (operator), 2026-09-29; Claude, 2026-09-29).
+    """
+    from ems.kronos_forecast import client as _kronos
+    from ems.lc2004_kronos_btc_24h import ledger as _lc_ledger
+    from ems.lc2004_kronos_btc_24h import runner as _lc_runner
+    from ems.lc2004_kronos_btc_24h.market import window_at
+
+    now = time.time() if now is None else float(now)
+    errors: list[str] = []
+    window = window_at(now)
+    out: dict[str, Any] = {
+        "now": now,
+        "window": {"slug": window.slug, "start_ts": window.start_ts, "end_ts": window.end_ts},
+        "status": _lc_runner.status(),
+        "forecast": None,
+        "history": [],
+        "enabled": None,
+        "missing_weights": None,
+    }
+    try:
+        out["enabled"] = bool(await _knobs.get(_lc_runner.KNOB))
+    except Exception as exc:  # noqa: BLE001 — shown on the card
+        errors.append(f"the Settings switch ({type(exc).__name__}: {exc})")
+    try:
+        out["missing_weights"] = _kronos.missing_weights()
+    except Exception as exc:  # noqa: BLE001 — shown on the card
+        errors.append(f"the model weights check ({type(exc).__name__}: {exc})")
+    try:
+        out["forecast"] = await _lc_ledger.latest_forecast(window.slug)
+        out["history"] = await _lc_ledger.window_forecasts(window.slug)
+    except Exception as exc:  # noqa: BLE001 — a missing table must not blank the page
+        errors.append(f"the forecast table ({type(exc).__name__}: {exc})")
+    out["load_error"] = "; ".join(errors) or None
+    return out
+
+
 async def execution_view_html() -> str:
     """Render the full page body as one HTML string; ``app.py`` consumes this directly."""
     from ems.fade_1h_momentum_15m import executor as _fade_executor
@@ -185,6 +231,16 @@ async def execution_view_html() -> str:
             load_error=f"the card could not be drawn ({type(exc).__name__}: {exc})",
             enabled=_kelly_on,
         )
+    # Display only: the lc2004-Kronos BTC 24h forecast places no orders (not a strategy).
+    try:
+        _lc2004 = await lc2004_forecast_data()
+    except Exception as exc:  # noqa: BLE001 — the card says what failed
+        _lc2004 = {"load_error": f"{type(exc).__name__}: {exc}"}
+    try:
+        lc2004_html = lc2004_panel.render(**_lc2004)
+    except Exception as exc:  # noqa: BLE001 — odd rows must not blank the page either
+        lc2004_html = lc2004_panel.render(
+            load_error=f"the card could not be drawn ({type(exc).__name__}: {exc})")
     strategy_card_html = strategy_card_panel.render(entries=[
         (f, _sd.glance(f.key))
         for _, fams in _inv.by_status()
@@ -202,6 +258,7 @@ async def execution_view_html() -> str:
         + strategies_html
         + fade_1h_html
         + kelly_html
+        + lc2004_html
         + settings_html
         + "</div></div>"
     )

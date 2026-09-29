@@ -1,7 +1,8 @@
 """FastAPI dashboard for the local Polymarket crypto trading lab.
 
-Starts the WebSocket market-data hub and the strategies (Fade 1h Momentum on
-15m, Kelly horse-race) as background tasks for its lifetime — see ``_lifespan``.
+Starts the WebSocket market-data hub, the strategies (Fade 1h Momentum on
+15m, Kelly horse-race) and the display-only lc2004-Kronos BTC 24h forecast as
+background tasks for its lifetime — see ``_lifespan``.
 
 Endpoints:
     GET  /                   — the dashboard page (HTML)
@@ -83,12 +84,21 @@ async def _lifespan(app: FastAPI):
     kelly_stop_event = asyncio.Event()
     kelly_task = asyncio.create_task(_run_kelly(kelly_stop_event))
 
+    # lc2004-Kronos BTC 24h forecast: display only, places no orders. Once an hour it runs
+    # the model in an isolated worker process for the card; the operator trades by hand.
+    # Its first pass waits 15 s, and stopping it kills a running worker.
+    from ems.lc2004_kronos_btc_24h.runner import run_forever as _run_lc2004
+
+    lc2004_stop_event = asyncio.Event()
+    lc2004_task = asyncio.create_task(_run_lc2004(lc2004_stop_event))
+
     yield
 
     _marketdata_hub.set_current(None)
     for stop_event, task in (
         (fade_stop_event, fade_task),
         (kelly_stop_event, kelly_task),
+        (lc2004_stop_event, lc2004_task),
         (marketdata_stop_event, marketdata_task),
     ):
         stop_event.set()
