@@ -98,6 +98,9 @@ class FakeLive:
         self.refuse: Exception | None = None
         self.open_ids: list[str] = []  # what find_order finds, in turn
         self.find_error: Exception | None = None
+        self.has: dict[str, bool] = {}  # has_order's answer by id (absent: no such order)
+        self.has_error: Exception | None = None
+        self.asked: list[str] = []  # every id fills was asked about
         self.cancel_error: str | None = None
         self.last_errors: list[str] = []
 
@@ -115,6 +118,11 @@ class FakeLive:
             raise self.find_error
         return self.open_ids.pop(0) if self.open_ids else None
 
+    async def has_order(self, order_id: str) -> bool:
+        if self.has_error is not None:
+            raise self.has_error
+        return self.has.get(order_id, False)
+
     async def cancel(self, order_ids, *, reason: str, now: float | None = None) -> int:
         ids = list(order_ids)
         self.cancelled.append((ids, reason))
@@ -127,7 +135,9 @@ class FakeLive:
         return len(ids)
 
     async def fills(self, order_ids, *, now: float | None = None) -> dict[str, OrderView]:
-        return {i: self.views[i] for i in order_ids if i in self.views}
+        ids = list(order_ids)
+        self.asked.extend(ids)
+        return {i: self.views[i] for i in ids if i in self.views}
 
 
 # The last hour's minute returns: up 0.2%, down 0.15%, in turn. P(Up) at the open is ~0.70.
@@ -334,11 +344,23 @@ async def test_waiting_never_rolls_the_die_again(kelly_db, venue) -> None:
     assert (d["u1"], d["u2"]) == (0.1, 0.5) and len(rng.calls) == 2
 
 
-async def test_k_falls_back_to_gamma_when_the_open_print_is_not_held(kelly_db, venue) -> None:
+async def test_a_missed_open_print_skips_the_window(kelly_db, venue) -> None:
+    # Gamma publishes priceToBeat only at the window end, so it is never asked for K. The
+    # window waits while a reconnect's history could still bring the print, then is skipped.
     venue.price_to_beat[SLUG] = 99_950.0
-    await make_runner(venue, make_hub(skip_open=True), {"now": NOW}).pass_once()
+    clock = {"now": NOW}
+    runner = make_runner(venue, make_hub(skip_open=True), clock)
+    report = await runner.pass_once()
+    assert report.window["waiting"] == "k_missing"
+    assert await rows("kelly_horse_race_decisions") == []
+    clock["now"] = START + inputs.OPEN_PRINT_BACKFILL_S + 1
+    await runner.pass_once()
     (d,) = await rows("kelly_horse_race_decisions")
-    assert d["k_price"] == 99_950.0 and d["k_source"] == inputs.K_FROM_GAMMA
+    assert d["reason"].startswith("k_missing: The app did not see")
+    assert d["ts"] == int(clock["now"])
+    assert d["k_price"] is None and d["side"] is None
+    assert await rows("kelly_horse_race_orders") == []
+    assert not [url for url, _ in venue.calls if url.endswith("/events")]
 
 
 async def test_k_waits_for_the_open_print_just_after_the_open(kelly_db, venue) -> None:
@@ -348,14 +370,16 @@ async def test_k_waits_for_the_open_print_just_after_the_open(kelly_db, venue) -
 
 
 async def test_inputs_still_missing_at_the_cutoff_are_the_windows_reason(kelly_db, venue) -> None:
-    hub, clock = make_hub(skip_open=True), {"now": NOW}
+    venue.klines_status = 503
+    hub, clock = make_hub(), {"now": NOW}
     runner = make_runner(venue, hub, clock)
     report = await runner.pass_once()
-    assert report.window["waiting"] == "k_missing"
+    assert report.window["waiting"] == "klines_failed"
     clock["now"] = END - rn.DECISION_CUTOFF_S
     await runner.pass_once()
     (d,) = await rows("kelly_horse_race_decisions")
-    assert d["reason"].startswith("k_missing") and d["side"] is None
+    assert d["reason"].startswith("klines_failed") and d["side"] is None
+    assert d["reason"].endswith("Still missing at the cutoff.")
 
 
 async def test_a_window_joined_after_the_cutoff_is_left_alone(kelly_db, venue) -> None:
@@ -601,6 +625,8 @@ async def live_runner(venue: FakeVenue, armed, clock: dict) -> tuple[rn.Runner, 
 
 
 async def test_a_send_with_no_reply_is_unknown_until_found(kelly_db, venue, armed) -> None:
+    """Without an id (the venue could not work it out), it is searched for among the open
+    orders."""
     clock = {"now": NOW}
     runner, live = await live_runner(venue, armed, clock)
     live.refuse = OutcomeUnknown("The send failed and the open orders could not be read.")
@@ -623,6 +649,7 @@ async def test_a_send_with_no_reply_is_unknown_until_found(kelly_db, venue, arme
 
 async def test_an_unknown_order_never_found_is_closed_at_the_stop(kelly_db, venue,
                                                                   armed) -> None:
+    """Without an id, one never found among the open orders is given up at the stop."""
     clock = {"now": NOW}
     runner, live = await live_runner(venue, armed, clock)
     live.refuse = OutcomeUnknown("no reply")
@@ -633,6 +660,180 @@ async def test_an_unknown_order_never_found_is_closed_at_the_stop(kelly_db, venu
     assert (closed["state"], closed["final"], closed["credited"]) == ("unknown", 1, 1)
     assert "check your Polymarket orders" in closed["reason"]
     assert any("check your Polymarket orders" in e for e in report.errors)
+
+
+def no_reply(order_id: str = "0xSENT") -> clob.NoReply:
+    return clob.NoReply("The send got no reply.", order_id=order_id)
+
+
+async def live_order() -> dict[str, Any]:
+    (order,) = [o for o in await rows("kelly_horse_race_orders") if o["mode"] == "live"]
+    return order
+
+
+async def test_a_send_with_no_reply_that_filled_is_found_by_its_id(kelly_db, venue,
+                                                                   armed) -> None:
+    """The order filled in full before anyone looked, so it is on no open-order list. Its id
+    was known before it was sent; asked for by id, the exchange still has it, so the position
+    is followed, counted toward the cap, and settled with its window."""
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = no_reply()
+    report = await runner.pass_once()
+    unknown = await live_order()
+    assert (unknown["state"], unknown["final"], unknown["venue_order_id"]) == (
+        "unknown", 0, "0xSENT")
+    assert unknown["placed_ts"] is None
+    assert any("looked for every pass" in e for e in report.errors)
+
+    clock["now"] = NOW + 5  # the exchange has no order with that id yet
+    report = await runner.pass_once()
+    assert (await live_order())["state"] == "unknown" and "0xSENT" not in live.asked
+    assert any("not on the exchange yet" in e for e in report.errors)
+
+    size = unknown["size"]
+    live.has["0xSENT"] = True
+    live.views["0xSENT"] = OrderView("0xSENT", "filled", size, size, NOW + 8, True)
+    clock["now"] = NOW + 10
+    report = await runner.pass_once()
+    found = await live_order()
+    assert (found["state"], found["venue_order_id"], found["final"]) == ("filled", "0xSENT", 1)
+    assert found["filled_size"] == pytest.approx(size)
+    events = [e for e in await rows("risk_events") if e["mode"] == "live"]
+    assert [e["kind"] for e in events] == ["commit", "credit"]  # nothing unfilled to give back
+    assert events[0]["amount_usd"] == pytest.approx(found["notional_usd"])
+    assert events[1]["amount_usd"] == pytest.approx(0.0)
+    assert any("found on the exchange by its id" in e for e in report.errors)
+
+    venue.add(CID, sell_up(END + 30, 1.0, price=0.99))  # the paper order's stretch, read through
+    venue.resolve(CID, winner="Up", up=UP, down=DOWN)
+    clock["now"] = END + 200
+    await runner.pass_once()
+    settled = await live_order()
+    assert settled["won"] == 1 and settled["pnl_usd"] == pytest.approx(size * (1 - 0.50))
+    summary = await ledger.summary()
+    assert (summary["live"]["placed"], summary["live"]["filled"]) == (1, 1)
+
+
+async def test_an_order_the_exchange_never_had_is_closed_as_never_placed_after_the_stop(
+        kelly_db, venue, armed) -> None:
+    """Asked for by its id, the exchange still has no such order at its window's stop. One
+    miss there is not an end (the live venue's own rule for an empty status reply), but still
+    none ``UNKNOWN_AFTER_STOP_S`` later (an insert in flight would be there by then), it was
+    never placed. The card says so, it holds nothing, counts as no placed order, and its
+    window settles without it."""
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = no_reply()
+    await runner.pass_once()
+    clock["now"] = END - resting.GTD_STOP_S
+    await runner.pass_once()
+    assert ((await live_order())["state"], (await live_order())["final"]) == ("unknown", 0)
+    clock["now"] = END - resting.GTD_STOP_S + rn.UNKNOWN_AFTER_STOP_S
+    report = await runner.pass_once()
+    closed = await live_order()
+    assert (closed["state"], closed["final"], closed["credited"]) == ("unknown", 1, 1)
+    assert "never placed" in closed["reason"] and "0xSENT" in closed["reason"]
+    assert any("never placed" in e for e in report.errors)
+    assert "0xSENT" not in live.asked
+    assert (await ledger.summary())["live"]["placed"] == 0
+
+    venue.add(CID, sell_up(END + 30, 1.0, price=0.99))
+    venue.resolve(CID, winner="Up", up=UP, down=DOWN)
+    clock["now"] = END + 200
+    report = await runner.pass_once()
+    assert len(report.settled) == 1
+    closed = await live_order()
+    assert closed["pnl_usd"] is None and closed["settled_ts"] is None
+    assert not [e for e in await rows("risk_events") if e["mode"] == "live"]
+
+
+async def test_an_order_that_cannot_be_asked_for_is_asked_again_after_the_stop(
+        kelly_db, venue, armed) -> None:
+    """No answer is not "never placed": it stays unknown, holding new live orders, and is
+    asked again; found then, it is followed like any placed order."""
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = no_reply()
+    await runner.pass_once()
+    live.has_error = ConnectionError("exchange down")
+    clock["now"] = END - resting.GTD_STOP_S + 30
+    report = await runner.pass_once()
+    assert ((await live_order())["state"], (await live_order())["final"]) == ("unknown", 0)
+    assert any("could not be asked" in e for e in report.errors)
+
+    live.has_error = None
+    live.has["0xSENT"] = True
+    size = (await live_order())["size"]
+    live.views["0xSENT"] = OrderView("0xSENT", "expired", size, 0.0, END - 60, True)
+    clock["now"] = END - resting.GTD_STOP_S + 35
+    await runner.pass_once()
+    found = await live_order()
+    assert (found["state"], found["venue_order_id"], found["final"]) == ("expired", "0xSENT", 1)
+
+
+async def settles_with_paper(runner: rn.Runner, clock: dict, venue: FakeVenue) -> None:
+    """The window resolves Up: it settles with the paper leg, the live one given up."""
+    venue.add(CID, sell_up(END + 30, 1.0, price=0.99))
+    venue.resolve(CID, winner="Up", up=UP, down=DOWN)
+    clock["now"] = END + 200
+    report = await runner.pass_once()
+    assert len(report.settled) == 1
+    (paper,) = [o for o in await rows("kelly_horse_race_orders") if o["mode"] == "paper"]
+    assert paper["settled_ts"] is not None and paper["pnl_usd"] is not None
+    assert (await live_order())["settled_ts"] is None
+
+
+async def test_an_order_the_exchange_never_answers_for_is_given_up_after_the_stop(
+        kelly_db, venue, armed) -> None:
+    """Asked for until ``UNKNOWN_AFTER_STOP_S`` after its window's stop with never an answer,
+    it is given up, the card saying to check Polymarket: new live orders go again and the
+    window settles, paper leg included."""
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = no_reply()
+    await runner.pass_once()
+    live.has_error = ConnectionError("exchange down")
+    clock["now"] = END - resting.GTD_STOP_S + rn.UNKNOWN_AFTER_STOP_S - 1
+    await runner.pass_once()
+    assert (await live_order())["final"] == 0
+    clock["now"] += 1
+    report = await runner.pass_once()
+    closed = await live_order()
+    assert (closed["state"], closed["final"], closed["credited"]) == ("unknown", 1, 1)
+    assert "check your Polymarket orders" in closed["reason"] and "0xSENT" in closed["reason"]
+    assert any("check your Polymarket orders" in e for e in report.errors)
+    assert await ledger.unknown_orders("live") == []
+    await settles_with_paper(runner, clock, venue)
+
+
+async def test_after_a_restart_with_no_live_venue_an_unknown_order_is_given_up(
+        kelly_db, venue, armed) -> None:
+    """After a restart the live venue cannot open (no key, or the exchange unreachable), so
+    the order cannot be asked for. It stays unknown until ``UNKNOWN_AFTER_STOP_S`` after its
+    window's stop, then is given up like one the exchange never answers for."""
+    clock = {"now": NOW}
+    runner, live = await live_runner(venue, armed, clock)
+    live.refuse = no_reply()
+    await runner.pass_once()
+
+    async def cannot_open():
+        raise clob.LiveUnavailable("POLYMARKET_PRIVATE_KEY is not set")
+
+    restarted = rn.Runner(venue, hub_fn=lambda: make_hub(), clock=lambda: clock["now"],
+                          rng=draws(0.1, 0.5),
+                          live=LiveVenueHolder(clock=lambda: clock["now"], opener=cannot_open))
+    clock["now"] = END - resting.GTD_STOP_S + 30
+    report = await restarted.pass_once()
+    assert (await live_order())["final"] == 0
+    assert any("not open yet" in e for e in report.errors)
+    clock["now"] = END - resting.GTD_STOP_S + rn.UNKNOWN_AFTER_STOP_S
+    report = await restarted.pass_once()
+    closed = await live_order()
+    assert (closed["state"], closed["final"], closed["credited"]) == ("unknown", 1, 1)
+    assert "check your Polymarket orders" in closed["reason"]
+    assert any("check your Polymarket orders" in e for e in report.errors)
+    await settles_with_paper(restarted, clock, venue)
 
 
 async def test_an_open_unknown_order_holds_new_live_orders(kelly_db, venue, armed) -> None:

@@ -7,7 +7,10 @@
   row mirrors what the venue reports: state, shares filled, when it closed, whether it can
   still fill (``final``), and whether its unfilled notional was given back to the gate.
   An ``unknown`` order is a live send that failed with no reply: it may rest on the exchange.
-  It stays open until found there (``adopt``: it rests) or its window stops (``give_up``).
+  Its ``venue_order_id`` is the id the exchange gives it, worked out before it was sent (None
+  when that could not be done). It stays open until found there (``adopt``: followed as
+  placed) or its window stops without it (``give_up``, a little after the stop for one with an
+  id), and never counts as placed or settles while it is unknown.
 
 The tables are created by ``db.init_db`` (``ems/db.py`` SCHEMA), so they exist before the
 runner starts and the dashboard never meets a missing table. Timestamps are integer epoch
@@ -99,8 +102,8 @@ async def record_order(*, decision_id: int, window_slug: str, mode: str, token_i
                        window_end_ts: int, state: str, reason: str | None = None,
                        venue_order_id: str | None = None,
                        placed_ts: int | None = None) -> int:
-    """Write one order for one mode: placed (``resting``), ``unknown`` (sent, no reply),
-    ``blocked`` or ``rejected``."""
+    """Write one order for one mode: placed (``resting``), ``unknown`` (sent, no reply; with
+    the id it would have when known), ``blocked`` or ``rejected``."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
     final = 0 if state in OPEN_STATES else 1
@@ -149,7 +152,8 @@ async def unknown_orders(mode: str | None = None) -> list[dict[str, Any]]:
 
 
 async def adopt(order_id: int, *, venue_order_id: str, placed_ts: int) -> bool:
-    """An ``unknown`` order was found resting on the venue: follow it from now on."""
+    """An ``unknown`` order was found on the venue (resting, or already filled or
+    cancelled): follow it from now on."""
     async with _db.connect() as conn:
         cur = await conn.execute(
             """
@@ -165,8 +169,9 @@ async def adopt(order_id: int, *, venue_order_id: str, placed_ts: int) -> bool:
 
 
 async def give_up(order_id: int, *, reason: str, ts: float) -> bool:
-    """An ``unknown`` order was never found by its window's stop: close it, still ``unknown``
-    (nothing was committed to the gate, so nothing is given back)."""
+    """An ``unknown`` order was never found by its window's stop (or a little after it, for
+    one asked for by its id): close it, still ``unknown`` (nothing was committed to the gate,
+    so nothing is given back)."""
     async with _db.connect() as conn:
         cur = await conn.execute(
             """
@@ -261,7 +266,7 @@ async def settle(decision_id: int, *, outcome: str, ts: float) -> SettledWindow 
                 decision = dict(await c.fetchone())
             async with conn.execute(
                 "SELECT * FROM kelly_horse_race_orders WHERE decision_id = ? "
-                "AND venue_order_id IS NOT NULL ORDER BY id",
+                "AND venue_order_id IS NOT NULL AND state != 'unknown' ORDER BY id",
                 (int(decision_id),),
             ) as c:
                 orders = [dict(r) for r in await c.fetchall()]
@@ -291,11 +296,13 @@ async def summary() -> dict[str, dict[str, Any]]:
     rows = await _rows(
         """
         SELECT mode,
-          SUM(CASE WHEN venue_order_id IS NOT NULL THEN 1 ELSE 0 END) AS placed,
+          SUM(CASE WHEN venue_order_id IS NOT NULL AND state != 'unknown' THEN 1 ELSE 0
+              END) AS placed,
           SUM(CASE WHEN state = 'blocked' THEN 1 ELSE 0 END) AS blocked,
           SUM(CASE WHEN state = 'rejected' THEN 1 ELSE 0 END) AS rejected,
           SUM(CASE WHEN filled_size > 0 THEN 1 ELSE 0 END) AS filled,
-          SUM(CASE WHEN venue_order_id IS NOT NULL THEN notional_usd ELSE 0 END) AS notional,
+          SUM(CASE WHEN venue_order_id IS NOT NULL AND state != 'unknown' THEN notional_usd
+              ELSE 0 END) AS notional,
           SUM(CASE WHEN settled_ts IS NOT NULL AND filled_size > 0 THEN 1 ELSE 0 END) AS settled,
           SUM(CASE WHEN settled_ts IS NOT NULL AND filled_size > 0 AND won = 1 THEN 1 ELSE 0
               END) AS won,

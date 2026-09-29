@@ -11,11 +11,13 @@ Where each input comes from
   windows up to ~2 s after :00/:15/:30/:45, so a window with ``now`` outside [start, end) is
   not used. A missing condition id is looked up once on Gamma (``/markets?slug=``).
 - ``K``, the price to beat: the Chainlink TWAP-60s print whose observation second is the
-  window's start. Gamma's ``priceToBeat`` equals it to every digit (research note, 2026-09-22),
-  so Gamma's ``/events?slug=`` is the fallback when the hub does not hold that print (the app
-  started after the open, or the feed dropped then). Gamma publishes it only minutes into the
-  window, so it is asked again every ``GAMMA_RETRY_S`` until the decision cutoff. The print
-  arrives about 2 s late, so for ``OPEN_PRINT_WAIT_S`` after the open it is only pending.
+  window's start (Gamma's ``priceToBeat`` equals it to every digit, research note 2026-09-22).
+  The print arrives about 2 s late, so for ``OPEN_PRINT_WAIT_S`` after the open it is only
+  pending. The feed's history on a (re)connect reaches about a minute back, so until
+  ``OPEN_PRINT_BACKFILL_S`` after the open a missing print can still arrive and the window
+  waits. After that the app did not see the open (it started after the open, or the feed
+  dropped then) and the window is skipped (final). Gamma is no fallback: it writes a window's
+  ``priceToBeat`` only at that window's end (checked live 2026-09-27), after the cutoff.
 - ``X``, the price now: the newest TWAP-60s print, observed within ``PRICE_MAX_AGE_S``. It is
   the series the window settles on, so ``ln(X / K)`` compares like with like.
 - The last hour: sixty 1-minute log returns from 61 completed Binance BTCUSDT candles
@@ -45,6 +47,8 @@ TWAP60 = "chainlink_twap60"
 
 PRICE_MAX_AGE_S = 5.0
 OPEN_PRINT_WAIT_S = 10.0
+# How far back the feed's history on a (re)connect reaches: 58-68 s measured 2026-09-27.
+OPEN_PRINT_BACKFILL_S = 70.0
 GAMMA_RETRY_S = 30.0
 KLINE_SETTLE_S = 2.0
 HTTP_TIMEOUT_S = 10.0
@@ -52,7 +56,6 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 GAMMA_HEADERS: Mapping[str, str] = MappingProxyType(dict(BROWSER_HEADERS))
 
 K_FROM_PRINT = "TWAP-60s print at the open"
-K_FROM_GAMMA = "Gamma priceToBeat"
 
 
 class NotReady(Exception):
@@ -98,7 +101,8 @@ class Book:
 
 @dataclass
 class Memory:
-    """What the reads keep between passes: Gamma lookups' next try, per window slug."""
+    """What the reads keep between passes: the Gamma market-id lookup's next try and the ids
+    found, per window slug."""
 
     gamma_retry_at: dict[str, float] = field(default_factory=dict)
     condition_ids: dict[str, str] = field(default_factory=dict)
@@ -183,35 +187,21 @@ def _print_at(hub: Any, second: int) -> tuple[float | None, int | None]:
     return None, newest
 
 
-async def price_to_beat(hub: Any, client: HttpClient | None, win: Window, now: float,
-                        memory: Memory, *, cutoff: float) -> tuple[float, str]:
-    """``(K, where it came from)``. Final ``NotReady`` once ``cutoff`` passes without one."""
+def price_to_beat(hub: Any, win: Window, now: float) -> tuple[float, str]:
+    """``(K, where it came from)``: the print at the open. Final ``NotReady`` once no
+    reconnect's history can bring it any more."""
     value, newest = _print_at(hub, win.start)
     if value is not None:
         return value, K_FROM_PRINT
-    if (newest is None or newest <= win.start) and now - win.start <= OPEN_PRINT_WAIT_S:
+    since_open = now - win.start
+    if (newest is None or newest <= win.start) and since_open <= OPEN_PRINT_WAIT_S:
         raise NotReady("k_pending", "The TWAP-60s print at the open has not arrived yet.")
-    why = "Gamma was not asked"
-    if memory.gamma_retry_at.get(win.slug, -math.inf) <= now:
-        memory.gamma_retry_at[win.slug] = now + GAMMA_RETRY_S
-        try:
-            rows = await _gamma_get(client, "events", win.slug)
-            why = "Gamma has not published it yet"
-            for row in rows if isinstance(rows, list) else [rows]:
-                if not isinstance(row, Mapping) or row.get("slug") not in (None, win.slug):
-                    continue
-                meta = row.get("eventMetadata")
-                gamma = _positive(meta.get("priceToBeat")) if isinstance(meta, Mapping) else None
-                if gamma is not None:
-                    return gamma, K_FROM_GAMMA
-        except Exception as exc:  # noqa: BLE001 - asked again later
-            why = f"the Gamma lookup failed ({http_status(exc)})"
-    else:
-        why = "Gamma is asked again shortly"
-    message = f"The TWAP-60s print at the open is not held and {why}."
-    if now >= cutoff:
-        raise NotReady("k_missing", message, final=True)
-    raise NotReady("k_missing", message)
+    if since_open <= OPEN_PRINT_BACKFILL_S:
+        raise NotReady("k_missing", "The TWAP-60s print at the open is not held yet; the "
+                       "feed's history on a reconnect can still bring it.")
+    raise NotReady("k_missing", "The app did not see the TWAP-60s print at the window's open "
+                   "(it started after the open, or the feed dropped then), so this window is "
+                   "skipped.", final=True)
 
 
 def price_now(hub: Any, now: float) -> PriceNow:

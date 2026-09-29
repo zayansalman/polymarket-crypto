@@ -1,15 +1,17 @@
 """Worked examples of Kelly horse-race from real BTC 15m windows, through the real maths.
 
 For each of the last N resolved windows it rebuilds the decision the strategy makes at the
-open: ``K`` is the window's ``priceToBeat`` (Gamma), ``X = K`` at the open, ``r60`` and
+open: ``K`` is the window's ``priceToBeat`` (Gamma writes it once the window has ended; it is
+the TWAP-60s print at the open that the app reads live), ``X = K`` at the open, ``r60`` and
 ``sigma_h`` come from the 61 one-minute Binance BTCUSDT candles closing at or before the open,
 and ``tau = 0.25`` h. It runs them through ``ems.kelly_horse_race.maths`` and sets the chance of
 Up against how the window settled, then scores the chances (Brier score, against always 0.5)
 and writes the cards and the scores as markdown.
 
 It reads only (Gamma and Binance public endpoints) and writes only the markdown file. The
-book at the open is not in any public history, so the price and size part of a decision is
-not rebuilt here; ``docs/strategies/kelly_horse_race.md`` works it on hand-picked numbers.
+book at the open is not in any public history, so the price, size and fill part of a
+decision is not rebuilt here; ``docs/strategies/kelly_horse_race.md`` works it from the
+app's own paper decisions (Worked examples).
 
     python tools/kelly_horse_race/examples.py --windows 96 --cards 5
     python tools/kelly_horse_race/examples.py --out docs/strategies/examples/kelly_horse_race.md
@@ -20,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -28,7 +31,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ems.kelly_horse_race import maths
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from ems.kelly_horse_race import maths  # noqa: E402
 
 GAMMA = "https://gamma-api.polymarket.com"
 BINANCE = "https://data-api.binance.vision"

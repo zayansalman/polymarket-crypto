@@ -6,9 +6,14 @@ after the market-data hub). Every pass, in the order that keeps the record hones
 1. Setup, once per process: give the risk gate today's settled P&L again (counted once), in
    case the last run stopped between settling a window and telling the gate.
 2. Bookkeeping, whatever the switch or the mode says, each step guarded on its own:
-   - look for any order sent with no reply (``unknown``) among its venue's open orders: found,
-     it is followed as placed; still missing at its window's stop, it is closed and the card
-     says to check Polymarket. While one is open, no new order goes to that venue;
+   - ask the venue for any order sent with no reply (``unknown``) by its id, known before it
+     was sent, which finds it in any status (resting, filled, cancelled): found, it is followed
+     as placed; not there or no answer, it is asked again next pass, until
+     ``UNKNOWN_AFTER_STOP_S`` after its window's stop. Still not there then, it was never
+     placed and is closed, the card saying so; still no answer then (or no venue to ask, after
+     a restart), it is given up, the card saying to check Polymarket. One with no id is
+     searched for among the venue's open orders and given up at the stop if not found, the
+     card saying to check Polymarket. While one is open, no new order goes to that venue;
    - bring every open order's fills up to date from its venue (``venue.fills``) and mirror
      what the venue reports; an order the venue can fill no more gives its unfilled notional
      back to its gate leg;
@@ -54,6 +59,7 @@ import httpx
 from ems import db as _db  # type: ignore[import-untyped]
 from ems import runtime_knobs as _knobs
 from ems import strategies as _strategies
+from ems.execution import clob as _clob
 from ems.execution import endpoints as _endpoints
 from ems.execution.controls import OutcomeUnknown, PlacementRefused
 from ems.execution.gate import MODES, RiskGate
@@ -76,10 +82,16 @@ DEFAULT_MAX_NOTIONAL_USD = 5.0
 MIN_SLEEP_S = 1.0
 HTTP_TIMEOUT_S = 25.0
 CANCEL_LEAD_S = 60
-DECISION_CUTOFF_S = 120
+# Polymarket refuses an order expiring less than 3 minutes ahead (resting.GTD_MIN_AHEAD_S and
+# its send margin), so a window is too late from here, leaving the decision 15 s to read.
+DECISION_CUTOFF_S = 200
 SETTLE_RETRY_S = 30.0
 MAX_SETTLE_PER_PASS = 20
 SEND_GRACE_S = 30.0  # how long a shutdown waits for an order in flight to be recorded
+# An order sent with no reply, with an id, is asked for until this long after its window's
+# stop: the live venue's own wait before it trusts an empty status reply. An insert in flight
+# is on the exchange by then, so no order with its id then means it was never placed.
+UNKNOWN_AFTER_STOP_S = _clob.STUCK_AFTER_STOP_S
 FILL_EVENT = "kelly_fill"
 SETTLED_EVENT = "kelly_settled"
 
@@ -261,47 +273,105 @@ class Runner:
                 report.fail(step, exc)
 
     async def _resolve_unknown(self, report: PassReport) -> None:
-        """Each order sent with no reply: adopt it if its venue lists it, else close it once
-        its window has stopped (it can no longer rest there)."""
+        """Each order sent with no reply: asked for by its id when that is known, else
+        searched for among its venue's open orders. Adopted when found; closed once its
+        window has stopped without it (it can no longer rest there), a little after the stop
+        when it is asked for by id."""
         now = self._now()
         for row in await _ledger.unknown_orders():
-            mode, slug = row["mode"], row["window_slug"]
-            if now >= int(row["window_end_ts"]) - GTD_STOP_S:
-                reason = ("never found among the exchange's open orders before its window "
-                          "stopped. If it rested and filled, the position is not in this "
-                          "ledger: check your Polymarket orders.")
-                if await _ledger.give_up(int(row["id"]), reason=reason, ts=now):
-                    report.errors.append(f"{mode}: the order for {slug} was {reason}")
-                    log.error("kelly.unknown_given_up", mode=mode, window=slug)
-                continue
-            find = getattr(self.venues.get(mode), "find_order", None)
-            if find is None:
-                report.errors.append(f"{mode}: the order for {slug} was sent with no reply; "
-                                     "its venue is not open yet to look for it.")
-                continue
-            try:
-                found = await find(token_id=row["token_id"], price=float(row["price"]),
-                                   size=float(row["size"]), expires_ts=int(row["window_end_ts"]))
-            except Exception as exc:  # noqa: BLE001 - looked for again next pass
-                report.errors.append(f"{mode}: the order for {slug} was sent with no reply and "
-                                     f"the exchange could not be searched ({exc}); no new "
-                                     "order until it is found.")
-                continue
-            if found is None:
-                report.errors.append(f"{mode}: the order for {slug} was sent with no reply and "
-                                     "is not among the exchange's open orders yet.")
-                continue
-            if await _ledger.adopt(int(row["id"]), venue_order_id=found,
-                                   placed_ts=int(math.floor(now))):
-                await self._queue_commit(mode, int(row["id"]), float(row["notional_usd"]), now,
-                                         report)
-                report.errors.append(f"{mode}: the order for {slug} sent with no reply was "
-                                     f"found resting on the exchange ({found}).")
-                log.warning("kelly.unknown_found", mode=mode, window=slug, order=found)
+            stop = int(row["window_end_ts"]) - GTD_STOP_S
+            venue = self.venues.get(row["mode"])
+            if row["venue_order_id"]:
+                await self._ask_by_id(row, venue, now >= stop + UNKNOWN_AFTER_STOP_S, now,
+                                      report)
+            else:
+                await self._search_open_orders(row, venue, now >= stop, now, report)
+
+    async def _ask_by_id(self, row: Mapping[str, Any], venue: Any, due: bool, now: float,
+                         report: PassReport) -> None:
+        """The venue answers for an id in any status, so one it has (resting, filled or
+        cancelled) is adopted, even after the stop. Until ``due`` (``UNKNOWN_AFTER_STOP_S``
+        after its window's stop) it stays unknown, holding new orders, and is asked again next
+        pass. Then, one the venue still has no order for was never placed: an insert in flight
+        would be there by then. One still unanswered then (or with no venue to ask, after a
+        restart) is given up, the card saying to check Polymarket, so its window settles."""
+        mode, slug, order_id = row["mode"], row["window_slug"], str(row["venue_order_id"])
+        found, no_answer = await _has_order(venue, order_id)
+        if found:
+            await self._adopt(row, order_id, now, report, how="found on the exchange by its id")
+            return
+        if not due:
+            report.errors.append(
+                f"{mode}: the order for {slug} ({order_id}) was sent with no reply and "
+                + (f"{no_answer}; no new order until it answers." if no_answer else
+                   "is not on the exchange yet; no new order until it is, or a while after "
+                   "its window stops."))
+            return
+        if no_answer:
+            reason = (f"given up: {UNKNOWN_AFTER_STOP_S} s after its window's stop there was "
+                      f"still no answer for its id {order_id}. If it rested and filled, the "
+                      "position is not in this ledger: check your Polymarket orders.")
+        else:
+            reason = (f"never placed: {UNKNOWN_AFTER_STOP_S} s after its window's stop the "
+                      f"exchange still had no order with its id {order_id}.")
+        if await _ledger.give_up(int(row["id"]), reason=reason, ts=now):
+            report.errors.append(f"{mode}: the order for {slug} was {reason}")
+            if no_answer:
+                log.error("kelly.unknown_given_up", mode=mode, window=slug, order=order_id)
+            else:
+                log.warning("kelly.unknown_never_placed", mode=mode, window=slug,
+                            order=order_id)
+
+    async def _search_open_orders(self, row: Mapping[str, Any], venue: Any, stopped: bool,
+                                  now: float, report: PassReport) -> None:
+        """The fallback for an order with no id. The open orders list resting ones only, so
+        one that filled or was cancelled before it was found is missed, and the card says so
+        when it is given up at the stop."""
+        mode, slug = row["mode"], row["window_slug"]
+        if stopped:
+            reason = ("never found among the exchange's open orders before its window "
+                      "stopped. If it rested and filled, the position is not in this "
+                      "ledger: check your Polymarket orders.")
+            if await _ledger.give_up(int(row["id"]), reason=reason, ts=now):
+                report.errors.append(f"{mode}: the order for {slug} was {reason}")
+                log.error("kelly.unknown_given_up", mode=mode, window=slug)
+            return
+        find = getattr(venue, "find_order", None)
+        if find is None:
+            report.errors.append(f"{mode}: the order for {slug} was sent with no reply; "
+                                 "its venue is not open yet to look for it.")
+            return
+        try:
+            found = await find(token_id=row["token_id"], price=float(row["price"]),
+                               size=float(row["size"]), expires_ts=int(row["window_end_ts"]))
+        except Exception as exc:  # noqa: BLE001 - looked for again next pass
+            report.errors.append(f"{mode}: the order for {slug} was sent with no reply and "
+                                 f"the exchange could not be searched ({exc}); no new "
+                                 "order until it is found.")
+            return
+        if found is None:
+            report.errors.append(f"{mode}: the order for {slug} was sent with no reply and "
+                                 "is not among the exchange's open orders yet.")
+            return
+        await self._adopt(row, found, now, report, how="found resting on the exchange")
+
+    async def _adopt(self, row: Mapping[str, Any], order_id: str, now: float,
+                     report: PassReport, *, how: str) -> None:
+        """Follow an order sent with no reply like any placed one, counted toward its cap."""
+        mode, slug = row["mode"], row["window_slug"]
+        if await _ledger.adopt(int(row["id"]), venue_order_id=order_id,
+                               placed_ts=int(math.floor(now))):
+            await self._queue_commit(mode, int(row["id"]), float(row["notional_usd"]), now,
+                                     report)
+            report.errors.append(f"{mode}: the order for {slug} sent with no reply was {how} "
+                                 f"({order_id}).")
+            log.warning("kelly.unknown_found", mode=mode, window=slug, order=order_id)
 
     async def _sync_fills(self, report: PassReport) -> None:
         for mode in list(self.venues):
-            rows = [r for r in await _ledger.open_orders(mode) if r["venue_order_id"]]
+            # An unknown order's id is asked for in _resolve_unknown until it is adopted.
+            rows = [r for r in await _ledger.open_orders(mode)
+                    if r["venue_order_id"] and r["state"] != _ledger.UNKNOWN_STATE]
             await self._refresh(mode, rows, report)
 
     async def _refresh(self, mode: str, rows: list[dict[str, Any]], report: PassReport) -> None:
@@ -480,8 +550,7 @@ class Runner:
             return
         draws = self._draws_for(win.slug)
         try:
-            k, k_source = await _inputs.price_to_beat(hub, self._client, win, now,
-                                                      self.memory, cutoff=cutoff)
+            k, k_source = _inputs.price_to_beat(hub, win, now)
             x = _inputs.price_now(hub, now)
             r60, sigma_h = _maths.hour_moves(await _inputs.minute_returns(self._client, now))
         except _inputs.NotReady as exc:
@@ -599,9 +668,10 @@ class Runner:
                                 report: PassReport) -> None:
         try:
             placed = await point.venue.place(request, now=now)  # type: ignore[union-attr]
-        except OutcomeUnknown as exc:
+        except OutcomeUnknown as exc:  # with the order's id when the venue knows it
             await _ledger.record_order(**common, state=_ledger.UNKNOWN_STATE,
-                                       reason=f"{exc.reason}: {exc}")
+                                       reason=f"{exc.reason}: {exc}",
+                                       venue_order_id=getattr(exc, "order_id", None))
             report.errors.append(f"{point.mode}: {exc} It is looked for every pass.")
             log.error("kelly.outcome_unknown", mode=point.mode, window=win.slug)
             return
@@ -713,6 +783,18 @@ def _drain_errors(mode: str, venue: Any, report: PassReport) -> None:
     if errors:
         report.errors.extend(f"{mode}: {error}" for error in errors)
         errors.clear()
+
+
+async def _has_order(venue: Any, order_id: str) -> tuple[bool, str | None]:
+    """Whether ``venue`` has an order with this id, in any status, and why there is no answer
+    (None: it answered)."""
+    has = getattr(venue, "has_order", None)
+    if has is None:
+        return False, "its venue is not open yet to ask for it"
+    try:
+        return bool(await has(order_id)), None
+    except Exception as exc:  # noqa: BLE001 - asked again next pass, until it is due
+        return False, f"the exchange could not be asked for it ({exc})"
 
 
 def _current_hub() -> Any:
