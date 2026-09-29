@@ -47,6 +47,16 @@ paper-trading lab. Two strategies are wired and run simultaneously:
    (`panels/daily_altcoin.py`) shows current position(s), settled PnL, and a
    plain-language explanation of the mechanism.
 
+Alongside them, **advisory and never on a trading path**: the **market regime
+monitor** (`polymarket_bot/regime/`, `docs/REGIME_OVERVIEW.md`) — always-on
+from the dashboard lifespan like the daily scanner, it journals one
+`regime_snapshots` row per minute for the selected market (volatility, volume,
+move, jumps, book cost from Binance klines + Gamma + the CLOB/tick book) and
+renders the MARKET REGIME card with each strategy family's *feasibility*
+(never "favoured": regime switching was falsified, see
+`docs/archive/FINDINGS.md` §3–4). A future strategy router is backtested
+against that history; it does not exist yet.
+
 The primary active product behavior for the BTC loop specifically is:
 
 1. Operator opens the local dashboard.
@@ -168,6 +178,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 946.
+- **Tests:** 1101.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

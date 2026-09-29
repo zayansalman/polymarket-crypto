@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
@@ -53,6 +54,29 @@ def _no_real_live_key(monkeypatch: pytest.MonkeyPatch) -> None:
     except Exception:  # noqa: BLE001 — bot package optional in some envs
         return
     monkeypatch.setattr(_controller, "_live_consent", False)
+
+
+@pytest.fixture(autouse=True)
+def _idle_regime_monitor(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the always-on regime monitor idle in tests.
+
+    The dashboard lifespan starts ``regime.monitor.run_forever``; any test that
+    spins up the app (``TestClient``) would otherwise poll live Binance / Gamma /
+    CLOB endpoints and journal scan rows into the operator's real database.
+    Tests that exercise the real loop opt back in with
+    ``@pytest.mark.real_regime_monitor``.
+    """
+    if request.node.get_closest_marker("real_regime_monitor"):
+        return
+    try:
+        from polymarket_bot.regime import monitor as _monitor
+    except Exception:  # noqa: BLE001 — bot package optional in some envs
+        return
+
+    async def _idle(stop_event: asyncio.Event | None = None) -> None:
+        await (stop_event or asyncio.Event()).wait()
+
+    monkeypatch.setattr(_monitor, "run_forever", _idle)
 
 
 # ---------------------------------------------------------------------------

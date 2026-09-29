@@ -97,6 +97,20 @@ except Exception:
 # Lifespan — init DB tables on startup
 # ---------------------------------------------------------------------------
 
+def _log_background_task_death(name: str):
+    """Done-callback: an always-on background task that ends by exception is
+    logged loudly (a cancelled task is a normal shutdown)."""
+
+    def _cb(task: "asyncio.Task[Any]") -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("background_task_died", task=name, error=repr(exc))
+
+    return _cb
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     await init_db()
@@ -113,12 +127,27 @@ async def _lifespan(app: FastAPI):
     daily_stop_event = asyncio.Event()
     daily_task = asyncio.create_task(_run_daily_scanner(daily_stop_event))
 
+    # Market regime monitor (polymarket_bot/regime): advisory overview of
+    # volatility / volume / move / book for the selected market. Always-on
+    # like the daily scanner, independent of the BTC loop's Start/Stop, so
+    # the operator can read the regime before choosing what to run. Reads
+    # only; nothing on the trading path consumes it.
+    from polymarket_bot.regime.monitor import run_forever as _run_regime_monitor
+
+    regime_stop_event = asyncio.Event()
+    regime_task = asyncio.create_task(_run_regime_monitor(regime_stop_event))
+    regime_task.add_done_callback(_log_background_task_death("regime_monitor"))
+
     yield
 
     daily_stop_event.set()
+    regime_stop_event.set()
     daily_task.cancel()
+    regime_task.cancel()
     with suppress(asyncio.CancelledError):
         await daily_task
+    with suppress(asyncio.CancelledError):
+        await regime_task
 
 
 # ---------------------------------------------------------------------------

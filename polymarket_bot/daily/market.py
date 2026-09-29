@@ -61,6 +61,20 @@ def _todays_slug(gamma_name: str, now: datetime) -> str:
     return f"{gamma_name}-up-or-down-on-{now.strftime('%B').lower()}-{now.day}-{now.year}"
 
 
+def daily_slug(asset: str, now: datetime) -> str | None:
+    """Today's daily Up/Down slug for a short asset key (``sol`` → ``solana-…``).
+
+    Public wrapper over the slug scheme this module discovers markets with,
+    so other packages (the regime monitor) can name today's market without
+    re-deriving the Gamma naming. ``None`` for an asset this family does not
+    cover.
+    """
+    gamma_name = _GAMMA_ASSET_NAME.get(asset)
+    if gamma_name is None:
+        return None
+    return _todays_slug(gamma_name, now)
+
+
 async def _fetch_by_slug(client: httpx.AsyncClient, slug: str) -> dict[str, Any] | None:
     try:
         resp = await client.get(f"{GAMMA_API}/markets", params={"slug": slug}, timeout=15.0)

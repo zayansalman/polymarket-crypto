@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import config as _config
 from db import get_config
+from logging_setup import get_logger
 from polymarket_bot import runtime_knobs as _knobs
 
 from polymarket_exec.ops.dashboard.panels import _data as data
@@ -23,10 +24,31 @@ from polymarket_exec.ops.dashboard.panels import (
     market,
     market_selector,
     performance,
+    regime,
     ribbon,
     settings as settings_panel,
     tca,
 )
+
+
+log = get_logger("execution_view")
+
+
+async def _regime_card_html() -> str:
+    """The MARKET REGIME card, scoped to the selected asset.
+
+    Advisory only, so a fault loading or rendering it must never take down the
+    operator's execution view: it is logged and replaced by a distinct
+    "unavailable" placeholder.
+    """
+    try:
+        from polymarket_bot import market_selection as _selection
+
+        asset = (await _selection.get_selection()).asset
+        return regime.render(await data.latest_regime(asset=asset), asset=asset)
+    except Exception:  # noqa: BLE001
+        log.exception("regime.card_failed")
+        return regime.render_unavailable()
 
 
 async def market_selector_html() -> str:
@@ -140,6 +162,7 @@ async def execution_view_html() -> str:
         current_price=current_price,
     )
     market_html = market.render(tick, open_pos)
+    regime_html = await _regime_card_html()
     decision_html = decision_engine.render(tick, recent_ticks)
     performance_html = performance.render(
         style=style, perf=perf, perf_live=perf_live, perf_paper=perf_paper, recon=recon
@@ -161,6 +184,7 @@ async def execution_view_html() -> str:
         + "<div class='execution-grid'>"
         + controls_html
         + market_html
+        + regime_html
         + decision_html
         + performance_html
         + tca_html

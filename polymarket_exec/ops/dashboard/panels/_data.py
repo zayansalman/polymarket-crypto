@@ -172,6 +172,19 @@ async def daily_positions(state: str | None = None) -> list[dict[str, Any]]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def latest_regime(asset: str | None = None) -> dict[str, Any] | None:
+    """Most recent regime snapshot (polymarket_bot/regime) for ``asset``, or None.
+
+    Advisory only — the panel renders it; nothing on the trading path
+    reads it. Delegates to the regime ledger so the JSON decoding lives in
+    one place. Scoped to the selected asset so a selector switch never
+    shows the previous asset's read under the new label.
+    """
+    from polymarket_bot.regime import ledger as _regime_ledger
+
+    return await _regime_ledger.latest_snapshot(asset=asset)
+
+
 def performance(closed: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(closed)
     if n == 0:

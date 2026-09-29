@@ -113,6 +113,15 @@ KNOBS: dict[str, Knob] = {
         "runtime.daily.vol_lookback_days", 30, "int",
         "Volatility lookback", 1, 365, unit="d", group="Daily scanner",
     ),
+    # --- Market regime monitor (polymarket_bot/regime/monitor.py) ----------
+    "regime_monitor_enabled": Knob(
+        "runtime.regime.enabled", True, "bool", "Monitor enabled",
+        group="Regime monitor",
+    ),
+    "regime_scan_interval_seconds": Knob(
+        "runtime.regime.scan_interval_seconds", 60.0, "float",
+        "Scan interval", 10.0, 3600.0, unit="s", group="Regime monitor",
+    ),
 }
 
 # In-memory mirror of the last `refresh_cache()` read, for sync call sites.
