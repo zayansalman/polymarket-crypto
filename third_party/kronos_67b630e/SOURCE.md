@@ -1,0 +1,7 @@
+# Kronos model code (vendored, unchanged)
+
+- Source: https://github.com/shiyu-coder/Kronos, folder `model/`, commit 67b630e67f6a18c9e9be918d9b4337c960db1e9a (2026-04-13), MIT licence (LICENSE in this folder).
+- Paper: Shi et al., "Kronos: A Foundation Model for the Language of Financial Markets", arXiv 2508.02739 (Tsinghua University).
+- Used for the lc2004-Kronos BTC 24h forecast card: it loads and samples the lc2004 BTCUSDT 1h fine-tune (huggingface.co/lc2004/kronos_base_model_BTCUSDT_1h_finetune with huggingface.co/lc2004/kronos_tokenizer_base_BTCUSDT_1h_finetune, revisions pinned in `ems/kronos_forecast/client.py`). `KronosPredictor.predict_batch` over N identical copies of the input with `sample_count=1` returns N independently sampled paths, the recipe of the research in `research/kronos_lc2004_btcusdt_1h_finetune_24h_horizon/` on the branch `research/kronos-lc2004-btcusdt-1h-finetune-24h-horizon` (Claude, 2026-09-22; card, Claude, 2026-09-29).
+- The only user is `ems/kronos_forecast/worker.py`, which runs in its own process (`python -I -B`) for the lc2004-Kronos BTC 24h forecast card. The card only shows the forecast; nothing here places orders. The app process never imports this code. It sits outside the folders ruff checks (`extend-exclude` in `pyproject.toml`), so its upstream style is left alone.
+- Do not edit these files. To update, re-vendor a new commit into a new folder and update `KRONOS_CODE_COMMIT` / `CODE_DIR` in `ems/kronos_forecast/client.py`.
