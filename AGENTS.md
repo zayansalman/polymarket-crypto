@@ -37,6 +37,15 @@ here (the BTC 5-minute loop, the maker, the daily altcoin scanner, the live
 CLOB executor and its risk gate) was removed on 2026-09-26; `git log` before
 `ea93457` has it.
 
+One display-only card sits beside them: the **lc2004-Kronos BTC 24h forecast**
+(`ems/lc2004_kronos_btc_24h/`, model worker in `ems/kronos_forecast/`). Every
+hour it shows the lc2004 Kronos model's chance that Polymarket's daily BTC
+Up/Down market settles Up, next to that market's book, and the operator trades
+by hand (Zayan, 2026-09-29). It places, cancels and simulates no orders, is not
+a strategy (no switch on MY STRATEGIES, no strategy doc), and is turned off in
+SETTINGS. Design:
+`docs/superpowers/specs/2026-09-29-lc2004-kronos-btc-24h-forecast-card-design.md`.
+
 How it runs:
 
 1. `python main.py` boots the dashboard. Its lifespan starts the market-data
@@ -142,6 +151,6 @@ http://127.0.0.1:7860
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1215.
+- **Tests:** 1531.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->
