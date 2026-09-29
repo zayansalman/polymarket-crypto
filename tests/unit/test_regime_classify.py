@@ -11,7 +11,7 @@ import pytest
 
 from polymarket_bot.regime import classify as C
 from polymarket_bot.regime.features import ANNUALIZE
-from polymarket_bot.regime.types import BookState, QualityFlag, RegimeFeatures
+from polymarket_bot.regime.types import QUALITY_CODES, BookState, QualityFlag, RegimeFeatures
 from tools.regime_attribution import time_of_day_band, vol_band
 
 T = C.DEFAULT_THRESHOLDS
@@ -127,13 +127,19 @@ def test_grade_for() -> None:
     assert C.grade_for((QualityFlag("book_absent"), QualityFlag("bars_unavailable"))) == "none"
 
 
-def test_every_quality_code_used_by_the_monitor_is_registered() -> None:
-    from polymarket_bot.regime import monitor
+def test_quality_flag_only_accepts_registered_codes() -> None:
+    with pytest.raises(ValueError):
+        QualityFlag("made_up_code")
+    assert QualityFlag("book_absent", "why").code == "book_absent"
+    assert "daily_family_proxy" not in QUALITY_CODES  # a per-family note, not data quality
+    assert C.QUALITY_CODES is QUALITY_CODES  # re-exported, one vocabulary
 
-    import inspect
-    src = inspect.getsource(monitor)
-    for code in C.QUALITY_CODES:
-        assert code in src or code in ("book_not_for_selected_market",), code
+
+def test_no_label_or_line_ever_says_favoured() -> None:
+    texts = [*C.RULES.values(), *C.STRATEGY_FAMILIES.values()]
+    fits = tuple(_fits(_feats(vol_1h_gk=0.4 / ANNUALIZE), None).values())
+    texts.append(C.recommendation(fits))
+    assert not any("favour" in t.lower() for t in texts)
 
 
 # --- fits ----------------------------------------------------------------------
@@ -159,22 +165,34 @@ def test_unregistered_rule_id_raises() -> None:
         C._fit("btc_5m_taker", [], ["m.not_a_rule"], {})
 
 
-def test_taker_feasible_when_cost_inside_gate_and_loop_sigma_present() -> None:
+def test_taker_feasible_on_a_cheap_book_with_usable_loop_sigma() -> None:
     f = _feats(vol_1h_gk=0.4 / ANNUALIZE, vol_1s=4e-5, overround=0.012, executable_depth_usd=150.0,
                rv_bv_ratio_1h=1.0, max_return_z_1h=1.0)
     fit = _fits(f, _book())["btc_5m_taker"]
-    assert fit.fit == "feasible"
-    assert "m.taker_cost_inside_gate" in fit.reasons
+    assert fit.fit == "feasible" and fit.reasons == ()
     mean_ask = (1 + 0.012) / 2
-    assert fit.metrics["taker_round_trip_cost"] == pytest.approx(0.006 + 0.07 * mean_ask * (1 - mean_ask), abs=1e-4)
-    assert fit.metrics["edge_gate"] == 0.045
+    assert fit.metrics["taker_entry_fee"] == pytest.approx(0.07 * mean_ask * (1 - mean_ask), abs=1e-4)
+    assert fit.metrics["overround"] == 0.012 and fit.metrics["edge_gate"] == 0.045
 
 
-def test_taker_degraded_when_cost_exceeds_gate() -> None:
-    f = _feats(vol_1h_gk=0.4 / ANNUALIZE, vol_1s=4e-5, overround=0.08, executable_depth_usd=150.0,
-               rv_bv_ratio_1h=1.0, max_return_z_1h=1.0)
-    fit = _fits(f, _book(), edge_gate=0.045)["btc_5m_taker"]
-    assert fit.fit == "degraded" and "m.taker_cost_over_gate" in fit.reasons
+def test_taker_is_degraded_by_an_expensive_book_but_not_by_a_cost_vs_gate_compare() -> None:
+    """Regression: the loop's edge is fair value minus the ASK, so the spread is already inside
+    its gate. The old rule compared half the overround plus the fee against the gate and claimed
+    gate-passing entries "are still negative after cost" — flipping to degraded near overround
+    0.057 although a gate-passing entry always nets >= gate - fee. A wide book now degrades only
+    through the a-priori `expensive` band, worded as fewer entries clearing the gate."""
+    def fit_at(overround: float):
+        f = _feats(vol_1h_gk=0.4 / ANNUALIZE, vol_1s=4e-5, overround=overround,
+                   executable_depth_usd=150.0, rv_bv_ratio_1h=1.0, max_return_z_1h=1.0)
+        return _fits(f, _book())["btc_5m_taker"]
+
+    assert fit_at(0.035).fit == "feasible"           # a normal band, well past the old flip point's neighbour
+    wide = fit_at(0.08)
+    assert wide.fit == "degraded" and wide.reasons == ("m.book_expensive_taker",)
+    assert "negative after cost" not in C.RULES["m.book_expensive_taker"]
+    assert "m.taker_cost_over_gate" not in C.RULES and "m.taker_cost_inside_gate" not in C.RULES
+    # The fee the gate does not net stays far below the gate at any price.
+    assert max(C.taker_fee_per_share(p / 100) for p in range(1, 100)) < 0.045
 
 
 def test_taker_degraded_on_thin_depth_and_missing_loop_sigma() -> None:
@@ -205,6 +223,16 @@ def test_maker_feasible_with_positive_capture() -> None:
     fit = _fits(f, _book())["pairarb_maker"]
     assert fit.fit == "feasible" and "m.capture_positive" in fit.reasons
     assert fit.metrics["maker_capture"] == 0.01
+
+
+def test_maker_degraded_when_asks_quote_but_capture_was_never_measured() -> None:
+    """Regression: the book band comes from the ASKS, so a book with both asks but an empty bid
+    side banded cheap/normal and read "feasible" although maker capture (bids) was never measured."""
+    f = _feats(vol_1h_gk=0.4 / ANNUALIZE, overround=0.012, maker_capture=None, executable_depth_usd=100.0,
+               rv_bv_ratio_1h=1.0, max_return_z_1h=1.0)
+    fit = _fits(f, _book())["pairarb_maker"]
+    assert fit.fit == "degraded"
+    assert "m.capture_unknown" in fit.reasons and "m.capture_positive" not in fit.reasons
 
 
 def test_maker_degraded_without_capture_and_context_rule_on_high_vol() -> None:

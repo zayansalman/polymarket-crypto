@@ -7,7 +7,9 @@ persisted row and its join keys, and the threshold-version journal.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -68,7 +70,7 @@ def _kline_rows(n: int, secs: int, qv: float = 1000.0) -> list[list[Any]]:
 def _build(**kw) -> Any:
     base = dict(
         asset="btc", symbol="BTCUSDT", timeframe="5m", created_at=CREATED, created_ts=NOW_TS,
-        bars_1m=_bars(60, 60), bars_5m=_bars(288, 300), bars_1h=_bars(168, 3600),
+        bars_1m=_bars(60, 60), bars_5m=_bars(288, 300), bars_1h=_bars(672, 3600),
         book=None, venue_current=None, venue_completed=[], edge_gate=0.045, daily_assets=DAILY,
         window_slug="btc-updown-5m-1790000100", run_id="run1", scan_seq=3,
     )
@@ -80,6 +82,7 @@ def test_build_snapshot_full_grade_when_everything_present() -> None:
     book = BookState(0.012, 0.008, 150.0, 12, 5, 4e-5, "chainlink_ws")
     snap = _build(book=book, venue_current=VenueMarket("s", 10.0, 100.0, "u", "d"), asset="eth", symbol="ETHUSDT")
     assert snap.quality == () and snap.grade == "full" and snap.usable_for_router
+    assert "daily_altcoin" in {f.strategy_id for f in snap.fits}
     assert snap.bands["book"] == "cheap" and snap.sources["book"] == "paper_ticks"
     assert snap.sources["vol_1s"] == "chainlink_ws"
     assert snap.sources["estimator.volatility"] == "garman_klass_1m_60"
@@ -91,7 +94,7 @@ def test_build_snapshot_flags_each_missing_input() -> None:
     snap = _build(bars_1m=_bars(10, 60), bars_5m=_bars(100, 300), bars_1h=_bars(10, 3600))
     codes = [q.code for q in snap.quality]
     assert codes == ["bars_1m_short", "bars_5m_short", "bars_1h_short", "book_absent",
-                     "venue_market_absent", "daily_family_proxy"]
+                     "venue_market_absent"]
     assert snap.grade == "partial" and not snap.usable_for_router
     assert snap.headline.startswith("PARTIAL DATA")
     assert all(q.code in classify.QUALITY_CODES for q in snap.quality)
@@ -245,8 +248,11 @@ async def test_scan_once_btc_uses_loop_ticks_and_persists_join_keys(test_db) -> 
     assert snap.features.overround == pytest.approx(0.02) and snap.features.vol_1s == 4.5e-5
     assert snap.features.venue_windows_used == 6.0 and snap.features.venue_liquidity_usd == 120.0
     assert not any(u.endswith("/book") for u, _ in client.calls)  # no direct read when ticks are fresh
-    assert [q.code for q in snap.quality] == ["daily_family_proxy"]
-    assert snap.grade == "partial"
+    assert snap.quality == () and snap.grade == "full" and snap.usable_for_router
+    # The daily family is judged on a proxy asset here; that is a per-family note on ITS fit,
+    # not a data-quality flag, so the loop's own market (btc) can grade "full".
+    daily = {f.strategy_id: f for f in snap.fits}["daily_altcoin"]
+    assert daily.fit == "degraded" and "m.daily_proxy_asset" in daily.reasons
     row = await ledger.latest_snapshot(asset="btc")
     assert row is not None and row["scan_seq"] == snap.scan_seq and row["run_id"] == monitor._run_id
     async with test_db.connect() as conn:
@@ -331,3 +337,160 @@ def test_monitor_knobs_are_registered() -> None:
     assert k.KNOBS["regime_scan_interval_seconds"].default == 60.0
     assert k.KNOBS["regime_monitor_enabled"].default is True
     assert k.KNOBS["regime_monitor_enabled"].group == "Regime monitor"
+
+
+# --- review regressions ------------------------------------------------------------------
+
+
+def test_the_loops_own_market_is_not_capped_below_full_grade() -> None:
+    """Regression: a `daily_family_proxy` quality flag made btc — the default and only
+    loop-supported market — permanently `partial`, never usable_for_router."""
+    book = BookState(0.012, 0.008, 150.0, 12, 5, 4e-5, "chainlink_ws")
+    snap = _build(book=book, venue_current=VenueMarket("s", 1.0, 1.0))
+    assert snap.asset == "btc" and snap.grade == "full" and not snap.headline.startswith("PARTIAL")
+
+
+@pytest.mark.real_regime_monitor
+@pytest.mark.asyncio
+async def test_run_forever_survives_knob_read_errors(test_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: the interval read sat outside the try, so one transient SQLite error
+    ('database is locked') ended the always-on monitor with no trace."""
+    async def locked(_name: str):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(monitor._knobs, "get", locked)
+    slept: list[float] = []
+    stop = asyncio.Event()
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        if len(slept) >= 3:
+            stop.set()
+
+    monkeypatch.setattr(monitor.asyncio, "sleep", fake_sleep)
+    await monitor.run_forever(stop)
+    assert slept == [60.0, 60.0, 60.0]  # the registered default, three surviving cycles
+
+
+@pytest.mark.real_regime_monitor
+@pytest.mark.asyncio
+async def test_run_forever_keeps_going_after_a_failed_scan(test_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+
+    async def boom(_client, now_ts=None):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("scan blew up")
+
+    monkeypatch.setattr(monitor, "scan_once", boom)
+    stop = asyncio.Event()
+
+    async def fake_sleep(_s: float) -> None:
+        if attempts >= 2:
+            stop.set()
+
+    monkeypatch.setattr(monitor.asyncio, "sleep", fake_sleep)
+    await monitor.run_forever(stop)
+    assert attempts == 2
+
+
+@pytest.mark.real_regime_monitor
+@pytest.mark.asyncio
+async def test_run_forever_pauses_when_the_enabled_knob_is_off(test_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    from polymarket_bot import runtime_knobs as k
+
+    await k.set("regime_monitor_enabled", False)
+    scans = 0
+
+    async def counting(_client, now_ts=None):
+        nonlocal scans
+        scans += 1
+
+    monkeypatch.setattr(monitor, "scan_once", counting)
+    stop = asyncio.Event()
+    cycles = 0
+
+    async def fake_sleep(_s: float) -> None:
+        nonlocal cycles
+        cycles += 1
+        if cycles >= 2:
+            stop.set()
+
+    monkeypatch.setattr(monitor.asyncio, "sleep", fake_sleep)
+    await monitor.run_forever(stop)
+    assert scans == 0 and cycles == 2
+
+
+def test_default_test_env_keeps_the_monitor_idle_but_the_marker_opts_back_in() -> None:
+    """The autouse conftest stub stops app-lifespan tests polling live venues / the real DB."""
+    assert monitor.run_forever.__name__ == "_idle"
+
+
+@pytest.mark.real_regime_monitor
+def test_real_monitor_marker_restores_the_real_loop() -> None:
+    assert monitor.run_forever.__name__ == "run_forever"
+
+
+@pytest.mark.asyncio
+async def test_aborted_scan_leaves_a_scan_seq_gap(test_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: scan_seq advanced only after every fetch succeeded, so a failed scan left no
+    gap — defeating the run_id/scan_seq gap detection the router contract promises."""
+    client = _Client()
+    first = await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    real_fetch = monitor.sources.fetch_bars
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("fetch failed")
+
+    monkeypatch.setattr(monitor.sources, "fetch_bars", boom)
+    with pytest.raises(RuntimeError):
+        await monitor.scan_once(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
+    monkeypatch.setattr(monitor.sources, "fetch_bars", real_fetch)
+    third = await monitor.scan_once(client, now_ts=NOW_TS + 120)  # type: ignore[arg-type]
+    assert first is not None and third is not None
+    assert third.scan_seq == first.scan_seq + 2 and third.run_id == first.run_id
+
+
+@pytest.mark.asyncio
+async def test_completed_window_cache_waits_for_a_full_window_to_settle(test_db) -> None:
+    """Regression: every completed window was cached on first read, so the window that closed
+    seconds ago froze whatever partial Gamma volume existed at that instant."""
+    client = _Client()
+    await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    current_start = NOW_TS - NOW_TS % 300
+    newest_completed = f"btc-updown-5m-{current_start - 300}"
+    older_completed = f"btc-updown-5m-{current_start - 600}"
+    assert newest_completed not in monitor._venue_completed   # closed 100s ago: not settled
+    assert older_completed in monitor._venue_completed        # closed 400s ago: settled
+    assert len(monitor._venue_completed) == 5
+    before = sum(1 for u, _ in client.calls if "/markets" in u)
+    await monitor.scan_once(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
+    after = sum(1 for u, _ in client.calls if "/markets" in u)
+    assert after - before == 2  # only the current window and the not-yet-settled one are refetched
+
+
+@pytest.mark.asyncio
+async def test_book_phase_is_measured_against_the_venue_windows_own_end() -> None:
+    """Regression: the phase used a fixed 60-270s band and the scan-start clock. It is now a fraction
+    of the selected window and is computed at the book stage against the window's end."""
+    venue = VenueMarket("eth-updown-15m-0", 1.0, 1.0, "up", "down")
+    sel = market_selection.MarketSelection("eth", "15m")
+    client = _Client()
+    # window [0, 900): 120s remaining -> closing phase (< 0.2 * 900) -> no book, honest flag.
+    book, flag = await monitor._book(client, sel, venue, 780, 0)  # type: ignore[arg-type]
+    assert book is None and flag is not None and flag.code == "book_out_of_phase"
+    # 200s remaining -> quotable for a 15m window -> direct read.
+    book, flag = await monitor._book(client, sel, venue, 700, 0)  # type: ignore[arg-type]
+    assert flag is None and book is not None and book.source == "clob_direct"
+    # The window has already ended by the book stage -> negative remaining -> out of phase.
+    book, flag = await monitor._book(client, sel, venue, 901, 0)  # type: ignore[arg-type]
+    assert book is None and flag is not None and flag.code == "book_out_of_phase"
+    # No tokens / no window -> book_absent, never a fabricated read.
+    _, flag = await monitor._book(client, sel, VenueMarket("s", 1.0, 1.0), 700, 0)  # type: ignore[arg-type]
+    assert flag is not None and flag.code == "book_absent"
+    _, flag = await monitor._book(client, sel, venue, 700, None)  # type: ignore[arg-type]
+    assert flag is not None and flag.code == "book_absent"
+
+
+def test_thresholds_version_moves_with_rule_semantics() -> None:
+    assert classify.THRESHOLDS_VERSION == "2026-09-29.v1"

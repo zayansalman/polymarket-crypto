@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 
 from polymarket_bot.regime.features import ANNUALIZE
 from polymarket_bot.regime.types import (
+    QUALITY_CODES,
     BookState,
     Grade,
     QualityFlag,
@@ -41,7 +42,9 @@ from polymarket_bot.regime.types import (
     StrategyFit,
 )
 
-THRESHOLDS_VERSION = "2026-09-27.v1"
+__all__ = ["QUALITY_CODES"]  # re-exported: the vocabulary lives in types.py
+
+THRESHOLDS_VERSION = "2026-09-29.v1"
 
 UNKNOWN = "unknown"
 TAKER_FEE_RATE = 0.07   # polymarket_bot/shadow/fees.py: 0.07·p·(1−p) per share
@@ -95,24 +98,6 @@ STRATEGY_FAMILIES: dict[str, str] = {
     "daily_altcoin": "Daily altcoin Up/Down scanner (shadow)",
 }
 
-# --- Quality codes -----------------------------------------------------------
-# The machine-readable degradation vocabulary. ``detail`` on a flag is prose.
-QUALITY_CODES: frozenset[str] = frozenset({
-    "bars_unavailable",          # no 1m and no 5m bars at all
-    "bars_1m_short",             # fewer 1m bars than the 1h estimates need
-    "bars_5m_short",             # fewer 5m bars than the 24h baseline needs
-    "bars_1h_short",             # fewer hourly bars than the seasonal medians need
-    "book_absent",               # no book read at all
-    "book_stale",                # newest book read older than book_stale_seconds
-    "book_out_of_phase",         # window in its edge phase; book not measured
-    "book_not_for_selected_market",  # loop ticks are BTC 5m; selection is not
-    "loop_feed_degraded",        # the loop's own settlement feed was degraded
-    "loop_sigma_unusable",       # loop sigma on the floor / absent
-    "venue_market_absent",       # Gamma had no record for the current window
-    "venue_slug_unknown",        # no slug scheme for the selected family
-    "daily_family_proxy",        # daily fit judged on an asset the scanner does not trade
-})
-
 # --- Rule registry --------------------------------------------------------------
 # Persisted fits carry these ids; the prose lives here so rows stay small and
 # a backtest can count rule firings. Each id is prefixed with its provenance:
@@ -121,16 +106,17 @@ RULES: dict[str, str] = {
     "m.no_vol": "no volatility estimate from any source",
     "m.book_unknown": "book unknown: no in-phase read (start the loop, or wait for the window's quotable phase)",
     "m.book_stale": "book read is stale",
-    "m.taker_cost_over_gate": (
-        "round-trip cost (half overround + taker fee) exceeds the loop's edge gate: "
-        "entries that pass the gate are still negative after cost"
+    "m.book_expensive_taker": (
+        "expensive book (overround at or above the a-priori cutoff): the edge gate already "
+        "nets the spread, so this means few entries clear it — and wide-spread entries were "
+        "fee-negative in the #149 replay (n=21, small sample)"
     ),
-    "m.taker_cost_inside_gate": "round-trip cost inside the loop's edge gate",
     "m.depth_below_min": "touch depth below the venue minimum order",
     "m.jump_gaussian": "jump in the last hour: a Gaussian fair value is mis-specified",
     "m.loop_sigma_unusable": "loop sigma on the safety floor or absent",
     "m.no_capture": "bids sum to ≥ 1: nothing to capture at the touch",
     "m.capture_positive": "positive maker capture at the touch",
+    "m.capture_unknown": "maker capture not measured: one side has no bid to quote against",
     "m.jump_maker": "jump in the last hour: resting quotes get run over",
     "p.high_vol_maker": "high vol: adverse selection on resting quotes rises (context, not evidence)",
     "m.no_24h_bars": "no 24h bars: the scanner's volatility input cannot be checked",
@@ -365,6 +351,11 @@ def _fit(sid: str, labels: list[str], reasons: list[str], metrics: dict[str, flo
 def _btc_5m_taker(
     f: RegimeFeatures, b: dict[str, str], edge_gate: float, t: RegimeThresholds
 ) -> StrategyFit:
+    """Feasibility of the taker loop. The loop's edge is fair value minus the
+    executable ASK, so the spread is already inside its gate: a wide book
+    means fewer entries clear it, not that gate-passing entries lose. The
+    one cost the gate does not net is the taker fee, reported as a metric
+    (at 7% it is always far below the gate, so it never degrades a fit)."""
     labels: list[str] = []
     reasons: list[str] = []
     metrics: dict[str, float] = {"edge_gate": edge_gate}
@@ -380,14 +371,11 @@ def _btc_5m_taker(
         reasons.append("m.book_stale")
     elif f.overround is not None:
         mean_ask = (1.0 + f.overround) / 2.0
-        cost = f.overround / 2.0 + taker_fee_per_share(mean_ask)
-        metrics["taker_round_trip_cost"] = round(cost, 4)
         metrics["overround"] = round(f.overround, 4)
-        if cost > edge_gate:
+        metrics["taker_entry_fee"] = round(taker_fee_per_share(mean_ask), 4)
+        if book == "expensive":
             labels.append("degraded")
-            reasons.append("m.taker_cost_over_gate")
-        else:
-            reasons.append("m.taker_cost_inside_gate")
+            reasons.append("m.book_expensive_taker")
         if f.executable_depth_usd is not None:
             min_usd = t.min_order_shares * mean_ask
             metrics["executable_depth_usd"] = round(f.executable_depth_usd, 2)
@@ -420,7 +408,10 @@ def _pairarb_maker(f: RegimeFeatures, b: dict[str, str], t: RegimeThresholds) ->
     elif book == "stale":
         labels.append("degraded")
         reasons.append("m.book_stale")
-    elif f.maker_capture is not None:
+    elif f.maker_capture is None:
+        labels.append("degraded")
+        reasons.append("m.capture_unknown")
+    else:
         metrics["maker_capture"] = round(f.maker_capture, 4)
         if f.maker_capture <= 0:
             labels.append("degraded")
@@ -477,8 +468,7 @@ def strategy_fits(
     """Every family's feasibility.
 
     ``edge_gate`` is the loop's entry edge minimum
-    (``config.PAPER_ENTRY_EDGE_MIN``), the bar a taker's cost is measured
-    against; ``daily_assets`` is what the daily scanner actually trades
+    (``config.PAPER_ENTRY_EDGE_MIN``), reported beside the taker's entry fee; ``daily_assets`` is what the daily scanner actually trades
     (``config.DAILY_ASSETS``), so a snapshot on another asset is labelled a
     proxy rather than passed off as a read on that family.
     """

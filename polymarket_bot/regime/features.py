@@ -29,16 +29,18 @@ loop's own ``sigma_per_second``:
   estimates on annualized cutoffs, and reports the variance ratio between
   them as a diagnostic rather than pretending they agree.
 
-The most recent bar in a live klines response is still forming, so every
-window-sum here (volume, trades) slightly undercounts its final value. The
-seasonal baselines exclude the in-progress bar for the same reason.
+The bars handed in are COMPLETED bars only (``sources.fetch_bars`` drops the
+still-forming candle). The seasonal baselines are matched on hour of day AND
+day class (weekday / weekend, by each bar's own UTC date), and they exclude
+every hourly bar that overlaps the rolling last-hour window being compared, so
+the numerator can never leak into its own baseline.
 """
 from __future__ import annotations
 
 import math
 import statistics
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from polymarket_bot.regime.types import Bar, BookState, RegimeFeatures, VenueMarket
 
@@ -76,8 +78,16 @@ def realized_vol_per_second(bars: Sequence[Bar], bar_seconds: float) -> float | 
 
 
 def garman_klass_variance(bar: Bar) -> float | None:
-    """Per-bar Garman–Klass variance: ``0.5 ln(H/L)² − (2 ln 2 − 1) ln(C/O)²``."""
-    if bar.low <= 0 or bar.open <= 0 or bar.high < bar.low or bar.close <= 0:
+    """Per-bar Garman–Klass variance: ``0.5 ln(H/L)² − (2 ln 2 − 1) ln(C/O)²``.
+
+    For a consistent bar (``L ≤ min(O, C)`` and ``max(O, C) ≤ H``) ``ln(H/L) ≥
+    |ln(C/O)|``, so the term is non-negative. A bar whose open or close lies
+    outside its own high–low range is malformed data and yields ``None``
+    rather than a number of unknown meaning.
+    """
+    if bar.low <= 0 or bar.open <= 0 or bar.close <= 0:
+        return None
+    if bar.low > min(bar.open, bar.close) or bar.high < max(bar.open, bar.close):
         return None
     hl = math.log(bar.high / bar.low)
     co = math.log(bar.close / bar.open)
@@ -87,11 +97,9 @@ def garman_klass_variance(bar: Bar) -> float | None:
 def garman_klass_vol_per_second(bars: Sequence[Bar], bar_seconds: float) -> float | None:
     """Garman–Klass realized vol over the bars, per-second-equivalent.
 
-    ``sqrt(mean(per-bar GK variance) / bar_seconds)``. A bar whose GK
-    variance comes out negative (possible when the close-to-open move
-    dominates the range) contributes as-is to the mean; the mean is clamped
-    at zero before the root, so a pathological window reads 0.0 rather than
-    raising.
+    ``sqrt(mean(per-bar GK variance) / bar_seconds)``; malformed bars are
+    skipped. The ``max(0, …)`` is a floating-point guard only — a consistent
+    bar's term is non-negative (see :func:`garman_klass_variance`).
     """
     if bar_seconds <= 0:
         return None
@@ -205,27 +213,40 @@ def ratio(numerator: float | None, denominator: float | None) -> float | None:
 # --- Seasonal baselines -------------------------------------------------------
 
 
-def _utc_hour(open_time_ms: int) -> int:
-    return datetime.fromtimestamp(open_time_ms / 1000.0, tz=UTC).hour
+_HOUR_MS = 3_600_000
+
+
+def _is_weekend(dt: datetime) -> bool:
+    return dt.astimezone(UTC).weekday() >= 5
 
 
 def same_hour_median(
     hourly_bars: Sequence[Bar],
     hour: int,
+    weekend: bool,
     value_of,
     *,
-    exclude_last: bool = True,
+    closed_by_ms: int | None = None,
 ) -> float | None:
-    """Median of ``value_of(bar)`` over the hourly bars opening at UTC ``hour``.
+    """Median of ``value_of(bar)`` over hourly bars at UTC ``hour`` on days of one class.
 
-    ``exclude_last`` drops the most recent bar (the one still forming).
-    ``None`` when fewer than 3 same-hour bars exist or every value is ``None``.
+    ``weekend`` selects Saturday/Sunday bars (by each bar's own UTC open date)
+    versus Monday–Friday bars, so a weekend hour is compared with weekend
+    hours rather than with a mostly-weekday pool. ``closed_by_ms`` drops any
+    bar that had not finished by that instant (used to keep the compared
+    window out of its own baseline). ``None`` when fewer than 3 bars remain
+    or every value is ``None``.
     """
-    pool = hourly_bars[:-1] if exclude_last and hourly_bars else hourly_bars
-    vals = [
-        v for v in (value_of(b) for b in pool if _utc_hour(b.open_time_ms) == hour)
-        if v is not None
-    ]
+    vals: list[float] = []
+    for b in hourly_bars:
+        if closed_by_ms is not None and b.open_time_ms + _HOUR_MS > closed_by_ms:
+            continue
+        dt = datetime.fromtimestamp(b.open_time_ms / 1000.0, tz=UTC)
+        if dt.hour != hour or _is_weekend(dt) != weekend:
+            continue
+        v = value_of(b)
+        if v is not None:
+            vals.append(v)
     if len(vals) < 3:
         return None
     return float(statistics.median(vals))
@@ -234,17 +255,29 @@ def same_hour_median(
 def blended_hour_baseline(
     hourly_bars: Sequence[Bar], at: datetime, value_of
 ) -> float | None:
-    """Same-UTC-hour baseline for a rolling last-60-minutes window ending ``at``.
+    """Same-UTC-hour, same-day-class baseline for the rolling hour ending ``at``.
 
-    The rolling hour straddles two clock hours; the baseline blends their
-    same-hour medians by overlap: ``w · median(h) + (1 − w) · median(h − 1)``
-    with ``w = minute / 60``. Falls back to whichever median exists when
-    only one does.
+    The rolling last-60-minutes window straddles two clock hours; the
+    baseline blends their same-hour medians by overlap:
+    ``w · median(h) + (1 − w) · median(h − 1)`` with ``w = minute / 60``. Each
+    of the two hours takes the day class (weekday / weekend) of its OWN date,
+    so a scan at Monday 00:15 blends Monday's hour 0 with Sunday's hour 23.
+    Only bars that closed before the rolling window began contribute. Falls
+    back to whichever median exists when only one does; ``None`` when neither.
     """
     at = at.astimezone(UTC)
+    window_start_ms = int(at.timestamp() * 1000) - _HOUR_MS
     w = at.minute / 60.0
-    cur = same_hour_median(hourly_bars, at.hour, value_of)
-    prev = same_hour_median(hourly_bars, (at.hour - 1) % 24, value_of)
+    cur_start = at.replace(minute=0, second=0, microsecond=0)
+    prev_start = cur_start - timedelta(hours=1)
+    cur = same_hour_median(
+        hourly_bars, cur_start.hour, _is_weekend(cur_start), value_of,
+        closed_by_ms=window_start_ms,
+    )
+    prev = same_hour_median(
+        hourly_bars, prev_start.hour, _is_weekend(prev_start), value_of,
+        closed_by_ms=window_start_ms,
+    )
     if cur is None and prev is None:
         return None
     if cur is None:
@@ -287,7 +320,7 @@ def compute_features(
     """Assemble every feature from the raw inputs (each independently optional).
 
     ``bars_1m`` is the last hour, ``bars_5m`` the last 24h, ``bars_1h`` the
-    last 7 days (seasonal baselines); ``at`` is the scan instant (for the
+    last 28 days (seasonal baselines); ``at`` is the scan instant (for the
     hour-of-day blend). ``venue_completed`` are the last few *completed*
     windows of the selected family, whose volumes are comparable; the
     current window's in-progress volume is deliberately not a feature.

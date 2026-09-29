@@ -1,7 +1,7 @@
 """Market regime overview: volatility, volume, move, jumps, book, session — advisory only.
 
-Answers "what kind of market is this right now, and which strategy family
-does that favour?" from sources the lab already talks to (Binance spot
+Answers "what kind of market is this right now, and which strategy family's
+mechanics are feasible in it?" from sources the lab already talks to (Binance spot
 klines, the Polymarket Gamma market record, and the loop's own tick journal),
 so the operator can decide what to run — and so a future strategy router has
 a persisted, versioned input to be backtested against.

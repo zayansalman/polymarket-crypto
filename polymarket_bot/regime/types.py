@@ -31,17 +31,37 @@ FitLabel = Literal["feasible", "degraded", "blocked"]
 Grade = Literal["full", "partial", "none"]
 
 
+# The machine-readable degradation vocabulary; ``QualityFlag.detail`` is prose.
+QUALITY_CODES: frozenset[str] = frozenset({
+    "bars_unavailable",      # no 1m and no 5m bars at all
+    "bars_1m_short",         # fewer 1m bars than the 1h estimates need
+    "bars_5m_short",         # fewer 5m bars than the 24h baseline needs
+    "bars_1h_short",         # fewer hourly bars than the seasonal medians need
+    "book_absent",           # no book read at all
+    "book_stale",            # newest book read older than the staleness limit
+    "book_out_of_phase",     # window outside its quotable phase; book not measured
+    "loop_feed_degraded",    # the loop's own settlement feed was degraded
+    "loop_sigma_unusable",   # loop sigma on the floor / absent
+    "venue_market_absent",   # Gamma had no record for the current window
+    "venue_slug_unknown",    # no slug scheme for the selected family
+})
+
+
 @dataclass(frozen=True)
 class QualityFlag:
     """One recorded degradation: an enumerated ``code`` plus free-text ``detail``.
 
-    Codes are the machine-readable contract (see
-    :data:`polymarket_bot.regime.classify.QUALITY_CODES`); ``detail`` is for
-    humans and is never parsed.
+    ``code`` must be one of :data:`QUALITY_CODES` (enforced at construction, so
+    the vocabulary a router keys on cannot drift); ``detail`` is for humans and
+    is never parsed.
     """
 
     code: str
     detail: str = ""
+
+    def __post_init__(self) -> None:
+        if self.code not in QUALITY_CODES:
+            raise ValueError(f"unregistered quality code {self.code!r}")
 
     def as_dict(self) -> dict[str, str]:
         return {"code": self.code, "detail": self.detail}

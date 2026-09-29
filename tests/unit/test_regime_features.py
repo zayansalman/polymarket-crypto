@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -100,11 +100,20 @@ def test_garman_klass_none_when_too_few_bars() -> None:
     assert F.garman_klass_vol_per_second(_walk(2, 60, 0.001), 60.0) is None
 
 
-def test_garman_klass_clamps_negative_mean_variance_to_zero() -> None:
-    """A close-to-open move that dominates the range gives a negative GK term; the
-    mean is clamped at zero before the root rather than raising."""
-    bars = [_bar(i, 60, 100.0, 100.0001, 99.9999, 100.5) for i in range(5)]
-    assert F.garman_klass_vol_per_second(bars, 60.0) == 0.0
+def test_garman_klass_term_is_non_negative_for_consistent_bars() -> None:
+    """ln(H/L) >= |ln(C/O)| for any consistent bar, so the GK term cannot be negative
+    — including the extreme cases where open or close sits on the range edge."""
+    for o, h, lo, c in [(100, 110, 90, 110), (100, 110, 90, 90), (100, 100, 100, 100), (100, 101, 99, 100.5)]:
+        v = F.garman_klass_variance(_bar(0, 60, o, h, lo, c))
+        assert v is not None and v >= 0.0
+
+
+def test_garman_klass_rejects_bars_whose_close_or_open_leave_the_range() -> None:
+    """A close outside [low, high] is malformed data: None, not a number of unknown meaning."""
+    assert F.garman_klass_variance(_bar(0, 60, 100.0, 100.0001, 99.9999, 100.5)) is None  # close > high
+    assert F.garman_klass_variance(_bar(0, 60, 100.0, 101.0, 100.5, 100.8)) is None       # open < low
+    malformed = [_bar(i, 60, 100.0, 100.0001, 99.9999, 100.5) for i in range(5)]
+    assert F.garman_klass_vol_per_second(malformed, 60.0) is None  # every bar skipped -> too few
 
 
 # --- jump diagnostics -----------------------------------------------------------
@@ -203,27 +212,79 @@ def _hourly(days: int, value_by_hour, t0_hour_utc: int = 0) -> list[Bar]:
     return out
 
 
-def test_same_hour_median_excludes_forming_bar_and_needs_three_points() -> None:
-    bars = _hourly(7, lambda h: 1000.0 + h)
-    # 7 days → 7 bars at hour 5, the last one of the series is hour 23 (excluded anyway).
-    assert F.same_hour_median(bars, 5, lambda b: b.quote_volume) == 1005.0
-    assert F.same_hour_median(bars[:48], 5, lambda b: b.quote_volume) is None  # only 2 points
+def _dated(start: datetime, hours: int, value_of) -> list[Bar]:
+    """Hourly bars from ``start`` (UTC, on the hour); ``value_of(dt)`` is each bar's quote volume."""
+    out = []
+    for i in range(hours):
+        dt = start + timedelta(hours=i)
+        qv = value_of(dt)
+        out.append(Bar(int(dt.timestamp() * 1000), 100.0, 100.5, 99.5, 100.0, 1.0, qv, 10, qv / 2))
+    return out
 
 
-def test_blended_hour_baseline_weights_by_minute_of_hour() -> None:
-    bars = _hourly(7, lambda h: 1000.0 if h == 13 else 2000.0)
-    at = datetime(2026, 9, 8, 13, 15, tzinfo=UTC)  # 15 min into hour 13
-    # w = 0.25 on hour 13 (1000), 0.75 on hour 12 (2000)
-    assert F.blended_hour_baseline(bars, at, lambda b: b.quote_volume) == pytest.approx(1750.0)
+def _class_value(dt: datetime) -> float:
+    return 400.0 if dt.weekday() >= 5 else 1000.0  # weekends run at 40% of weekdays
 
 
-def test_blended_hour_baseline_falls_back_to_the_available_hour() -> None:
-    bars = _hourly(7, lambda h: 500.0)
-    # Keep only hour-13 bars so hour 12 has no median.
-    only13 = [b for b in bars if datetime.fromtimestamp(b.open_time_ms / 1000, tz=UTC).hour == 13]
-    at = datetime(2026, 9, 8, 13, 30, tzinfo=UTC)
-    assert F.blended_hour_baseline(only13, at, lambda b: b.quote_volume) == 500.0
-    assert F.blended_hour_baseline([], at, lambda b: b.quote_volume) is None
+# 28 days of history ending Sunday 2026-09-27 23:00 (completed bars only).
+_HIST = _dated(datetime(2026, 8, 31, tzinfo=UTC), 28 * 24, _class_value)
+
+
+def test_same_hour_median_matches_day_class_and_needs_three_points() -> None:
+    vol = lambda b: b.quote_volume  # noqa: E731
+    assert F.same_hour_median(_HIST, 13, False, vol) == 1000.0
+    assert F.same_hour_median(_HIST, 13, True, vol) == 400.0
+    # Only two weekend days of data -> fewer than 3 points -> None.
+    assert F.same_hour_median(_dated(datetime(2026, 9, 5, tzinfo=UTC), 48, _class_value), 13, True, vol) is None
+
+
+def test_same_hour_median_drops_bars_not_closed_by_the_cutoff() -> None:
+    vol = lambda b: b.quote_volume  # noqa: E731
+    bars = _dated(datetime(2026, 9, 1, tzinfo=UTC), 24 * 8, lambda dt: 5000.0 if dt.day == 8 else 1000.0)
+    cutoff = int(datetime(2026, 9, 8, 13, 0, tzinfo=UTC).timestamp() * 1000)
+    # Sep 8 12:00-13:00 closed exactly at the cutoff -> kept; Sep 8 13:00 bar would close later -> dropped.
+    assert F.same_hour_median(bars, 13, False, vol, closed_by_ms=cutoff) == 1000.0
+    assert F.same_hour_median(bars, 13, False, vol) == 1000.0  # 5000 is one of 6 same-hour values: median unmoved
+
+
+def test_weekend_scan_is_not_compared_with_a_weekday_dominated_pool() -> None:
+    """Regression: a median over 5 weekday + 2 weekend days made a NORMAL weekend hour read
+    ~0.4-0.6x its baseline ("quiet"). Same-day-class baselines read it as 1.0x."""
+    sat = datetime(2026, 9, 26, 13, 30, tzinfo=UTC)
+    base = F.blended_hour_baseline(_HIST, sat, lambda b: b.quote_volume)
+    assert base == pytest.approx(400.0)
+    assert _class_value(sat) / base == pytest.approx(1.0)
+    mon = datetime(2026, 9, 28, 13, 30, tzinfo=UTC)
+    assert F.blended_hour_baseline(_HIST, mon, lambda b: b.quote_volume) == pytest.approx(1000.0)
+
+
+def test_blended_baseline_weights_by_minute_and_uses_each_hours_own_day_class() -> None:
+    vol = lambda b: b.quote_volume  # noqa: E731
+    hist = _dated(datetime(2026, 8, 31, tzinfo=UTC), 28 * 24, lambda dt: 1000.0 if dt.hour == 13 else 2000.0)
+    at = datetime(2026, 9, 28, 13, 15, tzinfo=UTC)  # Monday, 15 min into hour 13
+    assert F.blended_hour_baseline(hist, at, vol) == pytest.approx(0.25 * 1000.0 + 0.75 * 2000.0)
+    # Monday 00:15 blends Monday's hour 0 (weekday pool) with SUNDAY's hour 23 (weekend pool).
+    mon_midnight = datetime(2026, 9, 28, 0, 15, tzinfo=UTC)
+    assert F.blended_hour_baseline(_HIST, mon_midnight, vol) == pytest.approx(0.25 * 1000.0 + 0.75 * 400.0)
+
+
+def test_baseline_excludes_todays_bars_overlapping_the_compared_window() -> None:
+    """Regression: today's completed 12:00 bar overlaps a 13:30 scan's last-hour window; a huge
+    value there must not leak into the baseline the same window is compared against."""
+    vol = lambda b: b.quote_volume  # noqa: E731
+    hist = _dated(datetime(2026, 8, 31, tzinfo=UTC), 28 * 24 + 13, _class_value)  # through Mon 09-28 12:00
+    poisoned = [b if datetime.fromtimestamp(b.open_time_ms / 1000, tz=UTC) != datetime(2026, 9, 28, 12, tzinfo=UTC)
+                else Bar(b.open_time_ms, 100.0, 100.5, 99.5, 100.0, 1.0, 9e9, 10, 1.0) for b in hist]
+    at = datetime(2026, 9, 28, 13, 30, tzinfo=UTC)
+    assert F.blended_hour_baseline(poisoned, at, vol) == pytest.approx(1000.0)
+
+
+def test_blended_baseline_falls_back_to_the_available_hour_and_none() -> None:
+    vol = lambda b: b.quote_volume  # noqa: E731
+    only13 = [b for b in _HIST if datetime.fromtimestamp(b.open_time_ms / 1000, tz=UTC).hour == 13]
+    at = datetime(2026, 9, 28, 13, 30, tzinfo=UTC)
+    assert F.blended_hour_baseline(only13, at, vol) == 1000.0
+    assert F.blended_hour_baseline([], at, vol) is None
 
 
 # --- assembly --------------------------------------------------------------------

@@ -228,3 +228,41 @@ def test_book_from_clob_costs_phase_and_source() -> None:
 def test_spot_symbol_covers_every_selectable_asset() -> None:
     assert set(market_selection.ASSETS) <= set(S.SPOT_SYMBOL)
     assert all(v.endswith("USDT") for v in S.SPOT_SYMBOL.values())
+
+
+# --- phase as a fraction of the window ---------------------------------------------------
+
+
+def test_quotable_phase_is_a_fraction_of_the_window() -> None:
+    assert S.phase_bounds(300) == (pytest.approx(60.0), pytest.approx(270.0))  # the 5m family
+    assert S.phase_bounds(900) == (pytest.approx(180.0), pytest.approx(810.0))
+    assert S.in_quotable_phase(60, 300) and S.in_quotable_phase(270, 300)
+    assert not S.in_quotable_phase(59, 300) and not S.in_quotable_phase(271, 300)
+    # 120s left in a 15m window is the closing phase; it only looked quotable under a fixed 60-270s band.
+    assert not S.in_quotable_phase(120, 900) and S.in_quotable_phase(120, 300)
+    assert S.in_quotable_phase(1000, 3600) and not S.in_quotable_phase(400, 3600)
+
+
+def test_book_from_clob_scales_the_phase_to_the_window() -> None:
+    up, down = (0.49, 0.51, 120.0, 80.0), (0.48, 0.52, 100.0, 90.0)
+    assert S.book_from_clob(up, down, 120, window_seconds=900) is None
+    assert S.book_from_clob(up, down, 200, window_seconds=900) is not None
+
+
+# --- crossed books -------------------------------------------------------------------------
+
+
+def test_book_from_ticks_skips_crossed_sides_for_every_cost_measure() -> None:
+    """Regression: a crossed side (bid above ask) is not a quotable market; the loop skips it, and
+    averaging it in pushed overround negative and maker capture down."""
+    good = _tick(0, 150, ua=0.51, da=0.51, ub=0.49, db=0.49)
+    crossed = _tick(5, 150, ua=0.40, da=0.51, ub=0.55, db=0.49)   # up bid 0.55 > up ask 0.40
+    book = S.book_from_ticks([good, crossed], _NOW)
+    assert book is not None and book.ticks_used == 2
+    assert book.overround == pytest.approx(0.02) and book.maker_capture == pytest.approx(0.02)
+    assert S.book_from_ticks([crossed], _NOW).overround is None
+    assert S.book_from_ticks([crossed], _NOW).maker_capture is None
+
+
+def test_book_from_clob_rejects_a_crossed_book() -> None:
+    assert S.book_from_clob((0.55, 0.40, 10.0, 10.0), (0.48, 0.52, 10.0, 10.0), 150) is None

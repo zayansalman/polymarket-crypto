@@ -16,10 +16,9 @@ from html import escape
 from typing import Any
 
 from polymarket_bot.regime.classify import RULES
+from polymarket_bot.regime.features import ANNUALIZE as _ANNUALIZE
 
 from . import _shared as s
-
-_ANNUALIZE = 5615.69  # sqrt(seconds per year); mirrors regime.features.ANNUALIZE
 
 _FIT_CLASS = {"feasible": "", "degraded": "dim", "blocked": "down"}
 
@@ -63,7 +62,8 @@ def _cents(v: float | None) -> str:
     return f"{v * 100:.1f}¢" if isinstance(v, (int, float)) else "—"
 
 
-def _chip(axis: str, band: str) -> str:
+def _chip(axis: str, band: Any) -> str:
+    band = str(band or "unknown")
     cls = _BAND_CLASS.get(band, "flat")
     return (
         f"<span class='pill {cls}' title='{escape(axis)}'>"
@@ -113,6 +113,18 @@ def _quality_line(quality: list[Any]) -> str:
     return "; ".join(items)
 
 
+def render_unavailable() -> str:
+    """Placeholder when loading or rendering the card failed (the failure is logged
+    by the caller) — distinct from "no scan yet" so a fault is never mistaken for
+    an empty history."""
+    return (
+        "<section class='card wide'><div class='card-h'>MARKET REGIME"
+        "<span class='win'>advisory</span></div>"
+        "<div class='chart-empty'>regime card unavailable — see logs "
+        "(regime.card_failed)</div></section>"
+    )
+
+
 def render(snapshot: dict[str, Any] | None, asset: str | None = None) -> str:
     if not snapshot:
         what = f" for {escape(asset.upper())}" if asset else ""
@@ -124,7 +136,7 @@ def render(snapshot: dict[str, Any] | None, asset: str | None = None) -> str:
         )
     f: dict[str, Any] = snapshot.get("features") or {}
     bands: dict[str, str] = snapshot.get("bands") or {}
-    fits: list[dict[str, Any]] = snapshot.get("fits") or []
+    fits: list[dict[str, Any]] = [x for x in (snapshot.get("fits") or []) if isinstance(x, dict)]
     quality: list[Any] = snapshot.get("quality") or []
     snap_asset = str(snapshot.get("asset") or "").upper()
     timeframe = str(snapshot.get("timeframe") or "")

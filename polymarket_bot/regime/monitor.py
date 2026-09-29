@@ -48,13 +48,13 @@ log = get_logger("regime_monitor")
 
 BARS_1M_LIMIT = 60      # the "last hour" window
 BARS_5M_LIMIT = 288     # the "last 24h" baseline
-BARS_1H_LIMIT = 168     # 7 days of hourly bars for the same-hour baselines
+BARS_1H_LIMIT = 672     # 28 days of hourly bars for same-hour, same-day-class baselines
 BOOK_TICKS = 12         # ~60s of the loop's 5s ticks
 VENUE_COMPLETED_WINDOWS = 6
 SLOW_TTL_SECONDS = 300.0
 _MIN_1M_BARS = 30       # below this the 1h estimates are too thin to band on
 _MIN_5M_BARS = 144      # 12h — below this the 24h baseline is not a baseline
-_MIN_1H_BARS = 72       # 3 days — below this a same-hour median has <3 points
+_MIN_1H_BARS = 336      # 14 days — below this a weekend same-hour median has <3 points
 
 
 class _SlowCache:
@@ -132,8 +132,6 @@ def build_snapshot(
             quality.append(QualityFlag("loop_sigma_unusable", book.vol_source or "absent"))
     if venue_current is None and not any(q.code == "venue_slug_unknown" for q in quality):
         quality.append(QualityFlag("venue_market_absent", f"{asset}/{timeframe}"))
-    if asset not in daily_assets:
-        quality.append(QualityFlag("daily_family_proxy", f"{asset} is not in DAILY_ASSETS"))
 
     at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     feats = _features.compute_features(
@@ -194,40 +192,51 @@ async def _venue_blocks(
     current_start, completed_starts = sources.window_starts(
         timeframe, now_ts, VENUE_COMPLETED_WINDOWS
     )
-    if current_start is None:
+    length = sources.WINDOW_SECONDS.get(timeframe)
+    if current_start is None or length is None:
         return None, [], None, QualityFlag("venue_slug_unknown", f"{asset}/{timeframe}")
     current_slug = sources.window_slug(asset, timeframe, current_start)
-    current = await sources.fetch_venue_market(client, current_slug or "")
-    completed: list[VenueMarket] = []
-    for start in completed_starts:
+
+    async def completed(start: int) -> VenueMarket | None:
         slug = sources.window_slug(asset, timeframe, start)
         if slug is None:
-            continue
+            return None
         hit = _venue_completed.get(slug)
-        if hit is None:
-            hit = await sources.fetch_venue_market(client, slug)
-            if hit is not None:
-                if len(_venue_completed) >= _VENUE_CACHE_MAX:
-                    _venue_completed.pop(next(iter(_venue_completed)))
-                _venue_completed[slug] = hit
         if hit is not None:
-            completed.append(hit)
-    return current, completed, current_slug, None
+            return hit
+        hit = await sources.fetch_venue_market(client, slug)
+        # Cache only once the window has been closed for a full window length:
+        # a just-closed window's Gamma volume may still be settling, and a
+        # cached early read would freeze a partial number for the process's life.
+        if hit is not None and now_ts - (start + length) >= length:
+            if len(_venue_completed) >= _VENUE_CACHE_MAX:
+                _venue_completed.pop(next(iter(_venue_completed)))
+            _venue_completed[slug] = hit
+        return hit
+
+    results = await asyncio.gather(
+        sources.fetch_venue_market(client, current_slug or ""),
+        *(completed(st) for st in completed_starts),
+    )
+    return results[0], [h for h in results[1:] if h is not None], current_slug, None
 
 
 async def _book(
     client: httpx.AsyncClient,
     selection: market_selection.MarketSelection,
     venue_current: VenueMarket | None,
-    now_ts: int,
+    book_ts: int,
+    window_start: int | None,
 ) -> tuple[BookState | None, QualityFlag | None]:
     """The selected market's phase-conditioned book, loop ticks first, else direct.
 
     Loop ticks are only ever for the loop's own market
     (``market_selection.LOOP_SUPPORTED``); any other selection reads the
-    CLOB directly so it is never scored on the BTC 5m book.
+    CLOB directly so it is never scored on the BTC 5m book. ``book_ts`` is the
+    clock at the book stage (not scan start — the fetches before it can take
+    seconds), and the phase is measured against the venue window's own end.
     """
-    now = datetime.fromtimestamp(now_ts, tz=UTC)
+    now = datetime.fromtimestamp(book_ts, tz=UTC)
     if selection.loop_supported:
         ticks = await sources.recent_ticks(BOOK_TICKS)
         book = sources.book_from_ticks(
@@ -238,16 +247,16 @@ async def _book(
         ):
             return book, None
     length = sources.WINDOW_SECONDS.get(selection.timeframe)
-    if venue_current is None or length is None or not venue_current.up_token:
+    if venue_current is None or length is None or window_start is None or not venue_current.up_token:
         return None, QualityFlag("book_absent", "no loop ticks and no venue tokens to read the book")
-    remaining = length - (now_ts % length)
-    if not (sources.BOOK_PHASE_MIN_REMAINING <= remaining <= sources.BOOK_PHASE_MAX_REMAINING):
+    remaining = window_start + length - book_ts
+    if not sources.in_quotable_phase(remaining, length):
         return None, QualityFlag("book_out_of_phase", f"{remaining}s remaining in window")
     up, down = await asyncio.gather(
         sources.fetch_clob_top(client, venue_current.up_token),
         sources.fetch_clob_top(client, venue_current.down_token),
     )
-    book = sources.book_from_clob(up, down, remaining)
+    book = sources.book_from_clob(up, down, remaining, length)
     if book is None:
         return None, QualityFlag("book_absent", "direct CLOB read returned no two-sided quote")
     return book, None
@@ -267,6 +276,11 @@ async def scan_once(
     if symbol is None:
         log.warning("regime.no_symbol", asset=selection.asset)
         return None
+    # Consume the sequence number BEFORE any fetch that can fail, so an
+    # aborted scan leaves a visible gap in scan_seq rather than no trace.
+    _scan_seq += 1
+    scan_seq = _scan_seq
+    clock_injected = now_ts is not None
     now_ts = int(time.time()) if now_ts is None else now_ts
     now = float(now_ts)
     created_at = datetime.fromtimestamp(now_ts, tz=UTC).isoformat(timespec="seconds")
@@ -284,10 +298,11 @@ async def scan_once(
     venue_current, venue_completed, window_slug, venue_flag = await _venue_blocks(
         client, selection.asset, selection.timeframe, now_ts
     )
-    book, book_flag = await _book(client, selection, venue_current, now_ts)
+    window_start, _ = sources.window_starts(selection.timeframe, now_ts, 0)
+    book_ts = now_ts if clock_injected else int(time.time())
+    book, book_flag = await _book(client, selection, venue_current, book_ts, window_start)
 
     extra = [q for q in (venue_flag, book_flag) if q is not None]
-    _scan_seq += 1
     snapshot = build_snapshot(
         asset=selection.asset,
         symbol=symbol,
@@ -304,7 +319,7 @@ async def scan_once(
         daily_assets=_config.DAILY_ASSETS,
         window_slug=window_slug,
         run_id=_run_id,
-        scan_seq=_scan_seq,
+        scan_seq=scan_seq,
         thresholds=thresholds,
         sources_used={
             "bars": "binance_spot_klines",
@@ -329,8 +344,11 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
     """Run the scan loop until ``stop_event`` is set (or forever if ``None``).
 
     The ``regime_monitor_enabled`` knob is re-read every cycle: switching it
-    off from the SETTINGS card pauses the polling without a restart.
+    off from the SETTINGS card pauses the polling without a restart. Every
+    await that can raise (the scan AND the knob reads, which hit SQLite) sits
+    inside a guard, so a transient DB error costs one cycle, never the task.
     """
+    default_interval = _knobs.KNOBS["regime_scan_interval_seconds"].default
     async with httpx.AsyncClient(timeout=15.0) as client:
         while stop_event is None or not stop_event.is_set():
             try:
@@ -338,4 +356,9 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
                     await scan_once(client)
             except Exception:  # noqa: BLE001 — a failed scan must never kill the monitor
                 log.exception("regime.scan_failed")
-            await asyncio.sleep(await _knobs.get("regime_scan_interval_seconds"))
+            try:
+                interval = await _knobs.get("regime_scan_interval_seconds")
+            except Exception:  # noqa: BLE001
+                log.exception("regime.interval_unreadable")
+                interval = default_interval
+            await asyncio.sleep(interval)

@@ -9,7 +9,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `config.py` | WIRED | 28 | Configuration for the local Polymarket crypto trading lab. |
 | `dashboard.py` | WIRED | 1 | Local Gradio dashboard for BTC 5-minute paper trading. |
 | `db.py` | WIRED | 16 | SQLite storage for the local Polymarket crypto trading lab. |
-| `logging_setup.py` | WIRED | 11 | Structured JSON logging with structlog. Module + trade_id context. |
+| `logging_setup.py` | WIRED | 12 | Structured JSON logging with structlog. Module + trade_id context. |
 | `main.py` | cli | 0 | Entrypoint for the BTC 5-minute paper trading system. |
 | `polymarket_bot/__init__.py` | pkg | 12 | BTC 5-minute paper-trading package. |
 | `polymarket_bot/backtest.py` | WIRED | 4 | Backtest and optimize the BTC 5-minute binary strategy on local history. |
@@ -35,7 +35,7 @@ _Status: `WIRED` = has non-test importers; `DEAD?` = no importers found (investi
 | `polymarket_bot/paper.py` | WIRED | 5 | BTC 5-minute trading engine (paper by default, live opt-in). |
 | `polymarket_bot/regime/__init__.py` | pkg | 2 | Market regime overview: volatility, volume, move, jumps, book, session — advisory only. |
 | `polymarket_bot/regime/classify.py` | WIRED | 2 | A-priori regime bands and the advisory strategy-feasibility table. |
-| `polymarket_bot/regime/features.py` | WIRED | 2 | Pure regime feature math over :class:`~polymarket_bot.regime.types.Bar` lists. |
+| `polymarket_bot/regime/features.py` | WIRED | 3 | Pure regime feature math over :class:`~polymarket_bot.regime.types.Bar` lists. |
 | `polymarket_bot/regime/ledger.py` | WIRED | 2 | Persistence for regime snapshots (``regime_snapshots``) and threshold versions. |
 | `polymarket_bot/regime/monitor.py` | WIRED | 1 | The regime monitor's scan loop: fetch → features → bands → fits → journal. |
 | `polymarket_bot/regime/sources.py` | WIRED | 1 | I/O fetchers for the regime monitor: Binance spot klines, Gamma markets, tick book. |

@@ -35,7 +35,7 @@ Per scan it reads (all existing endpoints; nothing new on the network surface):
 
 | Source | What | Cadence |
 |---|---|---|
-| Binance spot `/api/v3/klines` (`BINANCE_API_BASE`) | 60 × 1m bars (last hour), 288 × 5m (24h), 168 × 1h (7 days) — completed bars only | 1m every scan; 5m/1h cached 5 min |
+| Binance spot `/api/v3/klines` (`BINANCE_API_BASE`) | 60 × 1m bars (last hour), 288 × 5m (24h), 672 × 1h (28 days) — completed bars only | 1m every scan; 5m/1h cached 5 min |
 | Polymarket Gamma `/markets?slug=` | current window's liquidity + outcome token ids; the last 6 *completed* windows' volume (medians) | every scan; completed windows cached |
 | Polymarket CLOB `/book` | top-of-book for both outcome tokens, only when the loop is not journaling the selected market | every scan, in the quotable phase |
 | `paper_ticks` (own DB) | the loop's last 12 ticks for the selected market (~60 s), in-phase only | every scan |
@@ -54,21 +54,24 @@ Volatility is **per-second-equivalent** everywhere (bar sigma ÷ √bar-seconds)
 | `vol_1h_cc`, `vol_24h_cc` | close-to-close stdev of log returns ÷ √bar-s | cross-check; the loop's `sigma_per_second` family, without its 2e-5 floor |
 | `vol_1s` | the loop's own `sigma_per_second` from the newest in-phase tick; `None` on the floor or `vol=floor` | a different instrument (Chainlink oracle prints, autocorrelated); banded on its **own** legacy cutoffs, never mixed with the bar estimates |
 | `vol_variance_ratio` | `vol_1h_gk² / vol_1s²` | diagnostic of the gap between the two instruments (uncalibrated as yet) |
-| `vol_ratio_seasonal` | `vol_1h_gk` ÷ same-UTC-hour 7-day median of hourly GK vol (blended by minute-of-hour) | crypto vol and volume have a strong intraday cycle; against a flat 24h mean the ratio is a clock, not a regime |
-| `volume_1h_usd`, `volume_ratio_seasonal`, `trades_ratio_seasonal` | last-hour quote (USDT) volume / trade count ÷ same-hour 7-day medians | same reason; trade count is robust to one block print |
+| `vol_ratio_seasonal` | `vol_1h_gk` ÷ the median of hourly GK vol at the same UTC hour **on the same day class** (weekday / weekend, by each bar's own date) over 28 days, blended by minute-of-hour; hourly bars overlapping the compared hour are excluded | crypto vol and volume have strong intraday and weekly cycles; against a flat 24h mean, or a 7-day median that is 5/7 weekday, a normal weekend hour reads "quiet" — the ratio would be a clock, not a regime |
+| `volume_1h_usd`, `volume_ratio_seasonal`, `trades_ratio_seasonal` | last-hour quote (USDT) volume / trade count ÷ same-hour, same-day-class 28-day medians | same reason; trade count is robust to one block print |
 | `volume_ratio_24h`, `vol_ratio_1h_24h` | unadjusted 1h vs 24h | kept as labelled secondaries only |
 | `rv_bv_ratio_1h`, `max_return_z_1h` | realized ÷ bipower variance; max |1m return| ÷ robust scale | jump diagnostics: "vol is high because of one print" vs "continuously high" — the Gaussian fair value cares |
 | `return_1h`, `move_z_1h` (and 24h) | log return; `return ÷ (σ·√seconds)` | **the one** trend-like statistic. A drift t-stat and a Kaufman efficiency ratio on a fixed window are the same z-score, and none of them measures persistence (not detectable on one klines call). Says how far price travelled, nothing more |
-| `overround` | mean(up ask + down ask) − 1, in-phase reads only | the taker's round-trip cost before fees; a 1-tick book both sides ≈ 0.01 |
+| `overround` | mean(up ask + down ask) − 1, in-phase reads only | the taker's spread paid on entry (the loop's edge is fair value minus the ask, so its gate already nets it); a 1-tick book both sides ≈ 0.01 |
 | `maker_capture` | 1 − mean(up bid + down bid) | what a two-sided resting quote at the touch earns per completed pair |
 | `executable_depth_usd` | mean of the thinner side's ask size × price | caps size |
 | `venue_liquidity_usd`, `venue_volume_per_window_median_usd` | current window's Gamma liquidity; median volume of the last 6 *completed* windows | the current window's own volume is a partial sum and is deliberately not a feature |
 | `taker_buy_ratio_1h`, `range_position_24h`, `move_z_24h` | descriptive only | no band or rule reads them; a router must not either |
 
-**Quotable phase.** Book reads count only with 60–270 s remaining in a 5m
-window. Outside it the book widens and skews for reasons tied to the window
-clock, not the market; a snapshot then records `book_out_of_phase` instead of
-a fabricated cost.
+**Quotable phase.** Book reads count only with 20–90 % of the window still
+remaining (60–270 s for the 5m family the loop trades; scaled for 15m / 1h). It
+is measured at the book stage, against the venue window's own end, not against
+the scan's start. Outside it the book widens and skews for reasons tied to the
+window clock, not the market; a snapshot then records `book_out_of_phase`
+instead of a fabricated cost. A side with bid above ask is a crossed, unquotable
+book and contributes to no cost measure.
 
 ## Bands (a-priori, versioned — `THRESHOLDS_VERSION`)
 
@@ -98,9 +101,15 @@ backtest can count firings.
 
 | Family | Feasible when | Degraded when | Blocked when |
 |---|---|---|---|
-| `btc_5m_taker` | half-overround + taker fee (0.07·p·(1−p)) ≤ the loop's edge gate (`PAPER_ENTRY_EDGE_MIN`), depth ≥ venue minimum, loop sigma usable | cost above the gate; depth thin; book unknown/stale; jump in the last hour; loop sigma on the floor | no volatility estimate from any source |
-| `pairarb_maker` | maker capture at the touch > 0 | capture ≤ 0; book unknown/stale; jump | no volatility estimate |
+| `btc_5m_taker` | book not `expensive`, depth ≥ venue minimum, loop sigma usable | expensive book (overround ≥ 0.04: few entries clear the gate); depth thin; book unknown/stale; jump in the last hour; loop sigma on the floor | no volatility estimate from any source |
+| `pairarb_maker` | maker capture at the touch measured and > 0 | capture ≤ 0 or not measured (a side has no bid); book unknown/stale; jump | no volatility estimate |
 | `daily_altcoin` | 24h vol present and consistent with its seasonal baseline, **and** the snapshot asset is one the scanner trades (`DAILY_ASSETS`) | vol expanding (its 30-day sigma is stale); jump; snapshot asset is a proxy | no 24h bars |
+
+The taker rule deliberately does **not** compare cost with the edge gate: the
+loop's edge is `fair − ask`, so the spread is already inside the gate and a
+wide book means fewer entries clear it, not that gate-passing entries lose. The
+one cost the gate does not net is the taker fee (max 0.07·¼ = 0.0175, always
+under the 0.045 gate); it is reported as `taker_entry_fee`, never a degrader.
 
 `recommendation` is a display line ("feasible: …", "stand down: …"); a router
 computes its own from the fits.

@@ -43,10 +43,25 @@ WINDOW_SECONDS: dict[str, int] = {"5m": 300, "15m": 900, "1h": 3600}
 # sits exactly on it carries no volatility information.
 SIGMA_FLOOR = 0.00002
 
-# Quotable phase of a 5m window, in remaining seconds. Outside it the book
+# Quotable phase of an Up/Down window, as fractions of its length remaining:
+# 0.2 → 0.9 is 60–270 s for the 5m family the loop trades. Outside it the book
 # widens / skews for reasons tied to the window clock, not the regime.
-BOOK_PHASE_MIN_REMAINING = 60
-BOOK_PHASE_MAX_REMAINING = 270
+BOOK_PHASE_MIN_FRACTION = 0.2
+BOOK_PHASE_MAX_FRACTION = 0.9
+LOOP_WINDOW_SECONDS = 300   # the loop only journals the 5m family
+
+
+def phase_bounds(window_seconds: int) -> tuple[float, float]:
+    """``(min, max)`` remaining seconds for the quotable phase of a window."""
+    return (
+        window_seconds * BOOK_PHASE_MIN_FRACTION,
+        window_seconds * BOOK_PHASE_MAX_FRACTION,
+    )
+
+
+def in_quotable_phase(remaining_seconds: float, window_seconds: int) -> bool:
+    lo, hi = phase_bounds(window_seconds)
+    return lo <= remaining_seconds <= hi
 
 # Binance kline row layout (documented, stable):
 # [open_time, open, high, low, close, volume, close_time, quote_volume,
@@ -244,10 +259,13 @@ def _vol_source(feed_source: Any) -> str | None:
 
 def _in_phase(tick: dict[str, Any]) -> bool:
     rem = tick.get("remaining_seconds")
-    return (
-        isinstance(rem, (int, float))
-        and BOOK_PHASE_MIN_REMAINING <= rem <= BOOK_PHASE_MAX_REMAINING
-    )
+    return isinstance(rem, (int, float)) and in_quotable_phase(rem, LOOP_WINDOW_SECONDS)
+
+
+def _crossed(bid: float | None, ask: float | None) -> bool:
+    """A side whose bid is above its ask is not a quotable market (the loop's own
+    ``BookTop.crossed`` predicate)."""
+    return bid is not None and ask is not None and bid > ask
 
 
 def book_from_ticks(
@@ -257,9 +275,11 @@ def book_from_ticks(
 ) -> BookState | None:
     """Phase-conditioned book averages over recent tick rows (newest first).
 
-    Only ticks inside the quotable phase contribute to the averages; a tick
-    with a crossed or one-sided book is skipped for the cost measures. The
-    newest in-phase row supplies the sigma / feed provenance. ``None`` when
+    Only ticks inside the quotable phase contribute to the averages. A tick
+    with a crossed side (bid above ask) contributes to no cost measure; a
+    one-sided tick contributes only the measures it has both legs for.
+    ``ticks_used`` counts in-phase reads. The newest in-phase row supplies
+    the sigma / feed provenance. ``None`` when
     no row is in phase — a book measured at the window edges is not the
     market's book. ``window_prefix`` (e.g. ``"btc-updown-5m-"``) restricts
     the rows to one market family so another selection is never scored on
@@ -276,6 +296,8 @@ def book_from_ticks(
     for t in in_phase:
         ua, da = _float_or_none(t.get("up_best_ask")), _float_or_none(t.get("down_best_ask"))
         ub, db = _float_or_none(t.get("up_best_bid")), _float_or_none(t.get("down_best_bid"))
+        if _crossed(ub, ua) or _crossed(db, da):
+            continue
         if ua is not None and da is not None:
             overrounds.append(ua + da - 1.0)
             uas, das = _float_or_none(t.get("up_ask_size")), _float_or_none(t.get("down_ask_size"))
@@ -351,18 +373,22 @@ async def fetch_clob_top(
 def book_from_clob(
     up: tuple[float | None, float | None, float | None, float | None],
     down: tuple[float | None, float | None, float | None, float | None],
-    remaining_seconds: int,
+    remaining_seconds: float,
+    window_seconds: int = LOOP_WINDOW_SECONDS,
 ) -> BookState | None:
     """A single direct book read as a :class:`BookState` (``source="clob_direct"``).
 
-    ``None`` when the window is outside its quotable phase — the same phase
-    rule :func:`book_from_ticks` applies — or when neither side has a
-    usable two-sided quote. No loop sigma exists on this path.
+    ``None`` when the window is outside its quotable phase (the same fraction
+    rule :func:`book_from_ticks` applies, scaled to ``window_seconds``), when
+    either side is crossed, or when neither side has a usable two-sided
+    quote. No loop sigma exists on this path.
     """
-    if not (BOOK_PHASE_MIN_REMAINING <= remaining_seconds <= BOOK_PHASE_MAX_REMAINING):
+    if not in_quotable_phase(remaining_seconds, window_seconds):
         return None
     ub, ua, _ubs, uas = up
     db_, da, _dbs, das = down
+    if _crossed(ub, ua) or _crossed(db_, da):
+        return None
     overround = ua + da - 1.0 if ua is not None and da is not None else None
     capture = 1.0 - (ub + db_) if ub is not None and db_ is not None else None
     depth = None
