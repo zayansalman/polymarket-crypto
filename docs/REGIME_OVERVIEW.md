@@ -26,19 +26,23 @@ decision time); this is that awareness made whole and visible.
 `polymarket_bot/regime/monitor.py:run_forever` is started by the dashboard's
 lifespan (`polymarket_exec/ops/dashboard/app.py`) alongside the daily altcoin
 scanner: always-on, independent of the BTC loop's ▶ Start / Stop, so the
-regime is readable *before* choosing what to start. It follows the operator's
-selected asset and timeframe (the header market selector). Knobs on the
-SETTINGS card, group **Regime monitor**: `Monitor enabled` and `Scan interval`
-(default 60 s).
+regime is readable *before* choosing what to start. Every cycle it scans **all
+six assets** (`sources.SPOT_SYMBOL`: btc, eth, sol, xrp, doge, bnb) on the 5m
+family, concurrently, and journals one row per asset, so the history never
+depends on what the header market selector happened to show; the card displays
+the selected asset's latest row. One asset failing is logged and costs only
+that asset. Knobs on the SETTINGS card, group **Regime monitor**:
+`Monitor enabled` and `Scan interval` (default 60 s).
 
-Per scan it reads (all existing endpoints; nothing new on the network surface):
+Per asset per cycle it reads (all existing endpoints; nothing new on the network
+surface):
 
 | Source | What | Cadence |
 |---|---|---|
-| Binance spot `/api/v3/klines` (`BINANCE_API_BASE`) | 60 × 1m bars (last hour), 288 × 5m (24h), 672 × 1h (28 days) — completed bars only | 1m every scan; 5m/1h cached 5 min |
-| Polymarket Gamma `/markets?slug=` | current window's liquidity + outcome token ids; the last 6 *completed* windows' volume (medians) | every scan; completed windows cached |
-| Polymarket CLOB `/book` | top-of-book for both outcome tokens, only when the loop is not journaling the selected market | every scan, in the quotable phase |
-| `paper_ticks` (own DB) | the loop's last 12 ticks for the selected market (~60 s), in-phase only | every scan |
+| Binance spot `/api/v3/klines` (`BINANCE_API_BASE`) | 60 × 1m bars (last hour), 288 × 5m (24h), 672 × 1h (28 days) — completed bars only | 1m every cycle; 5m/1h cached 5 min |
+| Polymarket Gamma `/markets?slug=` | current window's liquidity + outcome token ids; the last 6 *completed* windows' volume (medians) | every cycle; completed windows cached |
+| Polymarket CLOB `/book` | top-of-book for both outcome tokens, for every asset except BTC 5m while the loop is journaling it | every cycle, in the quotable phase |
+| `paper_ticks` (own DB) | the loop's last 12 ticks (BTC 5m only, ~60 s), in-phase only | every cycle |
 
 Every scan journals one `regime_snapshots` row even when inputs are missing;
 the row says what was missing.
@@ -123,8 +127,10 @@ computes its own from the fits.
 Join keys on every row: `created_ts` (epoch s), `window_slug` (the clock-derived
 Up/Down window for 5m/15m/1h; `NULL` for the daily family, which joins on the
 latest snapshot with `created_ts ≤` the trade's entry time), `run_id` /
-`scan_seq` (monitor boot + monotonic counter, so gaps and restarts are
-detectable).
+`scan_seq` (monitor boot + a monotonic *cycle* counter shared by the six rows of
+a cycle, so each asset's series has consecutive numbers and a missing one marks
+that asset's aborted scan; a restart changes `run_id`; a paused monitor shows
+as a `created_ts` gap).
 
 A router built on this must, before any fit ever becomes a switch:
 
@@ -146,10 +152,12 @@ None of that exists yet, and nothing here pretends to be it.
 
 ## Known limits / next chunks
 
-- **Asset coverage.** One row per scan, for the *selected* asset. The daily
-  scanner trades doge/sol/xrp/bnb/eth; on any other selection its fit is
-  labelled a proxy. Scanning every `SPOT_SYMBOL` asset per interval (one row
-  each) would make the history independent of UI state.
+- **Growth.** Six rows a minute (~8,600 a day). A fully-populated row is about
+  2.6 KB, so roughly 23 MB a day (~0.7 GB a month) in `regime_snapshots`.
+  Nothing prunes them yet; a retention window is the natural next chunk.
+- **Timeframe.** Every asset is scanned on the 5m family only, so the card
+  reads "5m" whatever timeframe the selector shows. The daily family's own
+  1d venue window is not scanned (its fit uses the 24h bars).
 - **`vol_variance_ratio` is uncalibrated.** The loop's 1s sigma and the 1m
   Garman–Klass estimate differ by an instrument-specific factor; a one-off
   join of `paper_ticks.sigma_per_second` to same-minute Binance bars would

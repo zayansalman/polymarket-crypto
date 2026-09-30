@@ -3,9 +3,14 @@
 Always-on and independent of the BTC loop's Start/Stop, exactly like the
 daily altcoin scanner (started from the dashboard's lifespan in
 ``polymarket_exec/ops/dashboard/app.py``): the operator wants to read the
-regime *before* deciding what to start. Follows the operator's selected
-asset and timeframe (:mod:`polymarket_bot.market_selection`) so the
-overview is for the market they are looking at.
+regime *before* deciding what to start.
+
+Every cycle scans EVERY asset the venue trades (``sources.SPOT_SYMBOL``) on
+the 5m family, concurrently, and journals one row per asset. The history
+therefore does not depend on what the operator happened to be looking at in
+the header selector, which is what a future router backtest needs; the
+MARKET REGIME card simply shows the selected asset's latest row. One asset
+failing never stops the others.
 
 Every scan journals a snapshot even when inputs are missing — the snapshot
 carries an enumerated ``quality`` list naming each gap and a ``grade``
@@ -13,11 +18,11 @@ roll-up, so a partial read is visible as partial rather than silently wrong
 (AGENTS.md: no silent failures). Nothing here places orders or is read by
 any trading path.
 
-Book source: the loop's own in-phase ticks when the loop is running on the
-selected market (a ~60s average), otherwise one direct CLOB ``/book`` read
-for the selected window — the "before pressing Start" case the overview
+Book source: the loop's own in-phase ticks when the loop is running on that
+market (BTC 5m only, a ~60s average), otherwise one direct CLOB ``/book``
+read for the current window — the "before pressing Start" case the overview
 exists for. Fetch cadence: the last-hour 1m bars, the venue's current
-window and the book are read every scan; the 24h (5m) and 7-day (1h) bars
+window and the book are read every cycle; the 24h (5m) and 28-day (1h) bars
 and completed venue windows change slowly and are cached.
 """
 from __future__ import annotations
@@ -46,6 +51,7 @@ from polymarket_bot.regime.types import (
 
 log = get_logger("regime_monitor")
 
+SCAN_TIMEFRAME = "5m"   # the family every asset is scanned on (history independent of the UI)
 BARS_1M_LIMIT = 60      # the "last hour" window
 BARS_5M_LIMIT = 288     # the "last 24h" baseline
 BARS_1H_LIMIT = 672     # 28 days of hourly bars for same-hour, same-day-class baselines
@@ -79,7 +85,8 @@ _slow = _SlowCache()
 _venue_completed: dict[str, VenueMarket] = {}
 _VENUE_CACHE_MAX = 64
 
-# Run identity: one id per monitor process boot, a monotonic scan counter.
+# Run identity: one id per monitor process boot, a monotonic scan-CYCLE counter
+# (every asset scanned in a cycle shares its scan_seq).
 _run_id: str = uuid.uuid4().hex[:12]
 _scan_seq: int = 0
 _thresholds_recorded: set[str] = set()
@@ -223,30 +230,31 @@ async def _venue_blocks(
 
 async def _book(
     client: httpx.AsyncClient,
-    selection: market_selection.MarketSelection,
+    asset: str,
+    timeframe: str,
     venue_current: VenueMarket | None,
     book_ts: int,
     window_start: int | None,
 ) -> tuple[BookState | None, QualityFlag | None]:
-    """The selected market's phase-conditioned book, loop ticks first, else direct.
+    """The market's phase-conditioned book, loop ticks first, else direct.
 
     Loop ticks are only ever for the loop's own market
-    (``market_selection.LOOP_SUPPORTED``); any other selection reads the
+    (``market_selection.LOOP_SUPPORTED``); every other market reads the
     CLOB directly so it is never scored on the BTC 5m book. ``book_ts`` is the
     clock at the book stage (not scan start — the fetches before it can take
     seconds), and the phase is measured against the venue window's own end.
     """
     now = datetime.fromtimestamp(book_ts, tz=UTC)
-    if selection.loop_supported:
+    if (asset, timeframe) in market_selection.LOOP_SUPPORTED:
         ticks = await sources.recent_ticks(BOOK_TICKS)
         book = sources.book_from_ticks(
-            ticks, now, window_prefix=f"{selection.asset}-updown-{selection.timeframe}-"
+            ticks, now, window_prefix=f"{asset}-updown-{timeframe}-"
         )
         if book is not None and book.newest_age_seconds is not None and (
             book.newest_age_seconds <= classify.DEFAULT_THRESHOLDS.book_stale_seconds
         ):
             return book, None
-    length = sources.WINDOW_SECONDS.get(selection.timeframe)
+    length = sources.WINDOW_SECONDS.get(timeframe)
     if venue_current is None or length is None or window_start is None or not venue_current.up_token:
         return None, QualityFlag("book_absent", "no loop ticks and no venue tokens to read the book")
     remaining = window_start + length - book_ts
@@ -262,33 +270,33 @@ async def _book(
     return book, None
 
 
-async def scan_once(
-    client: httpx.AsyncClient, now_ts: int | None = None
-) -> RegimeSnapshot | None:
-    """One scan for the operator's selected market; journals and returns it.
+def scan_assets() -> tuple[str, ...]:
+    """Every asset scanned each cycle: all the venue's Binance-mapped assets."""
+    return tuple(sources.SPOT_SYMBOL)
 
-    Returns ``None`` (and logs) only when the selected asset has no Binance
-    spot symbol — there is nothing to measure.
+
+async def snapshot_asset(
+    client: httpx.AsyncClient,
+    asset: str,
+    timeframe: str,
+    *,
+    now_ts: int,
+    scan_seq: int,
+    fresh_book_clock: bool = True,
+) -> RegimeSnapshot | None:
+    """Fetch and assemble one asset's snapshot; NO persistence.
+
+    ``None`` (and a log) only when the asset has no Binance spot symbol —
+    there is nothing to measure. ``fresh_book_clock`` re-reads the wall clock
+    at the book stage (the fetches before it can take seconds); tests inject
+    a fixed clock instead.
     """
-    global _scan_seq
-    selection = await market_selection.get_selection()
-    symbol = sources.SPOT_SYMBOL.get(selection.asset)
+    symbol = sources.SPOT_SYMBOL.get(asset)
     if symbol is None:
-        log.warning("regime.no_symbol", asset=selection.asset)
+        log.warning("regime.no_symbol", asset=asset)
         return None
-    # Consume the sequence number BEFORE any fetch that can fail, so an
-    # aborted scan leaves a visible gap in scan_seq rather than no trace.
-    _scan_seq += 1
-    scan_seq = _scan_seq
-    clock_injected = now_ts is not None
-    now_ts = int(time.time()) if now_ts is None else now_ts
     now = float(now_ts)
     created_at = datetime.fromtimestamp(now_ts, tz=UTC).isoformat(timespec="seconds")
-
-    thresholds = classify.DEFAULT_THRESHOLDS
-    if thresholds.version not in _thresholds_recorded:
-        await ledger.record_thresholds(thresholds.version, thresholds.as_dict(), created_at)
-        _thresholds_recorded.add(thresholds.version)
 
     bars_1m, bars_5m, bars_1h = await asyncio.gather(
         sources.fetch_bars(client, symbol, "1m", BARS_1M_LIMIT),
@@ -296,17 +304,17 @@ async def scan_once(
         _slow_bars(client, symbol, "1h", BARS_1H_LIMIT, now),
     )
     venue_current, venue_completed, window_slug, venue_flag = await _venue_blocks(
-        client, selection.asset, selection.timeframe, now_ts
+        client, asset, timeframe, now_ts
     )
-    window_start, _ = sources.window_starts(selection.timeframe, now_ts, 0)
-    book_ts = now_ts if clock_injected else int(time.time())
-    book, book_flag = await _book(client, selection, venue_current, book_ts, window_start)
+    window_start, _ = sources.window_starts(timeframe, now_ts, 0)
+    book_ts = int(time.time()) if fresh_book_clock else now_ts
+    book, book_flag = await _book(client, asset, timeframe, venue_current, book_ts, window_start)
 
     extra = [q for q in (venue_flag, book_flag) if q is not None]
-    snapshot = build_snapshot(
-        asset=selection.asset,
+    return build_snapshot(
+        asset=asset,
         symbol=symbol,
-        timeframe=selection.timeframe,
+        timeframe=timeframe,
         created_at=created_at,
         created_ts=now_ts,
         bars_1m=bars_1m,
@@ -320,7 +328,7 @@ async def scan_once(
         window_slug=window_slug,
         run_id=_run_id,
         scan_seq=scan_seq,
-        thresholds=thresholds,
+        thresholds=classify.DEFAULT_THRESHOLDS,
         sources_used={
             "bars": "binance_spot_klines",
             "venue": "gamma" if venue_current or venue_completed else "absent",
@@ -328,16 +336,77 @@ async def scan_once(
         },
         extra_quality=extra,
     )
-    await ledger.record_snapshot(snapshot)
+
+
+async def _guarded_snapshot(
+    client: httpx.AsyncClient, asset: str, **kwargs: object
+) -> RegimeSnapshot | None:
+    """One asset's snapshot, isolated: any failure is logged and costs only that asset."""
+    try:
+        return await snapshot_asset(client, asset, SCAN_TIMEFRAME, **kwargs)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 — one asset must never stop the others
+        log.exception("regime.asset_scan_failed", asset=asset)
+        return None
+
+
+async def scan_all(
+    client: httpx.AsyncClient, now_ts: int | None = None
+) -> list[RegimeSnapshot]:
+    """One cycle: scan every asset concurrently, then journal each row.
+
+    All rows of a cycle share ``created_ts`` and ``scan_seq``. The sequence
+    number is consumed BEFORE any fetch that can fail, so an asset whose scan
+    aborts leaves a visible gap in ITS ``scan_seq`` series rather than no
+    trace. Fetching is concurrent; persisting is sequential so six writers
+    never contend for SQLite. Returns the snapshots that were journaled.
+    """
+    global _scan_seq
+    fresh_book_clock = now_ts is None
+    now_ts = int(time.time()) if now_ts is None else now_ts
+    created_at = datetime.fromtimestamp(now_ts, tz=UTC).isoformat(timespec="seconds")
+
+    thresholds = classify.DEFAULT_THRESHOLDS
+    if thresholds.version not in _thresholds_recorded:
+        await ledger.record_thresholds(thresholds.version, thresholds.as_dict(), created_at)
+        _thresholds_recorded.add(thresholds.version)
+
+    _scan_seq += 1
+    scan_seq = _scan_seq
+    assets = scan_assets()
+    results = await asyncio.gather(*(
+        _guarded_snapshot(
+            client, asset, now_ts=now_ts, scan_seq=scan_seq, fresh_book_clock=fresh_book_clock
+        )
+        for asset in assets
+    ))
+
+    journaled: list[RegimeSnapshot] = []
+    failed = [a for a, r in zip(assets, results) if r is None]
+    for snapshot in results:
+        if snapshot is None:
+            continue
+        try:
+            await ledger.record_snapshot(snapshot)
+        except Exception:  # noqa: BLE001 — a DB error on one row must not drop the rest
+            log.exception("regime.record_failed", asset=snapshot.asset)
+            failed.append(snapshot.asset)
+            continue
+        journaled.append(snapshot)
+        log.debug(
+            "regime.scan",
+            asset=snapshot.asset,
+            grade=snapshot.grade,
+            headline=snapshot.headline,
+            recommendation=snapshot.recommendation,
+            quality=[q.code for q in snapshot.quality],
+        )
     log.info(
-        "regime.scan",
-        asset=snapshot.asset,
-        grade=snapshot.grade,
-        headline=snapshot.headline,
-        recommendation=snapshot.recommendation,
-        quality=[q.code for q in snapshot.quality],
+        "regime.cycle",
+        scan_seq=scan_seq,
+        grades={s.asset: s.grade for s in journaled},
+        failed=failed,
     )
-    return snapshot
+    return journaled
 
 
 async def run_forever(stop_event: asyncio.Event | None = None) -> None:
@@ -353,8 +422,8 @@ async def run_forever(stop_event: asyncio.Event | None = None) -> None:
         while stop_event is None or not stop_event.is_set():
             try:
                 if await _knobs.get("regime_monitor_enabled"):
-                    await scan_once(client)
-            except Exception:  # noqa: BLE001 — a failed scan must never kill the monitor
+                    await scan_all(client)
+            except Exception:  # noqa: BLE001 — a failed cycle must never kill the monitor
                 log.exception("regime.scan_failed")
             try:
                 interval = await _knobs.get("regime_scan_interval_seconds")
