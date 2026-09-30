@@ -10,6 +10,8 @@
 |---|---|
 | Fade 1h Momentum on 15m (inputs, model, sizing, decision, paper execution, ledger, learner, loop) | `ems/fade_1h_momentum_15m/` |
 | Kelly horse-race (maths, inputs, ledger, loop) | `ems/kelly_horse_race/` |
+| lc2004-Kronos BTC 24h forecast, display only (daily BTC market, maths, hourly run, ledger, loop) | `ems/lc2004_kronos_btc_24h/` |
+| The Kronos model worker (isolated process, pinned weights) and its vendored code | `ems/kronos_forecast/`, `third_party/kronos_67b630e/` |
 | The execution layer every strategy shares: resting-order venues, risk gate, fill model, trade tape and result reads, PAPER/LIVE mode, kill switch, never-cross check | `ems/execution/` (`resting.py`, `gate.py`, `queue.py`, `tape.py`, `controls.py`) |
 | Live Polymarket books, trades, resolutions and reference prices | `ems/marketdata/` (`hub.py` is the public API) |
 | Top-of-book REST read of an Up/Down window (used by the hub) | `ems/connectors/updown_quote.py` |
@@ -37,6 +39,12 @@
 | Kelly horse-race: the chance of Up, the die, the size | `ems/kelly_horse_race/maths.py` |
 | Kelly horse-race: what it reads (window, K, X, the hour, the book) | `ems/kelly_horse_race/inputs.py` |
 | Kelly horse-race: the pass, endpoints, cancel, settlement | `ems/kelly_horse_race/runner.py` |
+| lc2004-Kronos forecast: the chance of Up from the paths, their spread | `ems/lc2004_kronos_btc_24h/maths.py` |
+| lc2004-Kronos forecast: window, strike, Gamma lookup, Binance candles, CLOB book | `ems/lc2004_kronos_btc_24h/market.py` |
+| lc2004-Kronos forecast: the hourly run's recipe (candles, K, seed) and its stored row | `ems/lc2004_kronos_btc_24h/forecast.py`, `ledger.py` (`lc2004_forecasts`) |
+| lc2004-Kronos forecast: the loop (switch, market, strike, books, background run) | `ems/lc2004_kronos_btc_24h/runner.py` |
+| lc2004-Kronos forecast card | `ems/dashboard/panels/lc2004_kronos_btc_24h.py`, data in `execution_view.py` `lc2004_forecast_data` |
+| How the Kronos worker is started, isolated and killed; which weights it reads | `ems/kronos_forecast/client.py`, `worker.py`; weights fetched by `tools/fetch_lc2004_kronos_weights.py`, interpreter `KRONOS_PYTHON` |
 | Which endpoints (paper, live) take new orders this pass | `ems/execution/endpoints.py` |
 | Whether LIVE is armed (selected, clicked in this process, wallet) | `ems/execution/live_control.py` |
 | Live orders on the CLOB (post-only GTD buys, cancel by id) and their journal | `ems/execution/clob.py`, `ems/execution/journal.py` (`live_orders`) |
@@ -66,6 +74,9 @@ main.py ─ singleton lock + init_db ─▶ uvicorn ─▶ ems/dashboard/app.py 
                  every 5 s: fills → settle → endpoints (execution/endpoints.py) → switch?
                  → once per window: inputs → P(Up), die, size → gate leg → venue per endpoint
                  (execution/resting.py) → ledger (kelly_horse_race_* tables in db.py)
+            ─▶ ems/lc2004_kronos_btc_24h/runner.py:run_forever  (display only, no orders)
+                 every minute: Settings switch? → window, market, strike, books
+                 → once per hour, in the background: kronos_forecast worker → lc2004_forecasts
    dashboard reads the ledger and hub.snapshot() ─▶ execution_view.py ─▶ panels/
    operator: MY STRATEGIES switch, SETTINGS knobs ─▶ POST /api/runtime-config
 ```
@@ -85,15 +96,15 @@ trading"). Orders already filled keep settling in every state.
 <!-- BEGIN GENERATED:summary -->
 - **Layout:** one package, `ems/`: `fade_1h_momentum_15m/` and `kelly_horse_race/` = the strategies, `execution/` = the execution layer every strategy shares (resting-order venues, risk gate, fill model, tape and result reads, mode, kill switch), `marketdata/` = the WebSocket market-data hub it reads, `connectors/updown_quote.py` = live top-of-book for the hub, `dashboard/` = the FastAPI operator UI, `strategies.py` / `inventory.py` / `runtime_knobs.py` / `strategy_docs.py` = switches, inventory, knobs and docs, `config.py` / `db.py` / `logging_setup.py` = foundation.
 - **Entry:** `python main.py` → FastAPI `ems/dashboard/app.py`; its lifespan starts the hub, then the strategies.
-- **Tests:** 1215.
+- **Tests:** 1531.
 - **Built-but-dead (do not edit expecting runtime effect):** none.
 <!-- END GENERATED:summary -->
 
 <!-- BEGIN GENERATED:inventory -->
 | Module | Status | Importers | Role |
 |---|---|---|---|
-| `ems/__init__.py` | pkg | 20 | Polymarket crypto EMS: the strategies, their shared execution layer, the market-data hub |
-| `ems/config.py` | WIRED | 11 | Configuration for the local Polymarket crypto trading lab. |
+| `ems/__init__.py` | pkg | 24 | Polymarket crypto EMS: the strategies, their shared execution layer, the market-data hub |
+| `ems/config.py` | WIRED | 13 | Configuration for the local Polymarket crypto trading lab. |
 | `ems/connectors/__init__.py` | pkg | 0 | Data connectors: ``updown_quote`` (live top-of-book of a crypto Up/Down window), used by the market-data hub. |
 | `ems/connectors/updown_quote.py` | WIRED | 1 | Live top-of-book quote for the current window of any crypto Up/Down market. |
 | `ems/dashboard/__init__.py` | pkg | 1 | FastAPI dashboard for BTC 5m Binary Pricing Model trading system. |
@@ -105,10 +116,11 @@ trading"). Orders already filled keep settling in every state.
 | `ems/dashboard/panels/fade_1h.py` | WIRED | 1 | FADE 1H MOMENTUM ON 15M card: what the strategy has made, then what it is doing now. |
 | `ems/dashboard/panels/feeds.py` | WIRED | 1 | FEEDS card: every live upstream feed — how it connects, what it is for, who uses it, health. |
 | `ems/dashboard/panels/kelly_horse_race.py` | WIRED | 1 | KELLY HORSE-RACE card: what it has made per mode, what it is doing now, and each window. |
+| `ems/dashboard/panels/lc2004_kronos_btc_24h.py` | WIRED | 1 | lc2004-Kronos BTC 24h forecast card: the model's chance that today's daily BTC market settles Up. |
 | `ems/dashboard/panels/settings.py` | WIRED | 1 | Settings panel: every dashboard-editable runtime knob (#206). |
 | `ems/dashboard/panels/strategies.py` | WIRED | 1 | MY STRATEGIES card: every strategy family in the repo, hiding none of them. |
 | `ems/dashboard/panels/strategy_card.py` | WIRED | 1 | STRATEGY card, under ORDER SIZE: pick a strategy, read how it works. |
-| `ems/db.py` | WIRED | 14 | SQLite storage for the local Polymarket crypto trading lab. |
+| `ems/db.py` | WIRED | 15 | SQLite storage for the local Polymarket crypto trading lab. |
 | `ems/execution/__init__.py` | pkg | 9 | The execution layer every strategy shares: how a resting order meets the venue. |
 | `ems/execution/clob.py` | WIRED | 3 | The live resting-order venue: post-only good-till-date limit BUYs on the Polymarket CLOB. |
 | `ems/execution/controls.py` | WIRED | 8 | What every placement checks first: the operator's mode, the kill switch and the spread. |
@@ -135,7 +147,16 @@ trading"). Orders already filled keep settling in every state.
 | `ems/kelly_horse_race/ledger.py` | WIRED | 2 | The ledger for Kelly horse-race: the only code that reads or writes its two tables. |
 | `ems/kelly_horse_race/maths.py` | WIRED | 3 | The maths of Kelly horse-race: the chance of Up, the two draws, and the size. Pure: no I/O. |
 | `ems/kelly_horse_race/runner.py` | WIRED | 2 | The Kelly horse-race loop: bookkeeping, then one randomised passive buy per BTC 15m window. |
-| `ems/logging_setup.py` | WIRED | 15 | Structured JSON logging with structlog. Module + trade_id context. |
+| `ems/kronos_forecast/__init__.py` | pkg | 4 | Kronos forecasts in an isolated worker process, for the lc2004-Kronos BTC 24h forecast card. |
+| `ems/kronos_forecast/client.py` | WIRED | 4 | Run one Kronos forecast in an isolated worker process and return the parsed result. |
+| `ems/kronos_forecast/worker.py` | cli | 0 | Kronos forecast worker: one Kronos forecast per process, JSON in on stdin, JSON out on stdout. |
+| `ems/lc2004_kronos_btc_24h/__init__.py` | pkg | 3 | lc2004-Kronos BTC 24h: a display-only forecast for Polymarket's daily BTC Up/Down market. |
+| `ems/lc2004_kronos_btc_24h/forecast.py` | WIRED | 1 | lc2004-Kronos BTC 24h forecast: one hourly Kronos run, scored against the window's strike. |
+| `ems/lc2004_kronos_btc_24h/ledger.py` | WIRED | 3 | lc2004-Kronos BTC 24h ledger: every read and write of the ``lc2004_forecasts`` table. |
+| `ems/lc2004_kronos_btc_24h/market.py` | WIRED | 3 | The daily BTC Up/Down market: noon-ET window, Gamma discovery, Binance candles, CLOB book. |
+| `ems/lc2004_kronos_btc_24h/maths.py` | WIRED | 2 | lc2004-Kronos BTC 24h maths: the chance of Up from the sampled paths, and their spread. |
+| `ems/lc2004_kronos_btc_24h/runner.py` | WIRED | 2 | The lc2004-Kronos BTC 24h forecast loop: one hourly model run for the dashboard card. |
+| `ems/logging_setup.py` | WIRED | 20 | Structured JSON logging with structlog. Module + trade_id context. |
 | `ems/marketdata/__init__.py` | pkg | 5 | Live Polymarket market data over WebSockets: Up/Down order books, trades, reference prices. |
 | `ems/marketdata/clob_messages.py` | WIRED | 5 | Pure parsers for the Polymarket CLOB market channel: one text frame in, typed events out. |
 | `ems/marketdata/clob_shard.py` | WIRED | 1 | One asset x timeframe's market-channel connections: N redundant sockets, the freshest served. |
@@ -144,8 +165,8 @@ trading"). Orders already filled keep settling in every state.
 | `ems/marketdata/order_book.py` | WIRED | 3 | One token's order book, rebuilt from CLOB snapshots and absolute level changes. |
 | `ems/marketdata/rest_poll.py` | WIRED | 1 | A light REST /book poll running alongside the sockets on the markets in use. |
 | `ems/marketdata/rtds_stream.py` | WIRED | 2 | Chainlink, Chainlink 60 s TWAP and Binance prices from Polymarket's RTDS WebSocket. |
-| `ems/marketdata/universe.py` | WIRED | 1 | Which Polymarket Up/Down windows to follow, and their outcome token ids. |
-| `ems/runtime_knobs.py` | WIRED | 6 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
+| `ems/marketdata/universe.py` | WIRED | 2 | Which Polymarket Up/Down windows to follow, and their outcome token ids. |
+| `ems/runtime_knobs.py` | WIRED | 7 | Operator runtime knobs: single dashboard-editable source of truth (#206). |
 | `ems/strategies.py` | WIRED | 6 | Operator strategy switches: which strategies may open new positions. |
 | `ems/strategy_docs.py` | WIRED | 4 | One document per strategy family, kept in step with the code it describes. |
 | `main.py` | cli | 0 | Entrypoint: boots the FastAPI operator dashboard (uvicorn). |
@@ -160,6 +181,7 @@ trading"). Orders already filled keep settling in every state.
 | `tools/fade_1h_momentum_15m/threshold_scan.py` | cli | 0 | Does buying (or fading) the 1h-momentum side of a 15m market pay, by entry price? |
 | `tools/fade_1h_momentum_15m/twap_proxy_agreement.py` | cli | 0 | Which Binance proxy of the 15m settlement agrees with the real resolutions? (section 1b) |
 | `tools/fade_1h_momentum_15m/validate_math.py` | cli | 0 | Monte Carlo check of every closed form in tasks/2026-09-21-fade-1h-momentum-on-15m.md. |
+| `tools/fetch_lc2004_kronos_weights.py` | cli | 0 | Download the pinned lc2004 Kronos BTCUSDT 1h model and tokenizer weights (HF cache). |
 | `tools/gen_docs.py` | cli | 0 | Generate the machine-derived sections of the agent docs. |
 | `tools/kelly_horse_race/checks.py` | cli | 0 | Numerical checks behind tasks/2026-09-22-kelly-horse-race-research.md. |
 | `tools/kelly_horse_race/examples.py` | cli | 0 | Worked examples of Kelly horse-race from real BTC 15m windows, through the real maths. |

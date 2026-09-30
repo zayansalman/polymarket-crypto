@@ -33,6 +33,11 @@ test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 # is armed. Paper needs none of it.
 live = ["py-clob-client-v2>=1.0"]
 dev = ["ruff>=0.4", "mypy>=1.9"]
+# lc2004-Kronos BTC 24h forecast worker only (ems/kronos_forecast/worker.py, run in its own
+# process; the app never imports these). Kept out of the base and test deps so CI never
+# installs torch. huggingface-hub also backs tools/fetch_lc2004_kronos_weights.py.
+kronos = ["torch>=2.2", "einops>=0.8", "pandas>=2.0", "safetensors>=0.4", "huggingface-hub>=0.26",
+          "tqdm>=4.66"]
 
 [tool.setuptools]
 py-modules = ["main"]
@@ -43,6 +48,8 @@ include = ["ems*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Vendored upstream code (third_party/kronos_67b630e, MIT), kept byte-for-byte unchanged.
+extend-exclude = ["third_party"]
 
 [tool.ruff.lint.per-file-ignores]
 # E402 (module-import-not-at-top): these tests insert the project root into

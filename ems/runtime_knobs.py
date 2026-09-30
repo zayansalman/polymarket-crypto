@@ -121,6 +121,13 @@ KNOBS: dict[str, Knob] = {
         "runtime.kelly_horse_race.poll_interval_seconds", 5.0, "float",
         "Pass interval", 1.0, 600.0, unit="s", group="Kelly horse-race",
     ),
+    # lc2004-Kronos BTC 24h forecast (ems/lc2004_kronos_btc_24h/): a display-only dashboard
+    # card, not a strategy. Off stops the hourly model run and cancels one in progress; it
+    # places no orders either way (Zayan (operator), 2026-09-29; Claude, 2026-09-29).
+    "lc2004_forecast_enabled": Knob(
+        "runtime.lc2004_kronos_btc_24h.forecast_enabled", True, "bool",
+        "Run the lc2004-Kronos BTC 24h forecast", group="lc2004-Kronos BTC 24h forecast",
+    ),
     # The risk gate every strategy's resting orders pass (ems/execution/gate.py), one leg per
     # mode. A loss halt or daily cap of 0 is off. New keys (runtime.risk.*): the deleted live
     # executor's runtime.max_trade_usd, runtime.live.* and runtime.paper.* rows meant other

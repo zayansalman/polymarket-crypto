@@ -679,3 +679,36 @@ body {
 @media (max-width: 900px) {
   .kelly-grid { grid-template-columns: 1fr; }
 }
+
+/* lc2004-Kronos BTC 24h forecast card (panels/lc2004_kronos_btc_24h.py): display only */
+.lk-pills { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lk-display { font-size: 11px; color: var(--muted); padding-bottom: 6px; }
+.lk-state { display: flex; flex-direction: column; gap: 3px; padding: 6px 0 8px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.lk-state .warn { color: var(--warn); }
+.lk-state .down { color: var(--neg); }
+.lk-state .lk-err, .lk-state .lk-fix { padding-left: 12px; }
+.lk-block { padding: 8px 0 10px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.lk-headline { font-family: var(--font-mono); font-size: 17px; font-weight: 600; color: var(--text); }
+.lk-headline span { font-size: 12px; font-weight: 400; color: var(--muted); }
+.lk-headline.lk-none { font-size: 13px; font-weight: 500; }
+.lk-sub { display: block; color: var(--muted); font-size: 10px; font-weight: 400; margin-top: 2px; }
+.lk-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; padding: 10px 0; }
+.lk-h { color: var(--label); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 6px; }
+.lk-kv { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.lk-kv > div:not(.lk-h) { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.lk-kv > div > span { color: var(--label); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.lk-kv b { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
+.lk-kv .pos { color: var(--pos); }
+.lk-kv .neg { color: var(--neg); }
+.lk-link { color: var(--text); text-decoration: underline; }
+.lk-table { width: 100%; border-collapse: collapse; margin: 4px 0 8px; font-family: var(--font-mono); font-size: 11px; }
+.lk-table th { text-align: left; color: var(--label); font-weight: 500; font-size: 10px; padding: 3px 6px; border-bottom: 1px solid var(--border); }
+.lk-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); color: var(--text); }
+.lk-table .lk-note-cell { color: var(--neg); font-size: 10px; }
+.lk-foot { border-top: 1px solid var(--border-strong); padding-top: 8px; font-size: 11px; color: var(--muted); }
+@media (max-width: 1100px) {
+  .lk-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .lk-grid { grid-template-columns: 1fr; }
+}

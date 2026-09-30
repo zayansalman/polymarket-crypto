@@ -51,6 +51,13 @@ DASHBOARD_ALLOWED_HOSTS = tuple(
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 POLYMARKET_CLOB_API = os.getenv("POLYMARKET_CLOB_API", "https://clob.polymarket.com")
+# Interpreter for the isolated Kronos forecast worker (lc2004-Kronos BTC 24h forecast card,
+# ems/kronos_forecast). Blank = the app's own interpreter. Set it, as an absolute path, to a
+# Python whose torch, pandas, einops, safetensors, huggingface_hub and tqdm import under
+# `python -I`, which ignores the user site. On the operator's Mac einops lives only in the
+# user site (checked 2026-09-29), so the app's own interpreter fails there with "missing
+# einops" until this is set (Claude, 2026-09-22; ems, Claude, 2026-09-29).
+KRONOS_PYTHON = os.getenv("KRONOS_PYTHON", "").strip()
 
 # The PAPER/LIVE selection before the operator picks one in the dashboard. LIVE here
 # is never consent: live orders need LIVE clicked in the dashboard in this process

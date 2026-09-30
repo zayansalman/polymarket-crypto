@@ -66,7 +66,9 @@ async def test_enabled_map_reports_one_entry_per_strategy() -> None:
 def test_only_fade_and_kelly_are_registered() -> None:
     # Every other family (the BTC Up/Down loop, the maker, the daily altcoin
     # scanner) was deleted on 2026-09-26. No switch or knob outlives its code:
-    # each knob is a registered strategy's, or one of the shared risk gate's limits.
+    # each knob is a registered strategy's, one of the shared risk gate's limits,
+    # or the display-only lc2004-Kronos forecast card's own switch (not a
+    # strategy: it places no orders; Claude, 2026-09-29).
     from ems import runtime_knobs
     from ems.execution import gate
 
@@ -74,7 +76,7 @@ def test_only_fade_and_kelly_are_registered() -> None:
     assert list(_strategies.STRATEGIES) == [FADE, "kelly_horse_race"]
     assert gate_knobs <= set(runtime_knobs.KNOBS)
     assert all(n.startswith(("fade1h_", "kelly_horse_race_")) or n in gate_knobs
-               for n in runtime_knobs.KNOBS)
+               or n == "lc2004_forecast_enabled" for n in runtime_knobs.KNOBS)
 
 
 def test_every_strategy_stores_under_its_own_runtime_key() -> None:

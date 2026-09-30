@@ -63,3 +63,25 @@ def _no_kelly_horse_race_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_kelly_runner, "_STATUS",
                         {"state": "not_started", "last_pass_ts": None, "last_error": None})
 
+
+
+@pytest.fixture(autouse=True)
+def _no_lc2004_forecast_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dashboard tests boot the app lifespan; keep the lc2004-Kronos forecast idle.
+
+    Same shape as ``_no_kelly_horse_race_runner``: its loop reads Gamma, Binance
+    and the CLOB and starts the model worker, so the lifespan gets an idle loop.
+    The real one stays reachable as ``real_run_forever`` for the runner's own
+    tests, and every test starts from a fresh card state.
+    """
+    from ems.lc2004_kronos_btc_24h import runner as _lc2004_runner
+
+    async def _idle(stop_event=None) -> None:  # type: ignore[no-untyped-def]
+        if stop_event is not None:
+            await stop_event.wait()
+
+    monkeypatch.setattr(_lc2004_runner, "real_run_forever", _lc2004_runner.run_forever,
+                        raising=False)
+    monkeypatch.setattr(_lc2004_runner, "run_forever", _idle)
+    monkeypatch.setattr(_lc2004_runner, "_STATUS",
+                        {"state": "not_started", "last_pass_ts": None, "last_error": None})

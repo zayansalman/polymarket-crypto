@@ -328,6 +328,37 @@ CREATE TABLE IF NOT EXISTS kelly_horse_race_orders (
 
 CREATE INDEX IF NOT EXISTS idx_kelly_horse_race_orders_open
   ON kelly_horse_race_orders(final, mode);
+
+-- lc2004-Kronos BTC 24h forecast (ems/lc2004_kronos_btc_24h/, read and written only through
+-- its ledger.py). Display-only: no orders. One row per hourly forecast of the daily BTC
+-- Up/Down window, unique on (window, last closed 1h candle). A failed run keeps its error
+-- text and leaves the numbers empty. final_closes is a JSON list of each path's close at the
+-- window end. up_bid .. down_ask are the market's best prices when the forecast was made.
+CREATE TABLE IF NOT EXISTS lc2004_forecasts (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  window_slug          TEXT NOT NULL,
+  window_start_ts      INTEGER NOT NULL,
+  window_end_ts        INTEGER NOT NULL,
+  last_candle_open_ms  INTEGER NOT NULL,
+  horizon_hours        INTEGER NOT NULL,
+  strike               REAL,
+  last_close           REAL,
+  paths                INTEGER NOT NULL,
+  paths_above          INTEGER,
+  p_raw                REAL,
+  q_up                 REAL,
+  sampling_se          REAL,
+  final_closes         TEXT,
+  seconds              REAL,
+  error                TEXT,
+  torch_version        TEXT,
+  up_bid               REAL,
+  up_ask               REAL,
+  down_bid             REAL,
+  down_ask             REAL,
+  created_ts           INTEGER NOT NULL,
+  UNIQUE (window_slug, last_candle_open_ms)
+);
 """
 
 # Fade 1h Momentum on 15m tables. Each dict lists every column an older copy of the table
@@ -395,6 +426,17 @@ FADE_DIALS_COLUMN_MIGRATIONS = {
     "note": "TEXT",
 }
 
+# lc2004-Kronos BTC 24h forecast: the columns an older copy of lc2004_forecasts lacks (the
+# 2026-09-22 branch's table had none of these). Without them every insert fails after the
+# model has run (Claude, 2026-09-29, for a review finding).
+LC2004_FORECAST_COLUMN_MIGRATIONS = {
+    "torch_version": "TEXT",
+    "up_bid": "REAL",
+    "up_ask": "REAL",
+    "down_bid": "REAL",
+    "down_ask": "REAL",
+}
+
 
 # --- Issue #185 rebrand migration -------------------------------------------
 # The BTC-5m-era table names and config-key namespace are renamed below. Both
@@ -429,6 +471,7 @@ async def init_db() -> None:
         await _migrate_columns(db, "fade_dials", FADE_DIALS_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "paper_resting_orders", PAPER_RESTING_ORDER_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "live_orders", LIVE_ORDER_COLUMN_MIGRATIONS)
+        await _migrate_columns(db, "lc2004_forecasts", LC2004_FORECAST_COLUMN_MIGRATIONS)
         await db.commit()
 
 

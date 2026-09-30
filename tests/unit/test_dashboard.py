@@ -61,7 +61,7 @@ class TestDashboardPage:
     def test_has_the_cards(self, client: TestClient):
         text = client.get("/").text
         for panel in ("execution-grid", "FEEDS", "MY STRATEGIES", "FADE 1H MOMENTUM ON 15M",
-                      "KELLY HORSE-RACE", "SETTINGS"):
+                      "KELLY HORSE-RACE", "lc2004-Kronos BTC 24h forecast", "SETTINGS"):
             assert panel in text, f"missing card: {panel}"
 
     def test_no_loop_controls(self, client: TestClient):
@@ -79,10 +79,10 @@ class TestDashboardPage:
         # data-fold and re-applies it after every refresh swaps the HTML.
         text = client.get("/").text
         for key in ("feeds", "strategies", "strategy", "fade-1h", "kelly-horse-race",
-                    "settings"):
+                    "lc2004-kronos-btc-24h", "settings"):
             assert f"data-fold='{key}'" in text, key
         assert "<section class='card" not in text
-        assert text.count("<summary class='card-h'>") == 6
+        assert text.count("<summary class='card-h'>") == 7
 
 
 class TestStaticFiles:
