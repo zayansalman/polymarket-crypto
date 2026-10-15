@@ -177,7 +177,7 @@ async def test_record_thresholds_is_idempotent(test_db) -> None:
     assert len(rows) == 1 and json.loads(rows[0]["thresholds_json"])["vol_1s_low"] == 3e-5
 
 
-# --- scan_once through a fake client -------------------------------------------------
+# --- scan_all through a fake client ------------------------------------------------
 
 
 class _Resp:
@@ -236,79 +236,192 @@ async def _insert_tick(db, *, age_s: int, remaining: int, slug: str = "btc-updow
         await conn.commit()
 
 
+async def _rows(db, asset: str | None = None) -> list[dict]:
+    q = "SELECT asset, scan_seq, run_id, created_ts, timeframe, window_slug, grade FROM regime_snapshots"
+    args: tuple = ()
+    if asset:
+        q += " WHERE asset = ?"
+        args = (asset,)
+    async with db.connect() as conn:
+        async with conn.execute(q + " ORDER BY id", args) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+def _book_calls(client) -> int:
+    return sum(1 for u, _ in client.calls if u.endswith("/book"))
+
+
+ALL_ASSETS = list(sources.SPOT_SYMBOL)
+
+
 @pytest.mark.asyncio
-async def test_scan_once_btc_uses_loop_ticks_and_persists_join_keys(test_db) -> None:
+async def test_scan_all_covers_all_six_assets_whatever_the_selector_shows(test_db) -> None:
+    """The history must not depend on the header selector: sol/1d is selected, yet every cycle
+    journals all six assets on the 5m family."""
+    await market_selection.set_selection("sol", "1d")
+    snaps = await monitor.scan_all(_Client(), now_ts=NOW_TS)  # type: ignore[arg-type]
+    assert [s.asset for s in snaps] == ALL_ASSETS == ["btc", "eth", "sol", "xrp", "doge", "bnb"]
+    assert {s.timeframe for s in snaps} == {"5m"}
+    assert len({s.run_id for s in snaps}) == 1 and len({s.scan_seq for s in snaps}) == 1
+    assert {s.created_ts for s in snaps} == {NOW_TS}
+    assert {s.asset: s.window_slug for s in snaps} == {a: f"{a}-updown-5m-1790000100" for a in ALL_ASSETS}
+    assert all(s.grade == "full" and s.usable_for_router for s in snaps)
+    rows = await _rows(test_db)
+    assert [r["asset"] for r in rows] == ALL_ASSETS
+    for asset in ALL_ASSETS:
+        latest = await ledger.latest_snapshot(asset=asset)
+        assert latest is not None and latest["symbol"] == sources.SPOT_SYMBOL[asset]
+
+
+@pytest.mark.asyncio
+async def test_btc_reads_loop_ticks_while_every_other_asset_reads_the_book_directly(test_db) -> None:
+    """Loop ticks are BTC 5m's only; a fresh BTC tick must never be scored as another asset's book."""
     await _insert_tick(test_db, age_s=3, remaining=150)
     client = _Client()
-    snap = await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
-    assert snap is not None
-    assert snap.asset == "btc" and snap.symbol == "BTCUSDT" and snap.timeframe == "5m"
-    assert snap.window_slug == "btc-updown-5m-1790000100"
-    assert snap.sources["book"] == "paper_ticks" and snap.sources["vol_1s"] == "chainlink_ws"
-    assert snap.features.overround == pytest.approx(0.02) and snap.features.vol_1s == 4.5e-5
-    assert snap.features.venue_windows_used == 6.0 and snap.features.venue_liquidity_usd == 120.0
-    assert not any(u.endswith("/book") for u, _ in client.calls)  # no direct read when ticks are fresh
-    assert snap.quality == () and snap.grade == "full" and snap.usable_for_router
-    # The daily family is judged on a proxy asset here; that is a per-family note on ITS fit,
-    # not a data-quality flag, so the loop's own market (btc) can grade "full".
-    daily = {f.strategy_id: f for f in snap.fits}["daily_altcoin"]
-    assert daily.fit == "degraded" and "m.daily_proxy_asset" in daily.reasons
-    row = await ledger.latest_snapshot(asset="btc")
-    assert row is not None and row["scan_seq"] == snap.scan_seq and row["run_id"] == monitor._run_id
+    snaps = {s.asset: s for s in await monitor.scan_all(client, now_ts=NOW_TS)}  # type: ignore[arg-type]
+    assert snaps["btc"].sources["book"] == "paper_ticks" and snaps["btc"].sources["vol_1s"] == "chainlink_ws"
+    assert snaps["btc"].features.overround == pytest.approx(0.02) and snaps["btc"].features.vol_1s == 4.5e-5
+    assert all(snaps[a].sources["book"] == "clob_direct" for a in ALL_ASSETS if a != "btc")
+    assert _book_calls(client) == 2 * 5  # up + down token for each of the five non-BTC assets
+    assert snaps["btc"].grade == "full" and snaps["btc"].features.venue_windows_used == 6.0
+
+
+@pytest.mark.asyncio
+async def test_btc_falls_back_to_a_direct_read_when_loop_ticks_are_stale(test_db) -> None:
+    await _insert_tick(test_db, age_s=500, remaining=150)
+    client = _Client()
+    snaps = {s.asset: s for s in await monitor.scan_all(client, now_ts=NOW_TS)}  # type: ignore[arg-type]
+    assert snaps["btc"].sources["book"] == "clob_direct"
+    assert snaps["btc"].features.overround == pytest.approx(0.06)
+    assert snaps["btc"].features.maker_capture == pytest.approx(0.04)
+    assert _book_calls(client) == 2 * 6
+    assert "loop_sigma_unusable" not in {q.code for q in snaps["btc"].quality}
+
+
+@pytest.mark.asyncio
+async def test_each_cycle_is_one_scan_seq_shared_by_its_rows(test_db) -> None:
+    client = _Client()
+    first = await monitor.scan_all(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    second = await monitor.scan_all(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
+    assert {s.scan_seq for s in second} == {first[0].scan_seq + 1}
+    for asset in ALL_ASSETS:
+        seqs = [r["scan_seq"] for r in await _rows(test_db, asset)]
+        assert seqs == [first[0].scan_seq, first[0].scan_seq + 1]  # consecutive per asset
+
+
+@pytest.mark.asyncio
+async def test_one_failing_asset_does_not_stop_the_cycle_and_leaves_its_own_gap(
+    test_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for the isolation contract: a fetch that blows up for one asset costs only
+    that asset's row, and the missing scan_seq in ITS series is what reveals the abort."""
+    client = _Client()
+    real_fetch = monitor.sources.fetch_bars
+
+    async def flaky(c, symbol, interval, limit, **kw):
+        if symbol == "ETHUSDT":
+            raise RuntimeError("fetch failed")
+        return await real_fetch(c, symbol, interval, limit, **kw)
+
+    monkeypatch.setattr(monitor.sources, "fetch_bars", flaky)
+    first = await monitor.scan_all(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    assert [s.asset for s in first] == [a for a in ALL_ASSETS if a != "eth"]
+    monkeypatch.setattr(monitor.sources, "fetch_bars", real_fetch)
+    second = await monitor.scan_all(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
+    assert [s.asset for s in second] == ALL_ASSETS
+    seq1 = first[0].scan_seq
+    assert [r["scan_seq"] for r in await _rows(test_db, "eth")] == [seq1 + 1]      # cycle 1 missing
+    assert [r["scan_seq"] for r in await _rows(test_db, "btc")] == [seq1, seq1 + 1]
+
+
+@pytest.mark.asyncio
+async def test_a_record_failure_on_one_row_does_not_drop_the_others(
+    test_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_record = monitor.ledger.record_snapshot
+
+    async def flaky_record(snapshot):
+        if snapshot.asset == "sol":
+            raise sqlite3.OperationalError("database is locked")
+        return await real_record(snapshot)
+
+    monkeypatch.setattr(monitor.ledger, "record_snapshot", flaky_record)
+    journaled = await monitor.scan_all(_Client(), now_ts=NOW_TS)  # type: ignore[arg-type]
+    assert [s.asset for s in journaled] == [a for a in ALL_ASSETS if a != "sol"]
+    assert [r["asset"] for r in await _rows(test_db)] == [a for a in ALL_ASSETS if a != "sol"]
+
+
+@pytest.mark.asyncio
+async def test_every_source_failing_still_journals_all_six_rows(test_db) -> None:
+    snaps = await monitor.scan_all(_Client(klines=False, gamma=False, clob=False), now_ts=NOW_TS)  # type: ignore[arg-type]
+    assert [s.asset for s in snaps] == ALL_ASSETS and {s.grade for s in snaps} == {"none"}
+    for s in snaps:
+        assert {"bars_unavailable", "book_absent", "venue_market_absent"} <= {q.code for q in s.quality}
+    assert len(await _rows(test_db)) == 6
+
+
+@pytest.mark.asyncio
+async def test_out_of_phase_window_records_the_flag_for_every_asset(test_db) -> None:
+    snaps = await monitor.scan_all(_Client(), now_ts=NOW_TS - 90)  # type: ignore[arg-type]  # 290s left
+    for s in snaps:
+        codes = [q.code for q in s.quality]
+        assert "book_out_of_phase" in codes and "book_absent" not in codes, s.asset
+
+
+@pytest.mark.asyncio
+async def test_thresholds_are_journaled_once_per_process(test_db) -> None:
+    client = _Client()
+    await monitor.scan_all(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    await monitor.scan_all(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
     async with test_db.connect() as conn:
         async with conn.execute("SELECT version FROM regime_threshold_versions") as cur:
             assert [r["version"] for r in await cur.fetchall()] == [classify.THRESHOLDS_VERSION]
 
 
 @pytest.mark.asyncio
-async def test_scan_once_falls_back_to_direct_clob_when_ticks_are_stale(test_db) -> None:
-    await _insert_tick(test_db, age_s=500, remaining=150)
+async def test_slow_bars_are_cached_across_cycles(test_db) -> None:
     client = _Client()
-    snap = await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
-    assert snap is not None and snap.sources["book"] == "clob_direct"
-    assert snap.features.overround == pytest.approx(0.06)
-    assert snap.features.maker_capture == pytest.approx(0.04)
-    assert sum(1 for u, _ in client.calls if u.endswith("/book")) == 2
-    assert "loop_sigma_unusable" not in {q.code for q in snap.quality}
+    await monitor.scan_all(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    first = sum(1 for u, _ in client.calls if "klines" in u)
+    await monitor.scan_all(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
+    second = sum(1 for u, _ in client.calls if "klines" in u) - first
+    assert first == 6 * 3 and second == 6  # only the six 1m series are refetched
 
 
 @pytest.mark.asyncio
-async def test_scan_once_non_btc_selection_never_reads_btc_ticks(test_db) -> None:
-    await _insert_tick(test_db, age_s=3, remaining=150)  # a fresh BTC tick exists
-    await market_selection.set_selection("eth", "5m")
+async def test_assets_are_fetched_concurrently_not_one_after_another(test_db) -> None:
+    class _SlowClient(_Client):
+        in_flight = 0
+        peak = 0
+
+        async def get(self, url, params=None):  # type: ignore[override]
+            _SlowClient.in_flight += 1
+            _SlowClient.peak = max(_SlowClient.peak, _SlowClient.in_flight)
+            await asyncio.sleep(0.01)
+            try:
+                return await super().get(url, params)
+            finally:
+                _SlowClient.in_flight -= 1
+
+    await monitor.scan_all(_SlowClient(), now_ts=NOW_TS)  # type: ignore[arg-type]
+    assert _SlowClient.peak >= 6  # a sequential scan would never exceed 3 in flight
+
+
+@pytest.mark.asyncio
+async def test_snapshot_asset_builds_without_persisting(test_db) -> None:
+    snap = await monitor.snapshot_asset(
+        _Client(), "eth", "5m", now_ts=NOW_TS, scan_seq=7, fresh_book_clock=False  # type: ignore[arg-type]
+    )
+    assert snap is not None and snap.asset == "eth" and snap.scan_seq == 7
+    assert await _rows(test_db) == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_asset_daily_timeframe_uses_daily_slug(test_db) -> None:
     client = _Client()
-    snap = await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
-    assert snap is not None and snap.asset == "eth" and snap.symbol == "ETHUSDT"
-    assert snap.sources["book"] == "clob_direct"
-    assert snap.window_slug == "eth-updown-5m-1790000100"
-    assert any(p.get("slug") == "eth-updown-5m-1790000100" for _, p in client.calls)
-    assert snap.grade == "full" and snap.usable_for_router
-    assert {f.strategy_id: f.fit for f in snap.fits}["daily_altcoin"] == "feasible"
-
-
-@pytest.mark.asyncio
-async def test_scan_once_out_of_phase_window_records_flag(test_db) -> None:
-    out_of_phase_ts = NOW_TS - 90  # % 300 == 10 → 290s remaining
-    snap = await monitor.scan_once(_Client(), now_ts=out_of_phase_ts)  # type: ignore[arg-type]
-    assert snap is not None
-    codes = [q.code for q in snap.quality]
-    assert "book_out_of_phase" in codes and "book_absent" not in codes
-
-
-@pytest.mark.asyncio
-async def test_scan_once_survives_every_source_failing(test_db) -> None:
-    snap = await monitor.scan_once(_Client(klines=False, gamma=False, clob=False), now_ts=NOW_TS)  # type: ignore[arg-type]
-    assert snap is not None and snap.grade == "none"
-    codes = {q.code for q in snap.quality}
-    assert {"bars_unavailable", "book_absent", "venue_market_absent"} <= codes
-    assert (await ledger.latest_snapshot(asset="btc")) is not None
-
-
-@pytest.mark.asyncio
-async def test_scan_once_daily_timeframe_uses_daily_slug(test_db) -> None:
-    await market_selection.set_selection("sol", "1d")
-    client = _Client()
-    snap = await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    snap = await monitor.snapshot_asset(
+        client, "sol", "1d", now_ts=NOW_TS, scan_seq=1, fresh_book_clock=False  # type: ignore[arg-type]
+    )
     assert snap is not None and snap.window_slug is None
     slugs = [p.get("slug") for _, p in client.calls if "slug" in p]
     assert slugs and all(s.startswith("solana-up-or-down-on-") for s in slugs)
@@ -316,19 +429,16 @@ async def test_scan_once_daily_timeframe_uses_daily_slug(test_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_slow_bars_are_cached_within_ttl(test_db) -> None:
-    client = _Client()
-    await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
-    n_first = sum(1 for u, p in client.calls if "klines" in u)
-    await monitor.scan_once(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
-    n_second = sum(1 for u, p in client.calls if "klines" in u) - n_first
-    assert n_first == 3 and n_second == 1  # only the 1m bars are refetched
+async def test_snapshot_asset_skips_an_unmapped_asset(test_db) -> None:
+    assert await monitor.snapshot_asset(
+        _Client(), "not-an-asset", "5m", now_ts=NOW_TS, scan_seq=1  # type: ignore[arg-type]
+    ) is None
 
 
-@pytest.mark.asyncio
-async def test_scan_once_skips_unknown_symbol(test_db, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sources, "SPOT_SYMBOL", {})
-    assert await monitor.scan_once(_Client(), now_ts=NOW_TS) is None  # type: ignore[arg-type]
+def test_scan_assets_follow_the_symbol_map_and_cover_every_selectable_asset() -> None:
+    assert monitor.scan_assets() == tuple(sources.SPOT_SYMBOL)
+    assert set(market_selection.ASSETS) <= set(monitor.scan_assets())
+    assert monitor.SCAN_TIMEFRAME == "5m"
 
 
 def test_monitor_knobs_are_registered() -> None:
@@ -382,7 +492,7 @@ async def test_run_forever_keeps_going_after_a_failed_scan(test_db, monkeypatch:
         attempts += 1
         raise RuntimeError("scan blew up")
 
-    monkeypatch.setattr(monitor, "scan_once", boom)
+    monkeypatch.setattr(monitor, "scan_all", boom)
     stop = asyncio.Event()
 
     async def fake_sleep(_s: float) -> None:
@@ -406,7 +516,7 @@ async def test_run_forever_pauses_when_the_enabled_knob_is_off(test_db, monkeypa
         nonlocal scans
         scans += 1
 
-    monkeypatch.setattr(monitor, "scan_once", counting)
+    monkeypatch.setattr(monitor, "scan_all", counting)
     stop = asyncio.Event()
     cycles = 0
 
@@ -432,31 +542,11 @@ def test_real_monitor_marker_restores_the_real_loop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_aborted_scan_leaves_a_scan_seq_gap(test_db, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: scan_seq advanced only after every fetch succeeded, so a failed scan left no
-    gap — defeating the run_id/scan_seq gap detection the router contract promises."""
-    client = _Client()
-    first = await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
-    real_fetch = monitor.sources.fetch_bars
-
-    async def boom(*_a, **_k):
-        raise RuntimeError("fetch failed")
-
-    monkeypatch.setattr(monitor.sources, "fetch_bars", boom)
-    with pytest.raises(RuntimeError):
-        await monitor.scan_once(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
-    monkeypatch.setattr(monitor.sources, "fetch_bars", real_fetch)
-    third = await monitor.scan_once(client, now_ts=NOW_TS + 120)  # type: ignore[arg-type]
-    assert first is not None and third is not None
-    assert third.scan_seq == first.scan_seq + 2 and third.run_id == first.run_id
-
-
-@pytest.mark.asyncio
 async def test_completed_window_cache_waits_for_a_full_window_to_settle(test_db) -> None:
     """Regression: every completed window was cached on first read, so the window that closed
     seconds ago froze whatever partial Gamma volume existed at that instant."""
     client = _Client()
-    await monitor.scan_once(client, now_ts=NOW_TS)  # type: ignore[arg-type]
+    await monitor.snapshot_asset(client, "btc", "5m", now_ts=NOW_TS, scan_seq=1, fresh_book_clock=False)  # type: ignore[arg-type]
     current_start = NOW_TS - NOW_TS % 300
     newest_completed = f"btc-updown-5m-{current_start - 300}"
     older_completed = f"btc-updown-5m-{current_start - 600}"
@@ -464,7 +554,7 @@ async def test_completed_window_cache_waits_for_a_full_window_to_settle(test_db)
     assert older_completed in monitor._venue_completed        # closed 400s ago: settled
     assert len(monitor._venue_completed) == 5
     before = sum(1 for u, _ in client.calls if "/markets" in u)
-    await monitor.scan_once(client, now_ts=NOW_TS + 60)  # type: ignore[arg-type]
+    await monitor.snapshot_asset(client, "btc", "5m", now_ts=NOW_TS + 60, scan_seq=2, fresh_book_clock=False)  # type: ignore[arg-type]
     after = sum(1 for u, _ in client.calls if "/markets" in u)
     assert after - before == 2  # only the current window and the not-yet-settled one are refetched
 
@@ -474,21 +564,20 @@ async def test_book_phase_is_measured_against_the_venue_windows_own_end() -> Non
     """Regression: the phase used a fixed 60-270s band and the scan-start clock. It is now a fraction
     of the selected window and is computed at the book stage against the window's end."""
     venue = VenueMarket("eth-updown-15m-0", 1.0, 1.0, "up", "down")
-    sel = market_selection.MarketSelection("eth", "15m")
     client = _Client()
     # window [0, 900): 120s remaining -> closing phase (< 0.2 * 900) -> no book, honest flag.
-    book, flag = await monitor._book(client, sel, venue, 780, 0)  # type: ignore[arg-type]
+    book, flag = await monitor._book(client, "eth", "15m", venue, 780, 0)  # type: ignore[arg-type]
     assert book is None and flag is not None and flag.code == "book_out_of_phase"
     # 200s remaining -> quotable for a 15m window -> direct read.
-    book, flag = await monitor._book(client, sel, venue, 700, 0)  # type: ignore[arg-type]
+    book, flag = await monitor._book(client, "eth", "15m", venue, 700, 0)  # type: ignore[arg-type]
     assert flag is None and book is not None and book.source == "clob_direct"
     # The window has already ended by the book stage -> negative remaining -> out of phase.
-    book, flag = await monitor._book(client, sel, venue, 901, 0)  # type: ignore[arg-type]
+    book, flag = await monitor._book(client, "eth", "15m", venue, 901, 0)  # type: ignore[arg-type]
     assert book is None and flag is not None and flag.code == "book_out_of_phase"
     # No tokens / no window -> book_absent, never a fabricated read.
-    _, flag = await monitor._book(client, sel, VenueMarket("s", 1.0, 1.0), 700, 0)  # type: ignore[arg-type]
+    _, flag = await monitor._book(client, "eth", "15m", VenueMarket("s", 1.0, 1.0), 700, 0)  # type: ignore[arg-type]
     assert flag is not None and flag.code == "book_absent"
-    _, flag = await monitor._book(client, sel, venue, 700, None)  # type: ignore[arg-type]
+    _, flag = await monitor._book(client, "eth", "15m", venue, 700, None)  # type: ignore[arg-type]
     assert flag is not None and flag.code == "book_absent"
 
 

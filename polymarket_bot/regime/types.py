@@ -234,7 +234,7 @@ class RegimeSnapshot:
     ``window_slug`` (the clock-derived Up/Down window the scan fell in, for
     the 5m/15m/1h families; ``None`` for the daily family, which joins on
     the latest snapshot with ``created_ts`` ≤ the trade's entry time),
-    ``run_id`` / ``scan_seq`` (monitor process boot + monotonic counter, so
+    ``run_id`` / ``scan_seq`` (monitor process boot + monotonic scan-cycle counter, so
     gaps and restarts are detectable).
 
     ``bands`` maps each axis to its a-priori band label; ``headline`` and

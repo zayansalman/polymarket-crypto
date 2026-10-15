@@ -128,7 +128,7 @@ async def _lifespan(app: FastAPI):
     daily_task = asyncio.create_task(_run_daily_scanner(daily_stop_event))
 
     # Market regime monitor (polymarket_bot/regime): advisory overview of
-    # volatility / volume / move / book for the selected market. Always-on
+    # volatility / volume / move / book for all six assets. Always-on
     # like the daily scanner, independent of the BTC loop's Start/Stop, so
     # the operator can read the regime before choosing what to run. Reads
     # only; nothing on the trading path consumes it.
