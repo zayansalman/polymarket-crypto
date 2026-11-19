@@ -331,7 +331,7 @@ def _write_generated(
     toplevel=TOPLEVEL_MODULES,
     targets=DEFAULT_TARGETS,
 ) -> None:
-    (root / "docs" / "FILE_MAP.md").write_text(render_file_map(root))
+    (root / "docs" / "FILE_MAP.md").write_text(render_file_map(root), encoding="utf-8")
     inv = _table_section(root)
     # Non-fast: compute the real count once and inject it into ALL targets, so
     # AGENTS.md and CODE_MAP.md get the SAME number (and `count_tests` — slow —
@@ -356,7 +356,7 @@ def _write_generated(
                 doc = replace_block(doc, name, bodies[name])
             except ValueError:
                 pass  # block not present in this doc
-        p.write_text(doc)
+        p.write_text(doc, encoding="utf-8")
 
 
 def main(argv=None) -> int:

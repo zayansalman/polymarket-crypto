@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Strategy Lab · Bitcoin Paper Trader</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23172033'/%3E%3Cpath d='M9 14l5-6 5 6z' fill='%234CD4A0'/%3E%3Cpath d='M13 18l5 6 5-6z' fill='%23FF8A80'/%3E%3C/svg%3E">
+  {# Read-only page: no dashboard token, no settings writes. #}
+  <link rel="stylesheet" href="/static/simple.css?v={{ static_version }}">
+</head>
+<body>
+<div class="page">
+  <header class="bar">
+    <div class="brand">
+      <h1>Strategy Lab</h1>
+      <p class="tagline">Replays the bot's recorded history under other rules. It changes nothing.</p>
+    </div>
+    <div class="bar-controls">
+      <a class="btn btn-secondary" href="/">Back to the trader</a>
+      <button id="btn-rerun" class="btn btn-primary" type="button">Run again</button>
+    </div>
+  </header>
+
+  <main class="lab">
+    <p class="lab-scope" id="lab-scope">Analyzing the recorded history. This can take up to a minute.</p>
+
+    <section aria-labelledby="answer-title">
+      <h2 id="answer-title">The short answer</h2>
+      <ul class="lab-answers" id="lab-answers"></ul>
+    </section>
+
+    <section aria-labelledby="exit-title">
+      <h2 id="exit-title">Hold or scalp</h2>
+      <p class="accuracy-note">Holding means keeping the shares until the window settles at $1 or $0.
+        Scalping sells early at the bid when a trade is up 10%, down 8%, near the end of the window,
+        or when the bot's edge disappears. Each sale pays the spread and a second fee.</p>
+      <div class="table-wrap"><table class="strategies lab-table" id="exit-table"></table></div>
+    </section>
+
+    <section aria-labelledby="size-title">
+      <h2 id="size-title">How much to trade</h2>
+      <p class="accuracy-note">Size doesn't change the edge per share, only how big the swings are.
+        "Worst losing streak" is the biggest drop from a high point. Large orders can't always fill,
+        because only so many shares are offered at the asking price.</p>
+      <div class="table-wrap"><table class="strategies lab-table" id="size-table"></table></div>
+    </section>
+
+    <section aria-labelledby="factor-title">
+      <h2 id="factor-title">One change at a time</h2>
+      <p class="accuracy-note">Each row is your current settings with one thing changed.</p>
+      <div class="table-wrap"><table class="strategies lab-table" id="factor-table"></table></div>
+    </section>
+
+    <section aria-labelledby="grid-title">
+      <h2 id="grid-title">Best rules picked from the past</h2>
+      <p class="accuracy-note" id="grid-intro"></p>
+      <div class="table-wrap"><table class="strategies lab-table" id="grid-table"></table></div>
+    </section>
+
+    <p class="accuracy-note lab-method">How this works: every snapshot the bot logged is replayed through
+      the bot's own entry rules, and each window is settled with its real outcome. Profit is after
+      estimated trading fees on every purchase and every early sale. Learned chances only ever use
+      windows from before the ones being tested. The replay sees the bot's logged ticks (about every
+      5 seconds) and ignores its daily spending limit, so its trade counts can differ from the real bot.
+      "Within luck" means the result could easily be chance.</p>
+  </main>
+
+  <footer class="foot">
+    <a href="/">Back to the trader</a>
+    <span id="lab-updated"></span>
+  </footer>
+</div>
+<script src="/static/lab.js?v={{ static_version }}"></script>
+</body>
+</html>

@@ -30,7 +30,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import config as _config  # type: ignore[import-untyped]
 from db import get_config, set_config  # type: ignore[import-untyped]
+from polymarket_bot.strategy import StrategyParams as _StrategyParams
 
 KnobKind = Literal["float", "int", "bool", "enum"]
 
@@ -77,6 +79,56 @@ KNOBS: dict[str, Knob] = {
     "exit_style": Knob(
         "runtime.paper.exit_style", "settle", "enum", "Exit style",
         choices=("settle", "scalp"), group="Paper strategy",
+    ),
+    # Paper entry rules. Defaults come from the env-driven config constants
+    # (and the StrategyParams default for the max price), so an untouched
+    # install behaves exactly as before; overrides apply on the next tick.
+    "paper_entry_edge_min": Knob(
+        "runtime.paper.entry_edge_min", _config.PAPER_ENTRY_EDGE_MIN, "float",
+        "Min entry edge", 0.005, 0.30, group="Paper strategy",
+    ),
+    "paper_entry_edge_max": Knob(
+        "runtime.paper.entry_edge_max", _config.PAPER_ENTRY_EDGE_MAX, "float",
+        "Max entry edge (stale-model guard)", 0.01, 1.0, group="Paper strategy",
+    ),
+    "paper_min_entry_price": Knob(
+        "runtime.paper.min_entry_price", _config.PAPER_MIN_ENTRY_PRICE, "float",
+        "Min entry price", 0.01, 0.99, group="Paper strategy",
+    ),
+    "paper_max_entry_price": Knob(
+        "runtime.paper.max_entry_price",
+        _StrategyParams.__dataclass_fields__["max_entry_price"].default, "float",
+        "Max entry price", 0.01, 0.99, group="Paper strategy",
+    ),
+    "paper_entry_min_remaining_seconds": Knob(
+        "runtime.paper.entry_min_remaining_seconds",
+        _config.PAPER_ENTRY_MIN_REMAINING_SECONDS, "int",
+        "No new entries in the last", 0, 600, unit="s", group="Paper strategy",
+    ),
+    "paper_fee_aware": Knob(
+        "runtime.paper.fee_aware", False, "bool",
+        "Require the edge to beat the taker fee", group="Paper strategy",
+    ),
+    # Learned chances (polymarket_bot/learning.py): when on and a fit has passed
+    # its holdout check, paper entries use the model blended with the market's
+    # own prices instead of the raw model. Paper only; live never reads it.
+    "paper_learning": Knob(
+        "runtime.paper.learning", True, "bool",
+        "Use learned chances", group="Paper strategy",
+    ),
+    # Several open trades (Luke, 2026-11-18): paper may hold up to this many at
+    # once, and in hold-to-settle style make up to this many per window. 1 is
+    # the old one-at-a-time rule. LIVE always holds one (the executor's
+    # singleton gate); live never reads these.
+    "paper_max_open_positions": Knob(
+        "runtime.paper.max_open_positions", 3, "int",
+        "Most trades open at once", 1, 10, group="Paper strategy",
+    ),
+    # A new trade in a window that already holds an open trade waits this long
+    # after the newest one, so one signal isn't bought on several ticks in a row.
+    "paper_entry_spacing_seconds": Knob(
+        "runtime.paper.entry_spacing_seconds", 30, "int",
+        "Wait between trades in one window", 0, 240, unit="s", group="Paper strategy",
     ),
     # --- Live risk limits (polymarket_exec/execution/gate.py, live.py) -----
     "live_daily_loss_halt_usd": Knob(
@@ -165,6 +217,15 @@ def _coerce(name: str, value: Any) -> Any:
     if knob.max_value is not None and value > knob.max_value:
         raise ValueError(f"{name} must be <= {knob.max_value}")
     return value
+
+
+def validate(name: str, value: Any) -> Any:
+    """Coerce + bounds-check ``value`` for knob ``name`` without persisting it.
+
+    Raises ``ValueError`` (dashboard-safe message) like :func:`set` would, so a
+    caller can check several related knobs before writing any of them.
+    """
+    return _coerce(name, value)
 
 
 async def get(name: str) -> Any:

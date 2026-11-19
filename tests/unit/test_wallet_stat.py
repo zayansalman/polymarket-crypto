@@ -9,12 +9,18 @@ from polymarket_exec.ops.dashboard.panels import _wallet, ribbon
 _FUNDER = "0x" + "c1" * 20
 
 
-def _ribbon(wallet: dict | None) -> str:
+def _ribbon(
+    wallet: dict | None = None,
+    *,
+    paper_wallet: dict | None = None,
+    mode: str = "live",
+) -> str:
     return ribbon.render(
-        mode="paper", state="stopped", session_start=None,
+        mode=mode, state="stopped", session_start=None,
         live_pnl=0.0, paper_pnl=0.0, day_pnl=0.0,
         open_pos=[], closed_session=[], tick=None, last_live_at=None,
         wallet=wallet,
+        paper_wallet=paper_wallet,
     )
 
 
@@ -27,6 +33,22 @@ def test_ribbon_shows_wallet_total_cash_and_positions() -> None:
 
 def test_ribbon_wallet_placeholder_without_wallet() -> None:
     assert "no wallet" in _ribbon(None)
+
+
+def test_paper_ribbon_shows_virtual_equity_and_cash() -> None:
+    html = _ribbon(
+        paper_wallet={
+            "initial": 100.0,
+            "cash": 96.0,
+            "positions": 5.0,
+            "equity": 101.0,
+            "mark_source": "cost_basis",
+        },
+        mode="paper",
+    )
+    assert "Paper Equity" in html and "$101.00" in html
+    assert "cash $96.00 · pos $5.00 · virtual · cost-basis mark" in html
+    assert "Wallet" not in html
 
 
 @pytest.fixture

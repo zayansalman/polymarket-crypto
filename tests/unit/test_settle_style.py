@@ -15,6 +15,7 @@ import pytest_asyncio
 import db as _db
 import polymarket_bot.paper as paper
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import market_selection
 from polymarket_exec.execution.live import LiveExecutor
 
 
@@ -92,7 +93,11 @@ def test_scalp_style_still_scalps(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_one_entry_per_window(test_db, monkeypatch: pytest.MonkeyPatch):
+    # "Most trades open at once" = 1 is the original one-at-a-time rule.
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 1)
     monkeypatch.setattr(paper, "_live_executor", None)
+    logger = MagicMock()
+    monkeypatch.setattr(paper, "log", logger)
     snap = _snapshot()
     await paper._maybe_open_position(snap)
     async with paper.connect() as db:
@@ -105,8 +110,16 @@ async def test_one_entry_per_window(test_db, monkeypatch: pytest.MonkeyPatch):
     async with paper.connect() as db:
         async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 1
-    # A new window is a fresh signal.
-    await paper._maybe_open_position(_snapshot(window_slug="btc-updown-5m-1781160300"))
+    logger.info.assert_any_call(
+        "paper_entry.skipped_window_already_traded",
+        window_slug=snap.window_slug,
+        side="Up",
+        reason="settle style allows one entry per window",
+    )
+    # A new 15m window is a fresh signal after the prior position is closed.
+    await paper._maybe_open_position(
+        _snapshot(window_slug="btc-updown-15m-1781160300")
+    )
     async with paper.connect() as db:
         async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
             assert (await cur.fetchone())["n"] == 2
@@ -114,6 +127,211 @@ async def test_one_entry_per_window(test_db, monkeypatch: pytest.MonkeyPatch):
             "SELECT strategy_style FROM paper_positions LIMIT 1"
         ) as cur:
             assert (await cur.fetchone())["strategy_style"] == "settle"
+
+
+@pytest.mark.asyncio
+async def test_open_position_guard_is_logged(
+    test_db, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 1)
+    monkeypatch.setattr(paper, "_live_executor", None)
+    logger = MagicMock()
+    monkeypatch.setattr(paper, "log", logger)
+    snap = _snapshot()
+
+    await paper._maybe_open_position(snap)
+    await paper._maybe_open_position(
+        _snapshot(window_slug="btc-updown-15m-1781160300")
+    )
+
+    logger.info.assert_any_call(
+        "paper_entry.skipped_open_position",
+        window_slug="btc-updown-15m-1781160300",
+        side="Up",
+        open_positions=1,
+        limit=1,
+        reason="another position is already open",
+    )
+    async with paper.connect() as db:
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
+        ) as cur:
+            assert (await cur.fetchone())["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Several open trades (Luke, 2026-11-18)
+# ---------------------------------------------------------------------------
+
+
+async def _open_count(window_slug: str | None = None) -> int:
+    sql = "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
+    params: tuple[str, ...] = ()
+    if window_slug:
+        sql += " AND window_slug = ?"
+        params = (window_slug,)
+    async with paper.connect() as db:
+        async with db.execute(sql, params) as cur:
+            return int((await cur.fetchone())["n"])
+
+
+@pytest.mark.asyncio
+async def test_several_entries_per_window_wait_between_them(
+    test_db, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 3)
+    monkeypatch.setitem(_knobs._cache, "paper_entry_spacing_seconds", 30)
+    monkeypatch.setattr(paper, "_live_executor", None)
+    logger = MagicMock()
+    monkeypatch.setattr(paper, "log", logger)
+
+    await paper._maybe_open_position(_snapshot(created_at="2026-06-11T06:00:00+00:00"))
+    # 10 s later the same signal waits (20 s to go)...
+    await paper._maybe_open_position(_snapshot(created_at="2026-06-11T06:00:10+00:00"))
+    assert await _open_count() == 1
+    logger.info.assert_any_call(
+        "paper_entry.skipped_spacing",
+        window_slug="btc-updown-5m-1781160000",
+        side="Up",
+        wait_seconds=20,
+    )
+    # ...and buys again once 30 s have passed, up to three open at once.
+    await paper._maybe_open_position(_snapshot(created_at="2026-06-11T06:00:30+00:00"))
+    await paper._maybe_open_position(_snapshot(created_at="2026-06-11T06:01:05+00:00"))
+    assert await _open_count() == 3
+    await paper._maybe_open_position(_snapshot(created_at="2026-06-11T06:01:50+00:00"))
+    assert await _open_count() == 3
+    logger.info.assert_any_call(
+        "paper_entry.skipped_open_position",
+        window_slug="btc-updown-5m-1781160000",
+        side="Up",
+        open_positions=3,
+        limit=3,
+        reason="3 positions open, the most allowed at once",
+    )
+
+
+@pytest.mark.asyncio
+async def test_next_window_can_open_while_the_last_one_settles(
+    test_db, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 2)
+    monkeypatch.setitem(_knobs._cache, "paper_entry_spacing_seconds", 30)
+    monkeypatch.setattr(paper, "_live_executor", None)
+    await paper._maybe_open_position(_snapshot())
+    # The wait only counts trades in the same window: the next one opens at once.
+    await paper._maybe_open_position(_snapshot(
+        window_slug="btc-updown-5m-1781160300", created_at="2026-06-11T06:00:03+00:00",
+    ))
+    assert await _open_count() == 2
+
+
+@pytest.mark.asyncio
+async def test_settle_style_caps_entries_per_window_at_the_limit(
+    test_db, monkeypatch: pytest.MonkeyPatch
+):
+    # A Stop sells open trades; re-entering the same window later would pay the
+    # spread again for the same signal, so the window total stays capped.
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 2)
+    monkeypatch.setitem(_knobs._cache, "paper_entry_spacing_seconds", 0)
+    monkeypatch.setattr(paper, "_live_executor", None)
+    await paper._maybe_open_position(_snapshot())
+    await paper._maybe_open_position(_snapshot())
+    async with paper.connect() as db:
+        await db.execute("UPDATE paper_positions SET state = 'closed'")
+        await db.commit()
+    await paper._maybe_open_position(_snapshot())
+    async with paper.connect() as db:
+        async with db.execute("SELECT COUNT(*) AS n FROM paper_positions") as cur:
+            assert (await cur.fetchone())["n"] == 2
+
+
+def test_live_mode_always_holds_one(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 5)
+    monkeypatch.setattr(paper, "_live_executor", None)
+    assert paper.max_open_positions() == 5
+    monkeypatch.setattr(paper, "_live_executor", MagicMock())
+    assert paper.max_open_positions() == 1
+
+
+def test_risk_state_breach_follows_the_limit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 3)
+    assert not paper._risk_state(3, None).startswith("BREACH")
+    assert paper._risk_state(4, None) == "BREACH: more than 3 open BTC paper positions"
+    monkeypatch.setitem(_knobs._cache, "paper_max_open_positions", 1)
+    assert paper._risk_state(2, None) == "BREACH: more than one open BTC paper position"
+
+
+# ---------------------------------------------------------------------------
+# Fees in profit and loss
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_entry_and_settlement_pay_the_taker_fee(
+    test_db, monkeypatch: pytest.MonkeyPatch
+):
+    from polymarket_bot import paper_wallet
+
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", None)
+    start = await paper_wallet.cash_balance()
+    await paper._maybe_open_position(_snapshot())  # $3 at 55¢ -> 5.4545 shares
+    async with paper.connect() as db:
+        async with db.execute("SELECT * FROM paper_positions") as cur:
+            pos = dict(await cur.fetchone())
+        async with db.execute(
+            "SELECT amount_usd, fee_usd, cash_after_usd FROM paper_wallet_transactions"
+        ) as cur:
+            buy = dict(await cur.fetchone())
+    fee = round(0.07 * 0.55 * 0.45 * pos["shares"], 4)
+    assert pos["fees_usd"] == pytest.approx(fee)
+    assert buy["fee_usd"] == pytest.approx(fee)
+    assert buy["amount_usd"] == pytest.approx(-0.55 * pos["shares"], abs=1e-4)
+    assert buy["cash_after_usd"] == pytest.approx(start - 0.55 * pos["shares"] - fee, abs=1e-4)
+
+    # Settles as a win: $1 a share, no fee on the settlement, PnL after the entry fee.
+    await paper._close_position(pos, _snapshot(), 1.0, "WINDOW_ROLL", settled=True)
+    async with paper.connect() as db:
+        async with db.execute("SELECT realized_pnl_usd, fees_usd FROM paper_positions") as cur:
+            row = dict(await cur.fetchone())
+    assert row["realized_pnl_usd"] == pytest.approx(pos["shares"] * 0.45 - fee, abs=1e-4)
+    assert row["fees_usd"] == pytest.approx(fee)
+    assert await paper_wallet.cash_balance() == pytest.approx(
+        start + pos["shares"] * 0.45 - fee, abs=1e-3
+    )
+
+
+@pytest.mark.asyncio
+async def test_paper_sale_pays_a_fee_on_the_way_out_too(
+    test_db, monkeypatch: pytest.MonkeyPatch
+):
+    from polymarket_bot import paper_wallet
+
+    monkeypatch.setattr(paper, "_live_executor", None)
+    monkeypatch.setattr(paper, "_risk_gate", None)
+    await paper._maybe_open_position(_snapshot())
+    async with paper.connect() as db:
+        async with db.execute("SELECT * FROM paper_positions") as cur:
+            pos = dict(await cur.fetchone())
+    entry_fee = paper_wallet.taker_fee(0.55, pos["shares"])
+    exit_fee = paper_wallet.taker_fee(0.60, pos["shares"])
+    await paper._close_position(pos, _snapshot(), 0.60, "STOP_REQUEST")
+    async with paper.connect() as db:
+        async with db.execute("SELECT realized_pnl_usd, fees_usd FROM paper_positions") as cur:
+            row = dict(await cur.fetchone())
+        async with db.execute(
+            "SELECT amount_usd, fee_usd FROM paper_wallet_transactions "
+            "WHERE transaction_type = 'SELL'"
+        ) as cur:
+            sell = dict(await cur.fetchone())
+    assert sell["fee_usd"] == pytest.approx(exit_fee)
+    assert sell["amount_usd"] == pytest.approx(0.60 * pos["shares"], abs=1e-4)
+    assert row["fees_usd"] == pytest.approx(entry_fee + exit_fee, abs=1e-4)
+    assert row["realized_pnl_usd"] == pytest.approx(
+        pos["shares"] * 0.05 - entry_fee - exit_fee, abs=1e-4
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +613,83 @@ async def test_no_strategy_loaded_never_signals_an_entry(test_db, monkeypatch):
     assert snap.signal_side is None
     assert snap.notional_usd == 0.0
     assert snap.reason == paper.NO_STRATEGY_REASON
+
+
+@pytest.mark.asyncio
+async def test_paper_prototype_uses_executable_edge_strategy(test_db, monkeypatch):
+    _stub_market_inputs(monkeypatch, spot=60_004.5)
+
+    snap = await paper._build_snapshot(MagicMock(), allow_paper_strategy=True)
+
+    assert snap.signal_side == "Up"
+    assert 1.0 <= snap.notional_usd <= 5.0
+    assert snap.reason.startswith("enter Up: executable edge")
+
+
+@pytest.mark.asyncio
+async def test_paper_15m_selection_uses_15m_expiry(test_db, monkeypatch):
+    now = 90_123
+    monkeypatch.setattr(paper, "_now", lambda: now)
+    _stub_market_inputs(monkeypatch, spot=60_000.0)
+    await market_selection.set_selection("btc", "15m")
+    fetch_market = paper._fetch_current_market
+
+    snap = await paper._build_snapshot(MagicMock(), allow_paper_strategy=True)
+
+    assert fetch_market.await_args.kwargs == {"asset": "btc", "timeframe": "15m"}
+    assert snap.remaining_seconds == 15 * 60 - 120
+
+
+@pytest.mark.asyncio
+async def test_15m_paper_market_discovery_uses_15m_window(test_db, monkeypatch):
+    now = 90_123
+    expected_start = 90_000
+    requested = []
+
+    async def gamma_get(_client, endpoint, params):
+        requested.append((endpoint, params["slug"]))
+        if params["slug"] == f"btc-updown-15m-{expected_start}":
+            return [{"slug": params["slug"]}]
+        return []
+
+    monkeypatch.setattr(paper, "_gamma_get", gamma_get)
+
+    market = await paper._fetch_current_market(
+        MagicMock(), now, asset="btc", timeframe="15m"
+    )
+
+    assert market["window_start_ts"] == expected_start
+    assert requested == [("markets", f"btc-updown-15m-{expected_start}")]
+
+
+@pytest.mark.asyncio
+async def test_paper_position_settlement_uses_slug_timeframe(monkeypatch):
+    connector = MagicMock()
+    connector.settle_window = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        paper, "_make_settlement_connector", lambda _client, _slug: connector
+    )
+    position = {"window_slug": "btc-updown-15m-90000", "side": "Up"}
+
+    outcome = await paper._settle_position_outcome(position, MagicMock())
+
+    assert outcome is True
+    connector.settle_window.assert_awaited_once_with(
+        90_000, window_seconds=15 * 60
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_ignores_15m_paper_selection(test_db, monkeypatch):
+    _stub_market_inputs(monkeypatch, spot=60_004.5)
+    await market_selection.set_selection("btc", "15m")
+    fetch_market = paper._fetch_current_market
+
+    snap = await paper._build_snapshot(MagicMock())
+
+    assert snap.signal_side is None
+    assert snap.reason == paper.NO_STRATEGY_REASON
+    assert fetch_market.await_args.kwargs == {"asset": "btc", "timeframe": "5m"}
 
 
 @pytest.mark.asyncio

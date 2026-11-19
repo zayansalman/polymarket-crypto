@@ -265,28 +265,38 @@ class ChainlinkSettlementConnector:
             return None
         return float(ts), window.open_price
 
-    async def settle_window(self, window_start_ts: int) -> bool | None:
+    async def settle_window(
+        self, window_start_ts: int, window_seconds: int = FIVE_MINUTES
+    ) -> bool | None:
         """Resolve a finished window: True = Up, False = Down, None = not yet.
 
         Resolution rule (verified on-chain): **Up iff close >= open** — ties
         credit Up. ``completed`` flips ~60-70s after the window ends on
         plain polls, so when ``closePrice`` is still null we fast-settle by
-        reading ``open(N+1)``, which equals ``close(N)`` exactly.
+        reading ``open(N+1)``, which equals ``close(N)`` exactly. Longer
+        windows read the Chainlink print at their exact end timestamp.
         """
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
         window = await self.fetch_window(window_start_ts)
         open_price = window.open_price
-        close_price = window.close_price
         if open_price is None:
             return None
-        if close_price is None:
-            now = self._time_fn()
-            if now < window_start_ts + FIVE_MINUTES:
-                return None  # window still in progress
-            # Fast settlement: close(N) == open(N+1) exactly.
-            next_window = await self.fetch_window(window_start_ts + FIVE_MINUTES)
-            close_price = next_window.open_price
+        if window_seconds == FIVE_MINUTES:
+            close_price = window.close_price
             if close_price is None:
-                return None
+                if self._time_fn() < window_start_ts + window_seconds:
+                    return None  # window still in progress
+                # Fast settlement: close(N) == open(N+1) exactly.
+                next_window = await self.fetch_window(window_start_ts + window_seconds)
+                close_price = next_window.open_price
+        else:
+            if self._time_fn() < window_start_ts + window_seconds:
+                return None  # window still in progress
+            end_window = await self.fetch_window(window_start_ts + window_seconds)
+            close_price = end_window.open_price
+        if close_price is None:
+            return None
         return close_price >= open_price
 
     async def health_check(self) -> dict:

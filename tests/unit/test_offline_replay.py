@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import polars as pl
 
+import tools.offline_replay as offline_replay
 from polymarket_bot.strategy import StrategyParams
 from tools.offline_replay import (
     ReplayEntry,
@@ -178,3 +179,48 @@ def test_aggregate_metrics_handcrafted() -> None:
     # Brier mean = 0.6725/3 ≈ 0.2242
     assert abs(m["brier"] - 0.2242) < 0.001
     assert m["by_side"] == {"Up": 2, "Down": 1}
+
+
+def test_run_loads_prices_for_requested_timeframe(monkeypatch) -> None:
+    markets = pl.DataFrame(
+        [
+            {
+                "market_id": "M15",
+                "resolution": 1,
+                "window_open_ts": 1_700_000_000,
+                "window_close_ts": 1_700_000_900,
+            }
+        ]
+    )
+    empty_spots = pl.DataFrame(
+        schema={"ts_ms": pl.Int64, "price": pl.Float64, "ts_s": pl.Int64}
+    )
+    empty_prices = pl.DataFrame(
+        schema={
+            "market_id": pl.Utf8,
+            "timestamp": pl.Int64,
+            "up_price": pl.Float64,
+            "down_price": pl.Float64,
+        }
+    )
+    price_requests = []
+    monkeypatch.setattr(offline_replay, "load_markets", lambda **_kwargs: markets)
+    monkeypatch.setattr(
+        offline_replay,
+        "load_chainlink_btc_spots",
+        lambda *_args: empty_spots,
+    )
+
+    def load_prices(market_ids, *, crypto, timeframe):
+        price_requests.append((market_ids, crypto, timeframe))
+        return empty_prices
+
+    monkeypatch.setattr(offline_replay, "load_market_prices", load_prices)
+
+    report = offline_replay.run(
+        timeframe="15-minute", crypto="BTC", params=_params()
+    )
+
+    assert price_requests == [(["M15"], "BTC", "15-minute")]
+    assert report["timeframe"] == "15-minute"
+    assert report["metrics"]["n"] == 0

@@ -13,6 +13,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -59,7 +60,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
 
 def _token(client: TestClient) -> dict[str, str]:
     """The dashboard page's LIVE token, as the page's own JS sends it."""
-    html = client.get("/").text
+    html = client.get("/advanced").text
     marker = '<meta name="dashboard-token" content="'
     start = html.index(marker) + len(marker)
     return {"X-Dashboard-Token": html[start: html.index('"', start)]}
@@ -71,14 +72,14 @@ def _live_button(html: str) -> str:
 
 
 def test_live_button_never_disabled_when_unarmed(client: TestClient, unarmed: None) -> None:
-    button = _live_button(client.get("/").text)
+    button = _live_button(client.get("/advanced").text)
     assert "disabled" not in button
     assert 'data-armed="0"' in button
     assert "not armed" in button  # the tooltip still says why Start will refuse
 
 
 def test_live_button_marked_armed_when_gate_passes(client: TestClient, armed: None) -> None:
-    button = _live_button(client.get("/").text)
+    button = _live_button(client.get("/advanced").text)
     assert "disabled" not in button
     assert 'data-armed="1"' in button
     assert "not armed" not in button
@@ -95,7 +96,7 @@ def test_switch_to_live_succeeds_when_unarmed(client: TestClient, unarmed: None)
     assert r["live_armed"] is False
     assert "not armed" in r["live_hint"]
     assert "not armed" not in r["detail"]  # armed-ness is never persisted (can go stale)
-    assert 'class="mode-opt live active' in client.get("/").text
+    assert 'class="mode-opt live active' in client.get("/advanced").text
 
 
 def test_unarmed_live_start_refuses_and_runs_nothing(
@@ -115,11 +116,11 @@ def test_unarmed_live_start_refuses_and_runs_nothing(
 
 def test_switch_back_to_paper(client: TestClient, unarmed: None) -> None:
     assert client.post("/api/mode", json={"mode": "live"}, headers=_token(client)).json()["mode"] == "live"
-    assert 'class="mode-opt live active' in client.get("/").text
+    assert 'class="mode-opt live active' in client.get("/advanced").text
     r = client.post("/api/mode", json={"mode": "paper"}).json()
     assert r["status"] != "error"
     assert r["mode"] == "paper"
-    assert 'class="mode-opt paper active' in client.get("/").text
+    assert 'class="mode-opt paper active' in client.get("/advanced").text
 
 
 @pytest.mark.asyncio
@@ -155,8 +156,8 @@ def _stub_closes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     async def _client():
         yield None
 
-    async def _snapshot(_client: object) -> None:
-        return None
+    async def _snapshot(_client: object, **_kwargs: object) -> MagicMock:
+        return MagicMock(window_slug="btc-updown-5m-1")
 
     closed: list[str] = []
 
@@ -365,7 +366,7 @@ def test_stale_live_selection_hint_asks_to_click_again(client: TestClient, armed
     import asyncio
 
     asyncio.run(_db.set_config("polymarket_bot.requested_mode", "live"))
-    button = _live_button(client.get("/").text)
+    button = _live_button(client.get("/advanced").text)
     assert "click LIVE again" in button
 
 
@@ -386,6 +387,6 @@ def test_dashboard_js_has_no_browser_dialogs(client: TestClient) -> None:
 
 
 def test_unarmed_hint_is_concise(client: TestClient, unarmed: None) -> None:
-    button = _live_button(client.get("/").text)
+    button = _live_button(client.get("/advanced").text)
     assert "not armed: POLYMARKET_PRIVATE_KEY is not set" in button
     assert "fall back to paper" not in button

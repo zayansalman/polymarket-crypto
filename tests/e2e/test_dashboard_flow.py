@@ -28,47 +28,47 @@ def client() -> TestClient:
 
 class TestFullPageLoad:
     def test_page_loads_200(self, client: TestClient):
-        assert client.get("/").status_code == 200
+        assert client.get("/advanced").status_code == 200
 
     def test_page_has_doctype_structure(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         for tag in ("<!DOCTYPE html>", "<html", "</html>", "<head>", "<body>"):
             assert tag in text
 
     def test_page_has_meta_viewport(self, client: TestClient):
-        assert "width=device-width" in client.get("/").text
+        assert "width=device-width" in client.get("/advanced").text
 
     def test_ems_panels_present(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         for panel in ("DECISION ENGINE", "LIVE MARKET", "PERFORMANCE / ALPHA",
                       "TCA", "TRADE BLOTTER", "execution-grid", "ribbon"):
             assert panel in text
 
     def test_ems_content_container(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "execution-content" in text
         assert "activity-content" in text
         assert "backtest-content" in text
 
     def test_strategy_panel_is_gone(self, client: TestClient):
         # The v0 Strategy card was archived (2026-09-13).
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "Edge band" not in text
         assert "AUTO-PAUSE" not in text.upper().replace("AUTO-PAUSED", "")
 
 
 class TestButtonInteractivity:
     def test_start_button(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "handleStart()" in text
         assert "Start" in text
 
     def test_stop_button(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "handleStop()" in text
 
     def test_refresh_button(self, client: TestClient):
-        assert "handleRefresh()" in client.get("/").text
+        assert "handleRefresh()" in client.get("/advanced").text
 
 
 class TestApiRoundTrip:

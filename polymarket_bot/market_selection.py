@@ -1,11 +1,9 @@
 """Operator market selection: which crypto asset + window timeframe to trade.
 
-One global selection shared by paper AND live — mode is a railroad switch over
-the same pipeline, never a different market. Persisted in the config table.
-
-For now this is UI + persistence only: the loop (``paper.py``) still trades the
-BTC 5m family. ``LOOP_SUPPORTED`` names the combos the loop actually honours so
-the dashboard can flag a selection the loop is not yet wired for.
+The selection is persisted in the config table. The paper loop supports BTC 5m
+and 15m; 15m is paper-only and live snapshots stay on BTC 5m.
+``LOOP_SUPPORTED`` names the market selections the paper loop honours so the
+dashboard can flag selections that are not wired.
 """
 from __future__ import annotations
 
@@ -33,7 +31,9 @@ DEFAULT_ASSET = "btc"
 DEFAULT_TIMEFRAME = "5m"
 
 # Combos the trading loop actually trades today.
-LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset({("btc", "5m")})
+LOOP_SUPPORTED: frozenset[tuple[str, str]] = frozenset(
+    {("btc", "5m"), ("btc", "15m")}
+)
 
 ASSET_KEY = "polymarket_bot.market_asset"
 TIMEFRAME_KEY = "polymarket_bot.market_timeframe"

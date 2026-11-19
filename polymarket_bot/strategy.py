@@ -20,6 +20,11 @@ class StrategyParams:
     # soaked PnL by claimed edge was monotonically decreasing (4.5-7%:
     # +7% ROI; >15%: -36% to -57% ROI). Default 1.0 disables the cap.
     entry_edge_max: float = 1.0
+    # Fee-aware entry (opt-in): when > 0, the minimum-edge test uses the edge
+    # LEFT AFTER the venue taker fee ``fee_rate * ask * (1 - ask)`` per share
+    # (polymarket_bot/shadow/fees.py). The stale-model cap still applies to the
+    # raw edge, and confidence/sizing are unchanged. 0.0 = previous behavior.
+    fee_rate: float = 0.0
 
 
 def sigma_per_second(closes: list[float]) -> float:
@@ -137,12 +142,21 @@ def signal_from_executable_edges(
         candidates.append(("Down", edge_down, down_ask))
     if not candidates:
         return None, 0.0, 0.0, "skip: no executable quote (book empty or crossed)"
-    side, edge, entry_price = max(candidates, key=lambda c: c[1])
+
+    def _fee(ask: float) -> float:
+        if params.fee_rate <= 0 or not 0.0 < ask < 1.0:
+            return 0.0
+        return params.fee_rate * ask * (1.0 - ask)
+
+    # With fee_rate == 0 this is exactly the old "largest edge" choice.
+    side, edge, entry_price = max(candidates, key=lambda c: c[1] - _fee(c[2]))
+    net_edge = edge - _fee(entry_price)
     confidence = min(0.99, max(0.0, 0.50 + max(edge, 0.0) * 2.8))
     if remaining_seconds <= params.entry_min_remaining_seconds:
         return None, confidence, 0.0, "skip: too close to window end"
-    if edge < params.entry_edge_min or confidence < params.min_confidence:
-        return None, confidence, 0.0, "skip: edge/confidence below threshold"
+    if net_edge < params.entry_edge_min or confidence < params.min_confidence:
+        suffix = " (after fees)" if params.fee_rate > 0 else ""
+        return None, confidence, 0.0, "skip: edge/confidence below threshold" + suffix
     if edge > params.entry_edge_max:
         # "Too good" is a warning, not an opportunity: the market has moved
         # and the model hasn't caught up. Taking these is adverse selection.
@@ -150,11 +164,12 @@ def signal_from_executable_edges(
     if entry_price < params.min_entry_price or entry_price > params.max_entry_price:
         return None, confidence, 0.0, "skip: entry price too extreme for paper fill model"
     notional = notional_from_confidence(confidence, params)
+    after_fees = f" ({net_edge:+.3f} after fees)" if params.fee_rate > 0 else ""
     return (
         side,
         confidence,
         notional,
-        f"enter {side}: executable edge {edge:+.3f} @ ask {entry_price:.3f}",
+        f"enter {side}: executable edge {edge:+.3f}{after_fees} @ ask {entry_price:.3f}",
     )
 
 

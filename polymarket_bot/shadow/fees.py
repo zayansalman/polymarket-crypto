@@ -13,8 +13,11 @@ worst-case fee is ``0.07 * 0.25 = 0.0175`` (1.75 cents) per share.
 
 from __future__ import annotations
 
+# Venue taker-fee rate for crypto Up/Down markets (see module docstring).
+DEFAULT_TAKER_FEE_RATE = 0.07
 
-def taker_fee_per_share(price: float, fee_rate: float = 0.07) -> float:
+
+def taker_fee_per_share(price: float, fee_rate: float = DEFAULT_TAKER_FEE_RATE) -> float:
     """Polymarket taker fee paid per share at entry price ``price``.
 
     The fee is ``fee_rate * price * (1 - price)``: zero at the certain

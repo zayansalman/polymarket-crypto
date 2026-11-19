@@ -179,10 +179,10 @@ class TestDashboardPresence:
             yield c
 
     def test_regime_card_is_on_the_ems_page(self, client) -> None:
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "MARKET REGIME" in text
         assert "class='card wide'><div class='card-h'>MARKET REGIME" in text
 
     def test_regime_knobs_are_in_settings(self, client) -> None:
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "Regime monitor" in text

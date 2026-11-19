@@ -30,6 +30,7 @@ def render(
     tick: dict[str, Any] | None,
     last_live_at: str | None,
     wallet: dict[str, Any] | None = None,
+    paper_wallet: dict[str, Any] | None = None,
     loss_halt_usd: float | None = None,
     live_peak: float = 0.0,
     paper_peak: float = 0.0,
@@ -144,8 +145,28 @@ def render(
         "</div>"
     )
 
-    # Real Polymarket wallet (cash + open positions), same in paper and live.
-    if wallet is None:
+    # Paper mode is a separate virtual ledger; never imply that real funds are
+    # available or query the configured Polymarket wallet for paper trading.
+    if not is_live:
+        if paper_wallet is None:
+            wallet_stat = s.stat("Paper Equity", "—", "", "virtual wallet unavailable")
+        else:
+            mark_note = {
+                "current_bid": "bid mark",
+                "cost_basis": "cost-basis mark",
+                "mixed": "bid/cost-basis marks",
+                "no_open_positions": "no open positions",
+            }.get(paper_wallet["mark_source"], "mark unavailable")
+            wallet_stat = s.stat(
+                "Paper Equity",
+                s.money(paper_wallet["equity"]),
+                s.cls(paper_wallet["equity"] - paper_wallet["initial"]),
+                (
+                    f"cash {s.money(paper_wallet['cash'])} · "
+                    f"pos {s.money(paper_wallet['positions'])} · virtual · {mark_note}"
+                ),
+            )
+    elif wallet is None:
         wallet_stat = s.stat("Wallet", "—", "", "no wallet")
     else:
         sub = f"cash {s.money(wallet['cash'])} · pos {s.money(wallet['positions'])}"

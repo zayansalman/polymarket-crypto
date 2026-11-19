@@ -153,7 +153,14 @@ def render(
         _btn(
             "timeframe", tf, label, tf == selection.timeframe,
             _net([(selection.asset, tf)]),
-            f"{ms.ASSETS[selection.asset]} {label}",
+            (
+                f"{ms.ASSETS[selection.asset]} {label}"
+                + (
+                    " (paper-only; live stays BTC 5m)"
+                    if selection.asset == "btc" and tf == "15m"
+                    else ""
+                )
+            ),
         )
         for tf, label in ms.TIMEFRAMES.items()
     )

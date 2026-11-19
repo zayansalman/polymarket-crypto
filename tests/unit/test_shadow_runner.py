@@ -177,6 +177,12 @@ def test_model_registry_constants() -> None:
         "cushion_fresh_v7",
         "pricing_fresh_v8",
         "cushion_fresh_v7_f45",
+        # 2026-11-18 learned-chances feature: shadow-only, never dispatchable.
+        "bot_raw_twin_v1",
+        "learned_late_v1",
+        "learned_mid_v1",
+        "raw_wide_v1",
+        "learned_wide_v1",
     ]
     assert list(runner.MODEL_IDS) == expected
     assert set(runner.CANDIDATE_SIGNALS) == {

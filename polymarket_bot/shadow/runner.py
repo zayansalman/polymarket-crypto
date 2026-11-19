@@ -33,6 +33,7 @@ import structlog
 
 from polymarket_bot import strategy
 from polymarket_bot.shadow import ledger, signals
+from polymarket_bot.shadow import learned as learned_signals
 from polymarket_bot.shadow.types import ShadowSignal, SnapshotView
 
 if TYPE_CHECKING:
@@ -124,7 +125,22 @@ _MODELS: dict[
     # Shadow-only, additive — the racing specs v0/v2/v7/v8 are untouched, so the
     # ablation stays intact; f45's own clock starts from the next loop restart.
     "cushion_fresh_v7_f45": signals.cushion_fresh_v7_f45,
+    # Added 2026-11-18 with the learned-chances feature (polymarket_bot/
+    # learning.py). The twin is v0's code on the LIVE Settings rules and the raw
+    # model: the paper bot minus learning, so the main-bot-vs-twin gap measures
+    # what learning adds. The two learned candidates are fixed-spec patterns
+    # from the 11-16..18 replay, judged only on windows logged after they start.
+    "bot_raw_twin_v1": _v0_control,
+    "learned_late_v1": learned_signals.learned_late_v1,
+    "learned_mid_v1": learned_signals.learned_mid_v1,
+    # 2026-11-19 Strategy Lab grid hypotheses (fixed spec, forward-judged).
+    "raw_wide_v1": learned_signals.raw_wide_v1,
+    "learned_wide_v1": learned_signals.learned_wide_v1,
 }
+
+# Candidates that follow the simple screen's live Settings rules instead of the
+# roster's frozen spec (see paper._shadow_params).
+LIVE_RULE_MODELS: frozenset[str] = frozenset({"bot_raw_twin_v1"})
 
 
 # --- Roster registry -----------------------------------------------------------
@@ -142,6 +158,11 @@ MODEL_LABELS: dict[str, str] = {
     "cushion_fresh_v7": "Cushion · Fresh+Capped (v7)",
     "pricing_fresh_v8": "Pricing · Fresh (v8)",
     "cushion_fresh_v7_f45": "Cushion · Fresh≤45s+Capped (v7·f45)",
+    "bot_raw_twin_v1": "Bot without learning (twin)",
+    "learned_late_v1": "Learned · Late entries (L1)",
+    "learned_mid_v1": "Learned · 60–90¢ shares (L2)",
+    "raw_wide_v1": "Raw · No edge cap, 3¢+ after fees (W1)",
+    "learned_wide_v1": "Learned · No edge cap, 3¢+ (W2)",
 }
 MODEL_DESCRIPTIONS: dict[str, str] = {
     "pricing_v0": "v0 baseline · edge 0.045–0.07 · favorites ≥0.50 · hold→resolution",
@@ -149,6 +170,11 @@ MODEL_DESCRIPTIONS: dict[str, str] = {
     "cushion_fresh_v7": "v2 + first-60s windows only + edge claims capped at 0.065 (adverse-selection guard)",
     "pricing_fresh_v8": "v0 in the first 60s of the window only — the freshness gate alone (#144 replay evidence)",
     "cushion_fresh_v7_f45": "v7 with the freshness gate tightened to ≤45s (#149 replay: 46–60s bucket was fee-negative)",
+    "bot_raw_twin_v1": "v0 code on the live Settings rules with the raw model — the paper bot minus learning",
+    "learned_late_v1": "learned chances, edge must beat fees, entries only with 60–180s left",
+    "learned_mid_v1": "learned chances, edge must beat fees, only 60–90¢ shares",
+    "raw_wide_v1": "raw model, edge of 3¢+ after fees, no upper edge cap (Strategy Lab grid, 2026-11-19)",
+    "learned_wide_v1": "learned chances, edge of 3¢+, no upper edge cap (Strategy Lab grid, 2026-11-19)",
 }
 
 # Candidate signal fns for the LIVE dispatch. v0 is intentionally absent — it
@@ -176,9 +202,15 @@ def candidate_signal(
 
 
 async def record_shadow(
-    snapshot: PaperSnapshot, params: strategy.StrategyParams
+    snapshot: PaperSnapshot,
+    params: strategy.StrategyParams,
+    live_params: strategy.StrategyParams | None = None,
 ) -> None:
-    """Log each candidate's would-be entry for this tick's window (idempotent)."""
+    """Log each candidate's would-be entry for this tick's window (idempotent).
+
+    ``params`` is the roster's frozen spec; models in LIVE_RULE_MODELS get
+    ``live_params`` (the Settings rules) when given.
+    """
     if snapshot.feed_degraded:
         return
     if not snapshot.has_executable_quote:
@@ -186,7 +218,8 @@ async def record_shadow(
     view = build_view(snapshot)
     for model_id, fn in _MODELS.items():
         try:
-            sig = fn(view, params)
+            use_live = live_params is not None and model_id in LIVE_RULE_MODELS
+            sig = fn(view, live_params if use_live else params)
         except Exception as exc:  # noqa: BLE001 — a candidate must never break the loop
             log.warning("shadow.signal_error", model_id=model_id, error=str(exc))
             continue

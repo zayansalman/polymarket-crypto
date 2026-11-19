@@ -220,6 +220,26 @@ async def test_settle_window_fast_path_reads_next_open():
 
 
 @pytest.mark.asyncio
+async def test_settle_15m_window_reads_chainlink_print_at_15m_close():
+    connector, calls, _ = _connector_with_responses(
+        [
+            {"openPrice": 61000.0, "closePrice": 61002.0, "completed": True},
+            {"openPrice": 61010.0, "closePrice": None, "completed": False},
+        ],
+        now=2_000_000_000.0,
+    )
+
+    up_won = await connector.settle_window(
+        1_999_999_000, window_seconds=15 * 60
+    )
+
+    assert up_won is True
+    assert len(calls) == 2
+    q = dict(httpx.QueryParams(calls[1].url.query.decode()))
+    assert q["eventStartTime"] == "1999999900"
+
+
+@pytest.mark.asyncio
 async def test_settle_window_tie_resolves_up():
     connector, _, _ = _connector_with_responses(
         [{"openPrice": 61010.0, "closePrice": 61010.0, "completed": True}]

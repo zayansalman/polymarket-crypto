@@ -140,6 +140,12 @@ async def execution_view_html() -> str:
     current_price = max(_px) if _px else None
 
     loss_halt_current = await _knobs.get("live_daily_loss_halt_usd")
+    paper_wallet = (
+        await data.paper_wallet_snapshot(tick) if mode == "paper" else None
+    )
+    real_wallet = (
+        await _wallet.wallet_snapshot() if mode == "live" else None
+    )
     ribbon_html = ribbon.render(
         mode=mode,
         state=state,
@@ -151,7 +157,8 @@ async def execution_view_html() -> str:
         closed_session=closed_session,
         tick=tick,
         last_live_at=last_live_at,
-        wallet=await _wallet.wallet_snapshot(),
+        wallet=real_wallet,
+        paper_wallet=paper_wallet,
         loss_halt_usd=loss_halt_current,
         live_peak=live_peak,
         paper_peak=paper_peak,

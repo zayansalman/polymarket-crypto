@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Bitcoin Paper Trader</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23172033'/%3E%3Cpath d='M9 14l5-6 5 6z' fill='%234CD4A0'/%3E%3Cpath d='M13 18l5 6 5-6z' fill='%23FF8A80'/%3E%3C/svg%3E">
+  {# No dashboard-token meta tag on purpose: this page can never arm LIVE. #}
+  {# ".b5": page files can ship without a restart (templates reload live), so bump
+     this suffix to make browsers fetch them at once. (.b6: several open trades, fees in P&L) #}
+  <link rel="stylesheet" href="/static/simple.css?v={{ static_version }}.b6">
+</head>
+<body>
+<div class="page">
+  <header class="bar">
+    <div class="brand">
+      <h1>Bitcoin Paper Trader</h1>
+      <p class="tagline" id="tagline">Practice money only. No real orders are sent.</p>
+    </div>
+    <div class="bar-controls">
+      <p class="status" id="status" data-state="connecting" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-text">Connecting to the bot</span>
+      </p>
+      <button id="btn-settings" class="btn btn-secondary" type="button"
+        aria-controls="settings-panel">Settings</button>
+      <button id="btn-start" class="btn btn-primary" type="button" hidden>Start paper trading</button>
+      <button id="btn-stop" class="btn btn-secondary" type="button" hidden>Stop</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" role="alert" hidden>
+    <p id="banner-text"></p>
+    <button id="banner-action" class="btn btn-secondary btn-small" type="button" hidden></button>
+  </div>
+
+  <main id="main">
+    <section class="buy" id="buy" role="status" aria-live="polite" hidden>
+      <p class="buy-head" id="buy-head"></p>
+      <p class="buy-detail" id="buy-detail"></p>
+      <p class="buy-meta" id="buy-meta"></p>
+    </section>
+
+    <section class="now" aria-labelledby="window-title">
+      <div class="now-head">
+        <h2 id="window-title">Bitcoin up or down</h2>
+        <div class="segmented" role="group" aria-label="Window length">
+          <button type="button" data-tf="5m" aria-pressed="true">5 min</button>
+          <button type="button" data-tf="15m" aria-pressed="false">15 min</button>
+        </div>
+      </div>
+
+      <div class="track" aria-hidden="true">
+        <div class="track-bar">
+          <div class="track-fill" id="track-fill"></div>
+          <div class="track-cutoff" id="track-cutoff"></div>
+        </div>
+        <div class="track-labels">
+          <span id="track-start"></span>
+          <span id="track-end"></span>
+        </div>
+      </div>
+
+      <p class="countdown"><span class="countdown-value" id="countdown">–:––</span>
+        <span class="countdown-label" id="countdown-label">left in this window</span></p>
+
+      <div class="readouts" id="readouts">
+        <dl class="prices">
+          <div><dt>Bitcoin now</dt><dd id="btc-now">—</dd></div>
+          <div><dt>Price to beat</dt><dd id="btc-beat">—</dd></div>
+          <div><dt>Difference</dt><dd id="btc-diff">—</dd></div>
+        </dl>
+        <dl class="odds">
+          <div><dt>Up share costs</dt><dd id="up-cost">—</dd></div>
+          <div><dt>Down share costs</dt><dd id="down-cost">—</dd></div>
+          <div><dt>Bot's chance of Up</dt><dd id="chance-up">—</dd><dd class="sub" id="chance-raw" hidden></dd></div>
+        </dl>
+        <p class="readouts-note" id="readouts-note" hidden></p>
+      </div>
+
+      <div class="verdict" id="verdict" data-tone="idle" aria-live="polite">
+        <p class="verdict-head" id="verdict-head">Connecting to the bot.</p>
+        <p class="verdict-detail" id="verdict-detail"></p>
+      </div>
+    </section>
+
+    <section class="money" aria-label="Practice account">
+      <div class="balance">
+        <h2>Practice balance</h2>
+        <p class="hero-figure" id="balance">—</p>
+        <p class="balance-delta" id="balance-delta"></p>
+        <p class="balance-line" id="balance-stats"></p>
+        <p class="balance-line balance-fees" id="balance-fees"></p>
+      </div>
+      <div class="open-trade">
+        <h2 id="position-title">Open trade</h2>
+        <div id="position"><p class="muted">No open trade.</p></div>
+      </div>
+    </section>
+
+    <section class="chart-section" aria-labelledby="chart-title">
+      <h2 id="chart-title">Balance over time</h2>
+      <div class="chart" id="chart"></div>
+    </section>
+
+    <section class="accuracy-section" aria-labelledby="accuracy-title">
+      <h2 id="accuracy-title">How accurate is the bot?</h2>
+      <p class="accuracy-summary" id="accuracy-summary">Accuracy appears after the first settled trades.</p>
+      <div class="table-wrap" id="accuracy-wrap" hidden>
+        <table class="accuracy">
+          <thead>
+            <tr>
+              <th scope="col">When the bot said it had</th>
+              <th scope="col" class="num">Trades</th>
+              <th scope="col" class="num">It won</th>
+              <th scope="col" class="num">Price paid</th>
+              <th scope="col" class="num">Profit after fees</th>
+            </tr>
+          </thead>
+          <tbody id="accuracy-body"></tbody>
+        </table>
+      </div>
+      <p class="accuracy-note">A bot with a real edge wins more often than the price it pays. A 70¢ share
+        needs to win more than 70% of the time, plus a little for fees, to make money.</p>
+
+      <h3 class="subhead" id="learning-title">What it has learned</h3>
+      <p class="learning-status" id="learning-status">Learning starts a few minutes after the bot starts.</p>
+
+      <h3 class="subhead" id="strategies-title">Strategies tested side by side</h3>
+      <p class="accuracy-note">Each strategy is counted at 5 shares a trade on practice money, with its own
+        rules on the same windows (this bot's bigger trades are scaled down to 5 shares here). Profit is after
+        fees. Most early differences are luck, so a strategy has to stay
+        ahead by more than luck before it means anything.</p>
+      <p class="accuracy-note">To test settle vs scalp, trade sizes and other rules on the recorded
+        history, open the <a href="/lab">Strategy Lab</a>.</p>
+      <div class="table-wrap">
+        <table class="strategies" aria-labelledby="strategies-title">
+          <thead>
+            <tr>
+              <th scope="col">Strategy</th>
+              <th scope="col" class="num">Trades</th>
+              <th scope="col" class="num">Won</th>
+              <th scope="col" class="num col-paid">Price paid</th>
+              <th scope="col" class="num">Profit after fees</th>
+              <th scope="col">Verdict</th>
+            </tr>
+          </thead>
+          <tbody id="strategies-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="trades-section" aria-labelledby="trades-title">
+      <h2 id="trades-title">Trades</h2>
+      <div class="table-wrap">
+        <table class="trades" id="trades">
+          <thead>
+            <tr>
+              <th scope="col">Window</th>
+              <th scope="col">Bet</th>
+              <th scope="col" class="num col-paid">Paid</th>
+              <th scope="col">Outcome</th>
+              <th scope="col" class="num">Profit</th>
+            </tr>
+          </thead>
+          <tbody id="trades-body"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="trades-empty" hidden>No trades yet. When the bot finds a good enough price, its trades show up here.</p>
+    </section>
+
+    <section class="more">
+      <details class="settings" id="settings-panel">
+        <summary>Trading settings</summary>
+        <p class="settings-intro settings-restart" id="settings-restart" hidden>Restart the app to
+          use these settings. The note at the top of the page says how.</p>
+        <form class="settings-form" id="settings-form" novalidate>
+          <p class="settings-intro">Changes apply on the bot's next check. No restart needed. These only
+            change practice trading.</p>
+
+          <div class="setting">
+            <label for="set-shares">Trade size</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-shares" min="5" step="1" inputmode="decimal"><span>shares a trade</span>
+            </div>
+            <p class="setting-help">A share pays $1 if it wins, so 5 shares at 70¢ cost $3.50. Polymarket's
+              smallest order is 5 shares. Bigger trades don't improve the odds, they only make the wins and
+              losses bigger.</p>
+            <p class="setting-help setting-warning" id="shares-note" hidden>Trade size is currently a dollar
+              range, which the bot's $3-per-trade safety limit blocks. Saving switches it to shares.</p>
+          </div>
+
+          <div class="setting">
+            <label for="set-max-open">Most trades open at once</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-max-open" step="1" min="1" max="10" inputmode="numeric"><span>trades</span>
+            </div>
+            <p class="setting-help">1 means one trade at a time. With more, the bot can buy again in a window
+              it already holds and start the next window before the last one settles. Trades in the same
+              window win or lose together, so extra trades make the swings bigger, like a bigger trade size.
+              <span class="default" data-default="max-open"></span></p>
+          </div>
+
+          <div class="setting">
+            <label for="set-spacing">Wait between trades in a window</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-spacing" step="5" min="0" max="240" inputmode="numeric"><span>seconds</span>
+            </div>
+            <p class="setting-help">After a trade, the bot waits at least this long before buying again in the
+              same window, so it doesn't buy one price several times in a row.
+              <span class="default" data-default="spacing"></span></p>
+          </div>
+
+          <div class="setting">
+            <label for="set-edge-min">Minimum edge</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-edge-min" step="0.5" min="0.5" inputmode="decimal"><span>¢ a share</span>
+            </div>
+            <p class="setting-help">How much the bot's estimate must beat the asking price before it buys.
+              Higher means fewer, pickier trades. <span class="default" data-default="edge-min"></span></p>
+          </div>
+
+          <div class="setting">
+            <label for="set-edge-max">Skip edges bigger than</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-edge-max" step="0.5" min="1" inputmode="decimal"><span>¢ a share</span>
+            </div>
+            <p class="setting-help">A gap this big usually means the bot's data is behind the market, so it
+              sits out. <span class="default" data-default="edge-max"></span></p>
+          </div>
+
+          <div class="setting">
+            <label for="set-price-min">Share prices to buy</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-price-min" step="1" min="1" max="99" inputmode="decimal"
+                aria-label="Lowest share price in cents"><span>¢ to</span>
+              <input type="number" id="set-price-max" step="1" min="1" max="99" inputmode="decimal"
+                aria-label="Highest share price in cents"><span>¢</span>
+            </div>
+            <p class="setting-help">Expensive shares win more often but lose more when they miss: a 95¢ share
+              risks 95¢ to make 5¢. <span class="default" data-default="price"></span></p>
+          </div>
+
+          <div class="setting">
+            <label for="set-cutoff">No new trades in the last</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-cutoff" step="5" min="0" max="600" inputmode="numeric"><span>seconds of a window</span>
+            </div>
+            <p class="setting-help"><span class="default" data-default="cutoff"></span></p>
+          </div>
+
+          <div class="setting">
+            <label for="set-tick">Check the market every</label>
+            <div class="setting-control inline-input">
+              <input type="number" id="set-tick" step="1" min="1" max="60" inputmode="numeric"><span>seconds</span>
+            </div>
+            <p class="setting-help"><span class="default" data-default="tick"></span></p>
+          </div>
+
+          <div class="setting setting-toggle">
+            <label class="choice" for="set-learning"><input type="checkbox" id="set-learning">
+              Use learned chances</label>
+            <p class="setting-help">Every hour the bot checks how its past chances turned out and corrects them,
+              partly trusting the market's own prices. It uses the correction only while, replayed with your
+              settings over past windows, the corrected chances make more money after fees than its raw math.
+              <span class="default" data-default="learning"></span></p>
+          </div>
+
+          <div class="setting setting-toggle">
+            <label class="choice" for="set-fee-aware"><input type="checkbox" id="set-fee-aware">
+              Edge must beat trading fees</label>
+            <p class="setting-help">The bot subtracts the trading fee (about 1.75¢ a share at 50¢, less near
+              0¢ or 100¢) before comparing its edge with the minimum. The practice balance pays the fee
+              either way. <span class="default" data-default="fee"></span></p>
+          </div>
+
+          <p class="settings-error" id="settings-error" role="alert" hidden></p>
+          <div class="settings-actions">
+            <button type="submit" class="btn btn-primary" id="settings-save">Save settings</button>
+            <button type="button" class="btn btn-secondary" id="settings-undo">Undo changes</button>
+            <button type="button" class="btn btn-quiet" id="settings-reset">Reset rules to defaults</button>
+          </div>
+        </form>
+      </details>
+      <details>
+        <summary>How the bot decides</summary>
+        <div class="rules" id="rules"></div>
+      </details>
+      <details>
+        <summary>Recent activity</summary>
+        <ol class="activity" id="activity"></ol>
+      </details>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <a href="/lab">Strategy Lab</a>
+    <a href="/advanced">Advanced console</a>
+    <span id="updated">Not connected yet</span>
+  </footer>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<noscript><p class="noscript">This screen needs JavaScript to show live data.</p></noscript>
+<script src="/static/simple.js?v={{ static_version }}.b6"></script>
+</body>
+</html>

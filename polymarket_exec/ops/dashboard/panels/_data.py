@@ -20,6 +20,71 @@ async def latest_tick() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+async def paper_wallet_snapshot(
+    tick: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Virtual wallet cash and equity, marking holdings at current bids when available."""
+    async with connect() as db:
+        await db.execute("BEGIN")
+        async with db.execute(
+            "SELECT initial_cash_usd, cash_usd FROM paper_wallet WHERE wallet_id = 1"
+        ) as cur:
+            wallet = await cur.fetchone()
+        if wallet is None:
+            return None
+        async with db.execute(
+            """
+            SELECT p.position_id, p.window_slug, p.side, p.shares, p.entry_price
+              FROM paper_positions p
+             WHERE p.state = 'open' AND p.mode = 'paper'
+               AND EXISTS (
+                 SELECT 1 FROM paper_wallet_transactions t
+                  WHERE t.position_id = p.position_id
+                    AND t.transaction_type = 'BUY'
+               )
+             ORDER BY p.position_id
+            """
+        ) as cur:
+            positions = [dict(row) for row in await cur.fetchall()]
+
+    current_window = (tick or {}).get("window_slug")
+    marked_value = 0.0
+    current_bid_count = 0
+    cost_basis_count = 0
+    for position in positions:
+        mark = float(position["entry_price"] or 0.0)
+        side_prefix = "up" if str(position["side"]).upper() == "UP" else "down"
+        bid = (tick or {}).get(f"{side_prefix}_best_bid")
+        if (
+            position["window_slug"] == current_window
+            and isinstance(bid, (int, float))
+            and 0.0 <= float(bid) <= 1.0
+        ):
+            mark = float(bid)
+            current_bid_count += 1
+        else:
+            cost_basis_count += 1
+        marked_value += float(position["shares"] or 0.0) * mark
+
+    if not positions:
+        mark_source = "no_open_positions"
+    elif current_bid_count and cost_basis_count:
+        mark_source = "mixed"
+    elif current_bid_count:
+        mark_source = "current_bid"
+    else:
+        mark_source = "cost_basis"
+    cash = float(wallet["cash_usd"])
+    return {
+        "initial": float(wallet["initial_cash_usd"]),
+        "cash": cash,
+        "positions": round(marked_value, 4),
+        "equity": round(cash + marked_value, 4),
+        "open_positions": len(positions),
+        "mark_source": mark_source,
+    }
+
+
 async def last_live_order_at() -> str | None:
     """ISO timestamp of the most recent action recorded in live_orders.
 

@@ -129,7 +129,7 @@ class TestMarketSelection:
             assert r.json()["status"] == "error"
 
     def test_page_renders_selector(self, client: TestClient) -> None:
-        html = client.get("/").text
+        html = client.get("/advanced").text
         assert "id=\"market-selector\"" in html
         assert "data-asset='eth'" in html
         assert "data-timeframe='1h'" in html
@@ -157,3 +157,7 @@ class TestMarketSelectorGlow:
         assert "glow-neg' data-asset='btc'" in mks.render(
             selection=MarketSelection("btc", "5m"), open_pnl=pnl
         )
+        html_15m = mks.render(
+            selection=MarketSelection("btc", "15m"), open_pnl={}
+        )
+        assert "BTC 15m (paper-only; live stays BTC 5m)" in html_15m

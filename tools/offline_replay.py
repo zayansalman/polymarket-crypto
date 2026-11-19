@@ -131,9 +131,9 @@ def load_market_prices(
 ) -> pl.DataFrame:
     """Per-market Up/Down mid-price evolution for the requested markets.
 
-    Reads every BTC/5-min partition file (dataset is Hive-partitioned by
-    crypto + timeframe) and concats. The full set is ~33 files at the time
-    of writing — small enough to load in one shot.
+    Reads every partition file for the requested crypto and timeframe
+    (dataset is Hive-partitioned by both) and concatenates the matching
+    market rows.
     """
     files = _list_partition_files("prices", crypto, timeframe)
     if not files:
@@ -346,7 +346,9 @@ def run(
     ts_max = int(markets["window_close_ts"].max())
     chainlink = load_chainlink_btc_spots(ts_min - 120, ts_max + 120)
     market_ids = markets["market_id"].to_list()
-    prices_df = load_market_prices(market_ids)
+    prices_df = load_market_prices(
+        market_ids, crypto=crypto, timeframe=timeframe
+    )
     prices_by_market = {mid: g for mid, g in prices_df.group_by("market_id")}
 
     entries: list[ReplayEntry] = []

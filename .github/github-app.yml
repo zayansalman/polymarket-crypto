@@ -1,0 +1,5 @@
+scripts:
+  - name: Run paper BTC trials
+    command: py -3.11 tools/run_paper_trials.py
+  - name: Install local paper auto-start
+    command: py -3.11 tools/windows_paper_startup.py install

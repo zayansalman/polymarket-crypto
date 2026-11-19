@@ -11,6 +11,8 @@ import aiosqlite
 from config import DB_PATH
 from logging_setup import redact_secrets
 
+PAPER_WALLET_INITIAL_CASH_USD = 100.0
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_feed (
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS paper_ticks (
   down_bid_size REAL,
   down_ask_size REAL,
   quote_source TEXT,
-  gamma_up_price REAL
+  gamma_up_price REAL,
+  learned_up_prob REAL
 );
 CREATE INDEX IF NOT EXISTS idx_paper_ticks_created
   ON paper_ticks(created_at DESC);
@@ -91,6 +94,28 @@ CREATE INDEX IF NOT EXISTS idx_paper_positions_state
   ON paper_positions(state);
 CREATE INDEX IF NOT EXISTS idx_paper_positions_opened
   ON paper_positions(opened_at DESC);
+
+CREATE TABLE IF NOT EXISTS paper_wallet (
+  wallet_id INTEGER PRIMARY KEY CHECK(wallet_id = 1),
+  initial_cash_usd REAL NOT NULL,
+  cash_usd REAL NOT NULL,
+  initialized_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paper_wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  position_id INTEGER NOT NULL,
+  window_slug TEXT NOT NULL,
+  transaction_type TEXT NOT NULL
+    CHECK(transaction_type IN ('BUY', 'SELL', 'SETTLEMENT')),
+  amount_usd REAL NOT NULL,
+  cash_after_usd REAL NOT NULL,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(position_id, transaction_type)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_wallet_one_exit
+  ON paper_wallet_transactions(position_id)
+  WHERE transaction_type IN ('SELL', 'SETTLEMENT');
 
 CREATE TABLE IF NOT EXISTS live_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -265,6 +290,17 @@ POSITION_COLUMN_MIGRATIONS = {
     # executor was attached. Legacy rows are backfilled by joining
     # live_orders on window_slug.
     "mode": "TEXT",
+    # Paper only: taker fees this position paid (entry, plus a sale's exit
+    # fee). realized_pnl_usd is after them; gross = realized + fees. NULL on
+    # live rows (the executor's PnL is already fee-true, #133).
+    "fees_usd": "REAL",
+}
+
+# Paper wallet: the taker fee on each fill. Cash moves by amount_usd - fee_usd
+# (see polymarket_bot/paper_wallet.py). Rows from before fee booking get theirs
+# filled in once by paper_wallet.book_past_fees.
+WALLET_TXN_COLUMN_MIGRATIONS = {
+    "fee_usd": "REAL NOT NULL DEFAULT 0",
 }
 
 # Issue #22: executable top-of-book quotes journaled per tick. Rows without
@@ -281,6 +317,7 @@ TICK_COLUMN_MIGRATIONS = {
     "down_ask_size": "REAL",
     "quote_source": "TEXT",
     "gamma_up_price": "REAL",
+    "learned_up_prob": "REAL",
 }
 
 
@@ -361,6 +398,9 @@ async def init_db() -> None:
         await db.executescript(SCHEMA)
         await _rename_legacy_config_keys(db)
         await _migrate_columns(db, "paper_positions", POSITION_COLUMN_MIGRATIONS)
+        await _migrate_columns(
+            db, "paper_wallet_transactions", WALLET_TXN_COLUMN_MIGRATIONS
+        )
         await _migrate_columns(db, "paper_ticks", TICK_COLUMN_MIGRATIONS)
         await _migrate_columns(db, "live_orders", LIVE_ORDERS_COLUMN_MIGRATIONS)
         await _migrate_columns(
@@ -369,6 +409,18 @@ async def init_db() -> None:
         await _backfill_position_mode(db)
         await _backfill_live_order_mode(db)
         await _backfill_placement_status(db)
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO paper_wallet(
+              wallet_id, initial_cash_usd, cash_usd, initialized_at
+            ) VALUES (1, ?, ?, ?)
+            """,
+            (
+                PAPER_WALLET_INITIAL_CASH_USD,
+                PAPER_WALLET_INITIAL_CASH_USD,
+                utc_now_iso(),
+            ),
+        )
         await db.commit()
 
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -47,7 +48,9 @@ from config import (
     PRINT_GRANULARITY_USD,
 )
 import config as _config
+from polymarket_bot import market_selection as _market_selection
 from polymarket_bot import runtime_knobs as _knobs
+from polymarket_bot import paper_wallet
 from db import connect, get_config, journal_live_order, notify, set_config
 from logging_setup import get_logger
 from polymarket_exec.connectors.chainlink_settlement import (
@@ -64,12 +67,15 @@ from polymarket_exec.execution.gate import (
     RiskGate,
     build_gate_from_config,
 )
+from polymarket_bot.shadow.fees import DEFAULT_TAKER_FEE_RATE as PAPER_TAKER_FEE_RATE
+from polymarket_bot import learning as _learning
 from polymarket_bot.shadow import ledger as shadow_ledger
 from polymarket_bot.shadow import runner as shadow_runner
 from polymarket_bot.strategy import (
     StrategyParams,
     drift_per_second,
     fair_up_probability,
+    signal_from_executable_edges,
     sigma_per_second,
 )
 
@@ -91,10 +97,7 @@ _chainlink_feed: ChainlinkWsFeed | None = None
 # provisional revision settles, so one stabilized REST read per window.
 _reference_cache: dict[int, float] = {}
 
-# The loop's decision slot. The v0 strategy (entry gates, auto-pause, param
-# tuner, calibration, model picker) was archived 2026-09-13 — see
-# docs/archive/v0-strategy.md. Until a new strategy is plugged in here, every
-# tick journals this reason and no entry is ever taken, in paper AND live.
+# Strategy-disabled snapshots (including live snapshots) keep this reason.
 NO_STRATEGY_REASON = "skip: no strategy loaded"
 
 # --- Loop heartbeat + generation (#147 watchdog) --------------------------
@@ -129,15 +132,14 @@ _MIN_CHAINLINK_SIGMA_POINTS = 30
 
 BINANCE_API = BINANCE_API_BASE
 FIVE_MINUTES = MARKET_TIMEFRAME_MINUTES * 60
+WINDOW_SECONDS = {"5m": FIVE_MINUTES, "15m": 15 * 60}
 
 
 def _strategy_params() -> StrategyParams:
-    """StrategyParams for the shadow forward-tester's candidate roster.
+    """Paper prototype parameters and sizing for the shadow candidate roster.
 
-    Entry thresholds are the archived v0 defaults from ``config`` — the trading
-    loop itself no longer reads them. Sizing reads the in-memory knob cache
-    (``runtime_knobs.cached``), refreshed once per tick by ``paper_tick_once``,
-    so this stays a plain sync function.
+    Thresholds are heuristic defaults, not a claim of profitability. Sizing
+    reads the runtime knob cache refreshed once per paper tick.
     """
     # Operator runtime per-trade cap (#50): when the dashboard control is set,
     # it governs the sizing ceiling too (unified with the gate's effective cap),
@@ -147,9 +149,31 @@ def _strategy_params() -> StrategyParams:
     max_trade_usd = (
         override if override is not None else _knobs.cached("paper_max_trade_usd")
     )
+    # Entry rules are runtime knobs (defaults = the env config values), so the
+    # simple screen's Settings panel changes them on the next tick, no restart.
     return StrategyParams(
         min_trade_usd=_knobs.cached("paper_min_trade_usd"),
         max_trade_usd=max_trade_usd,
+        entry_edge_min=float(_knobs.cached("paper_entry_edge_min")),
+        min_confidence=_config.PAPER_MIN_CONFIDENCE,
+        entry_min_remaining_seconds=int(_knobs.cached("paper_entry_min_remaining_seconds")),
+        entry_edge_max=float(_knobs.cached("paper_entry_edge_max")),
+        min_entry_price=float(_knobs.cached("paper_min_entry_price")),
+        max_entry_price=float(_knobs.cached("paper_max_entry_price")),
+        fee_rate=PAPER_TAKER_FEE_RATE if _knobs.cached("paper_fee_aware") else 0.0,
+    )
+
+
+def _shadow_params() -> StrategyParams:
+    """Frozen entry rules for the shadow roster.
+
+    Each candidate races on ONE spec, so the roster reads the env config
+    values, never the simple screen's Settings knobs (which _strategy_params
+    follows). Only the twins in shadow_runner.LIVE_RULE_MODELS get live rules.
+    """
+    return StrategyParams(
+        min_trade_usd=_knobs.cached("paper_min_trade_usd"),
+        max_trade_usd=_knobs.cached("paper_max_trade_usd"),
         entry_edge_min=_config.PAPER_ENTRY_EDGE_MIN,
         min_confidence=_config.PAPER_MIN_CONFIDENCE,
         entry_min_remaining_seconds=_config.PAPER_ENTRY_MIN_REMAINING_SECONDS,
@@ -231,6 +255,11 @@ class PaperSnapshot:
     # table — and defaults to 0.0 (neutral regime) so historical replays and
     # the many existing constructors are unaffected.
     drift_per_second: float = 0.0
+    # Learned Up chance (polymarket_bot/learning.py) the PAPER entry decision
+    # used this tick, or None when learning was off/inactive. fair_up_prob stays
+    # the raw pricing model so the journal, the shadow roster and the replay
+    # tools keep one meaning for it.
+    decision_up_prob: float | None = None
 
     @property
     def has_executable_quote(self) -> bool:
@@ -427,6 +456,10 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
     else:
         await _set_detail("BTC paper loop running. No real orders will be placed.")
         await notify("paper_started", "BTC paper bot started")
+        try:
+            await _learning.load_saved()
+        except Exception as e:  # noqa: BLE001 — learning must never block the loop
+            log.warning("learning.load_failed", error=str(e))
     log.info("paper_loop.started", mode=mode)
 
     # Set when the daily loss halt trips (#76): the loop stops the bot and the
@@ -452,6 +485,11 @@ async def run_paper_loop(stop_event: threading.Event, mode: str | None = None) -
             # Paper breach (#146): entries pause, the loop and the shadow
             # race keep running — notify once per episode.
             await _notify_paper_halt_pause(_risk_gate, mode)
+            if _live_executor is None:
+                try:
+                    _learning.schedule_refit()
+                except Exception as e:  # noqa: BLE001 — never break the loop
+                    log.warning("learning.schedule_failed", error=str(e))
             _beat()  # #147: iteration completed (even a failed tick beats)
             await _sleep_interruptible(stop_event, float(_knobs.cached('paper_tick_seconds')))
     finally:
@@ -527,7 +565,9 @@ async def paper_tick_once() -> PaperSnapshot:
     # an operator change applies without a restart, same as the gate above.
     await _knobs.refresh_cache()
     async with _make_settlement_client() as client:
-        snapshot = await _build_snapshot(client)
+        snapshot = await _build_snapshot(
+            client, allow_paper_strategy=_live_executor is None
+        )
         await _log_tick(snapshot)
         await _close_due_positions(snapshot, client)
         if not kill_active:
@@ -563,16 +603,22 @@ async def force_close_open_positions(exit_reason: str = "STOP_REQUEST") -> int:
     if not positions:
         return 0
     async with _make_settlement_client() as client:
-        snapshot = await _build_snapshot(client)
-    closed = 0
-    for pos in positions:
-        if await _close_position(
-            pos,
-            snapshot,
-            _current_price_for_side(snapshot, pos["side"]),
-            exit_reason,
-        ):
-            closed += 1
+        snapshot = await _build_snapshot(
+            client, allow_paper_strategy=_live_executor is None
+        )
+        closed = 0
+        for pos in positions:
+            if pos["window_slug"] != snapshot.window_slug:
+                if await _close_rolled_position(pos, snapshot, client):
+                    closed += 1
+                continue
+            if await _close_position(
+                pos,
+                snapshot,
+                _current_price_for_side(snapshot, pos["side"]),
+                exit_reason,
+            ):
+                closed += 1
     return closed
 
 
@@ -777,8 +823,11 @@ def _f(row: Any, key: str) -> float | None:
 
 
 def _risk_state(open_positions: int, last_tick_at: str | None) -> str:
-    if open_positions > 1:
-        return "BREACH: more than one open BTC paper position"
+    limit = max_open_positions()
+    if open_positions > limit:
+        if limit == 1:
+            return "BREACH: more than one open BTC paper position"
+        return f"BREACH: more than {limit} open BTC paper positions"
     if last_tick_at is None:
         return "IDLE: no ticks yet"
     try:
@@ -817,13 +866,29 @@ def _share_sized_notional(
     return notional
 
 
-async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
+async def _build_snapshot(
+    client: httpx.AsyncClient, *, allow_paper_strategy: bool = False
+) -> PaperSnapshot:
     now = _now()
-    market = await _fetch_current_market(client, now)
+    if allow_paper_strategy:
+        selection = await _market_selection.get_selection()
+        if selection.asset != "btc" or selection.timeframe not in WINDOW_SECONDS:
+            raise RuntimeError(
+                "Paper strategy supports BTC 5m and 15m markets only; "
+                f"selected {selection.asset} {selection.timeframe}."
+            )
+        asset, timeframe = selection.asset, selection.timeframe
+    else:
+        # Strategy-free snapshots, including the live path, stay on BTC 5m.
+        asset, timeframe = "btc", "5m"
+    window_seconds = WINDOW_SECONDS[timeframe]
+    market = await _fetch_current_market(
+        client, now, asset=asset, timeframe=timeframe
+    )
     start_ts = int(market["window_start_ts"])
     slug = str(market["slug"])
     question = str(market.get("question") or slug)
-    remaining = max(0, start_ts + FIVE_MINUTES - now)
+    remaining = max(0, start_ts + window_seconds - now)
 
     # Gamma is used for market DISCOVERY only. Its outcomePrices are
     # journaled to quantify staleness, never used for pricing (issue #22).
@@ -867,6 +932,12 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
         )
     else:
         fair_up = 0.5
+    # Learned chances (paper only): the raw model blended with the market's own
+    # prices, once a fit has beaten the raw model on held-out windows.
+    learned_up: float | None = None
+    if degraded_reason is None and allow_paper_strategy and _knobs.cached("paper_learning"):
+        learned_up = _learning.adjust(fair_up, up_book.best_ask, down_book.best_ask)
+    decision_up = learned_up if learned_up is not None else fair_up
 
     # Edge against the EXECUTABLE price: a BUY of side X pays X's best ask.
     # A degraded feed pins fair_up at 0.5, so any "edge" against a lopsided
@@ -874,16 +945,25 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
     # Journaled as market observations for the dashboard and the shadow
     # roster; nothing on the trading path acts on them.
     if degraded_reason is None:
-        edge_up = fair_up - up_book.best_ask if up_book.buyable else None
-        edge_down = (1.0 - fair_up) - down_book.best_ask if down_book.buyable else None
+        edge_up = decision_up - up_book.best_ask if up_book.buyable else None
+        edge_down = (1.0 - decision_up) - down_book.best_ask if down_book.buyable else None
     else:
         edge_up = edge_down = None
 
-    # No strategy is loaded (v0 archived 2026-09-13): never enter. A degraded
-    # feed still says so, so the operator sees the more urgent reason.
+    # The edge-threshold prototype is paper-only. A degraded feed always
+    # takes precedence so its actual reason remains visible.
     side, confidence, notional = None, 0.0, 0.0
     if degraded_reason is not None:
         reason = f"skip: settlement feed degraded ({degraded_reason})"
+    elif allow_paper_strategy:
+        side, confidence, notional, reason = signal_from_executable_edges(
+            edge_up,
+            edge_down,
+            remaining,
+            up_book.best_ask,
+            down_book.best_ask,
+            _strategy_params(),
+        )
     else:
         reason = NO_STRATEGY_REASON
 
@@ -935,6 +1015,7 @@ async def _build_snapshot(client: httpx.AsyncClient) -> PaperSnapshot:
         quote_source="clob",
         gamma_up_price=gamma_up_price,
         feed_degraded=degraded_reason is not None,
+        decision_up_prob=learned_up,
     )
 
 
@@ -1052,11 +1133,24 @@ def _best_level(levels: Any) -> tuple[float | None, float | None]:
         return None, None
 
 
-async def _fetch_current_market(client: httpx.AsyncClient, now: int) -> dict[str, Any]:
-    current_start = now - (now % FIVE_MINUTES)
+async def _fetch_current_market(
+    client: httpx.AsyncClient,
+    now: int,
+    *,
+    asset: str = "btc",
+    timeframe: str = "5m",
+) -> dict[str, Any]:
+    window_seconds = WINDOW_SECONDS.get(timeframe)
+    if window_seconds is None:
+        raise ValueError(f"unsupported market timeframe {timeframe!r}")
+    current_start = now - (now % window_seconds)
     # Try current first, then next and previous to handle boundary/API timing.
-    for start_ts in (current_start, current_start + FIVE_MINUTES, current_start - FIVE_MINUTES):
-        slug = f"btc-updown-5m-{start_ts}"
+    for start_ts in (
+        current_start,
+        current_start + window_seconds,
+        current_start - window_seconds,
+    ):
+        slug = f"{asset}-updown-{timeframe}-{start_ts}"
         data = await _gamma_get(client, "markets", {"slug": slug})
         market = _first(data)
         if market is None:
@@ -1068,7 +1162,10 @@ async def _fetch_current_market(client: httpx.AsyncClient, now: int) -> dict[str
             continue
         market["window_start_ts"] = start_ts
         return market
-    raise RuntimeError("Could not discover current BTC 5-minute Polymarket market.")
+    raise RuntimeError(
+        f"Could not discover current {asset.upper()} {timeframe} "
+        "Polymarket market."
+    )
 
 
 async def _gamma_get(
@@ -1158,9 +1255,9 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
               notional_usd, feed_source, reason,
               up_best_bid, up_best_ask, up_bid_size, up_ask_size,
               down_best_bid, down_best_ask, down_bid_size, down_ask_size,
-              quote_source, gamma_up_price
+              quote_source, gamma_up_price, learned_up_prob
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.created_at,
@@ -1189,30 +1286,115 @@ async def _log_tick(snapshot: PaperSnapshot) -> None:
                 snapshot.down_ask_size,
                 snapshot.quote_source,
                 snapshot.gamma_up_price,
+                snapshot.decision_up_prob,
             ),
         )
         await db.commit()
 
 
+def max_open_positions() -> int:
+    """How many BTC positions may be open at once.
+
+    Paper: the operator's "Most trades open at once" setting (1 = the old
+    one-at-a-time rule). LIVE: always 1 — the executor holds a single
+    position (its singleton gate, issue #91) and live sizing was never
+    validated for stacked entries.
+    """
+    if _live_executor is not None:
+        return 1
+    try:
+        return max(1, int(_knobs.cached("paper_max_open_positions")))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _spacing_wait_seconds(
+    snapshot: PaperSnapshot, open_rows: list[dict[str, Any]]
+) -> int:
+    """Seconds left before another entry may open in this window (0 = now).
+
+    Counts from the newest position still OPEN in the snapshot's window, so
+    one signal isn't bought on several ticks in a row. A window with no open
+    position (a scalp exit, or the first entry) never waits.
+    """
+    spacing = int(_knobs.cached("paper_entry_spacing_seconds") or 0)
+    if spacing <= 0:
+        return 0
+    now = _iso_seconds(snapshot.created_at)
+    newest = max(
+        (
+            t
+            for row in open_rows
+            if row.get("window_slug") == snapshot.window_slug
+            and (t := _iso_seconds(row.get("opened_at"))) is not None
+        ),
+        default=None,
+    )
+    if now is None or newest is None:
+        return 0
+    return max(0, int(math.ceil(spacing - (now - newest))))
+
+
+def _iso_seconds(value: Any) -> float | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
 async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
     if not snapshot.signal_side or snapshot.notional_usd <= 0:
         return
+    limit = max_open_positions()
     async with connect() as db:
         async with db.execute(
-            "SELECT COUNT(*) AS n FROM paper_positions WHERE state = 'open'"
+            "SELECT window_slug, opened_at FROM paper_positions WHERE state = 'open'"
         ) as cur:
-            if (await cur.fetchone())["n"]:
-                return
+            open_rows = [dict(r) for r in await cur.fetchall()]
+        if len(open_rows) >= limit:
+            log.info(
+                "paper_entry.skipped_open_position",
+                window_slug=snapshot.window_slug,
+                side=snapshot.signal_side,
+                open_positions=len(open_rows),
+                limit=limit,
+                reason="another position is already open"
+                if limit == 1
+                else f"{len(open_rows)} positions open, the most allowed at once",
+            )
+            return
         if _knobs.cached('exit_style') == "settle":
-            # One entry per window, ever (issue #28): re-entering the same
-            # window after an exit pays the spread again for the same signal
-            # — the churn that lost the scalp-style soak.
+            # Entries per window are capped at the same limit (issue #28 kept
+            # it to one): re-entering a window after a Stop sold the position
+            # pays the spread again for the same signal — the churn that lost
+            # the scalp-style soak. With a limit of 1 this is the old rule.
             async with db.execute(
                 "SELECT COUNT(*) AS n FROM paper_positions WHERE window_slug = ?",
                 (snapshot.window_slug,),
             ) as cur:
-                if (await cur.fetchone())["n"]:
-                    return
+                window_count = int((await cur.fetchone())["n"])
+            if window_count >= limit:
+                log.info(
+                    "paper_entry.skipped_window_already_traded",
+                    window_slug=snapshot.window_slug,
+                    side=snapshot.signal_side,
+                    reason="settle style allows one entry per window"
+                    if limit == 1
+                    else f"settle style allows {limit} entries per window",
+                )
+                return
+    wait = _spacing_wait_seconds(snapshot, open_rows)
+    if wait > 0:
+        log.info(
+            "paper_entry.skipped_spacing",
+            window_slug=snapshot.window_slug,
+            side=snapshot.signal_side,
+            wait_seconds=wait,
+        )
+        return
     # Honest paper fill (issue #22): a BUY fills at the side's best ASK,
     # capped by the top-of-book size. No ask means no executable entry.
     entry_price = (
@@ -1273,6 +1455,8 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
         position_id = await _insert_position_row(
             snapshot, entry_price, notional, shares
         )
+        if position_id is None:
+            raise RuntimeError("live position row was unexpectedly not created")
         result = await executor.submit_entry(
             token_id=_token_id_for_side(snapshot, snapshot.signal_side),
             side_price=entry_price,
@@ -1322,13 +1506,55 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
                     reason=blocked,
                 )
                 return
-        await _insert_position_row(snapshot, entry_price, notional, shares)
+        position_id = await _insert_position_row(
+            snapshot,
+            entry_price,
+            notional,
+            shares,
+            debit_paper_wallet=True,
+        )
+        if position_id is None:
+            cash = await paper_wallet.cash_balance()
+            required = round(
+                entry_price * shares + paper_wallet.taker_fee(entry_price, shares), 4
+            )
+            reason = (
+                f"paper wallet has insufficient cash: requires ${required:.2f} "
+                f"including the trading fee, available ${cash:.2f}"
+            )
+            await journal_live_order(
+                intent="ENTRY",
+                side="BUY",
+                status="BLOCKED",
+                window_slug=snapshot.window_slug,
+                token_id=_token_id_for_side(snapshot, snapshot.signal_side),
+                price=entry_price,
+                size=shares,
+                notional_usd=notional,
+                error=reason,
+                mode="paper",
+            )
+            log.info(
+                "paper_entry.blocked_by_wallet",
+                window_slug=snapshot.window_slug,
+                side=snapshot.signal_side,
+                reason=reason,
+            )
+            await notify(
+                "paper_wallet.entry_blocked",
+                reason,
+                {"window_slug": snapshot.window_slug, "required_usd": required},
+            )
+            return
         if gate is not None:
             await gate.record_buy_notional(round(entry_price * shares, 4))
     label = "LIVE" if executor is not None else "Paper"
+    fee_note = ""
+    if executor is None:
+        fee_note = f" + ${paper_wallet.taker_fee(entry_price, shares):.2f} fee"
     await notify(
         "live_entry" if executor is not None else "paper_entry",
-        f"{label} BUY {snapshot.signal_side} ${notional:.2f} @ {entry_price:.3f}",
+        f"{label} BUY {snapshot.signal_side} ${notional:.2f} @ {entry_price:.3f}{fee_note}",
         {"window_slug": snapshot.window_slug, "confidence": snapshot.confidence},
     )
     log.info(
@@ -1342,17 +1568,27 @@ async def _maybe_open_position(snapshot: PaperSnapshot) -> None:
 
 
 async def _insert_position_row(
-    snapshot: PaperSnapshot, entry_price: float, notional: float, shares: float
-) -> int:
+    snapshot: PaperSnapshot,
+    entry_price: float,
+    notional: float,
+    shares: float,
+    *,
+    debit_paper_wallet: bool = False,
+) -> int | None:
     mode = "live" if _live_executor is not None else "paper"
+    # Paper pays the venue taker fee at entry, in dollars, exactly like live
+    # (#133): every paper profit and loss is after fees (Luke, 2026-11-18).
+    # Live rows leave it NULL: the executor books its own fee-true PnL.
+    entry_fee = paper_wallet.taker_fee(entry_price, shares) if debit_paper_wallet else None
     async with connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
             """
             INSERT INTO paper_positions(
               opened_at, window_slug, market_question, side, state, entry_price,
               notional_usd, shares, opened_spot, confidence, edge, entry_reason,
-              feed_source, quote_source, strategy_style, mode
-            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              feed_source, quote_source, strategy_style, mode, fees_usd
+            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.created_at,
@@ -1370,9 +1606,28 @@ async def _insert_position_row(
                 snapshot.quote_source,
                 _knobs.cached('exit_style'),
                 mode,
+                entry_fee,
             ),
         )
         position_id = int(cur.lastrowid or 0)
+        if debit_paper_wallet:
+            cash_after = await paper_wallet.apply_cash_flow(
+                db,
+                position_id=position_id,
+                window_slug=snapshot.window_slug,
+                transaction_type="BUY",
+                amount_usd=entry_price * shares,
+                fee_usd=entry_fee or 0.0,
+                details={
+                    "entry_price": entry_price,
+                    "shares": shares,
+                    "notional_usd": notional,
+                    "fee_usd": entry_fee,
+                },
+            )
+            if cash_after is None:
+                await db.rollback()
+                return None
         await db.commit()
     return position_id
 
@@ -1483,14 +1738,17 @@ async def _settle_position_outcome(
 ) -> bool | None:
     """True/False when the held side won/lost; None while not yet settleable."""
     start_ts = _window_start_from_slug(pos["window_slug"])
-    if start_ts is None:
+    window_seconds = _window_seconds_from_slug(pos["window_slug"])
+    if start_ts is None or window_seconds is None:
         log.warning(
             "paper_exit.unparseable_window_slug", window_slug=pos["window_slug"]
         )
         return None
     connector = _make_settlement_connector(client, pos["window_slug"])
     try:
-        up_won = await connector.settle_window(start_ts)
+        up_won = await connector.settle_window(
+            start_ts, window_seconds=window_seconds
+        )
     except Exception as e:  # noqa: BLE001
         log.warning(
             "paper_exit.settlement_read_failed",
@@ -1504,11 +1762,19 @@ async def _settle_position_outcome(
 
 
 def _window_start_from_slug(slug: str) -> int | None:
-    """Unix start ts from a btc-updown-5m-<ts> slug, or None."""
+    """Unix start timestamp from an Up/Down market slug, or None."""
     try:
         return int(str(slug).rsplit("-", 1)[-1])
     except (TypeError, ValueError):
         return None
+
+
+def _window_seconds_from_slug(slug: str) -> int | None:
+    """Window duration from a supported Up/Down market slug, or None."""
+    parts = str(slug).rsplit("-", 2)
+    if len(parts) != 3:
+        return None
+    return WINDOW_SECONDS.get(parts[1])
 
 
 async def _settle_due_shadows(
@@ -1531,11 +1797,14 @@ async def _settle_due_shadows(
         if slug == current_slug:
             continue
         start_ts = _window_start_from_slug(slug)
-        if start_ts is None:
+        window_seconds = _window_seconds_from_slug(slug)
+        if start_ts is None or window_seconds is None:
             continue
         connector = _make_settlement_connector(client, slug)
         try:
-            up_won = await connector.settle_window(start_ts)
+            up_won = await connector.settle_window(
+                start_ts, window_seconds=window_seconds
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("shadow.settle_read_failed", window_slug=slug, error=str(exc))
             continue
@@ -1558,8 +1827,9 @@ async def _record_and_settle_shadow(
     if _config.SHADOW_ENABLED != "on":
         return
     try:
-        params = _strategy_params()
-        await shadow_runner.record_shadow(snapshot, params)
+        await shadow_runner.record_shadow(
+            snapshot, _shadow_params(), live_params=_strategy_params()
+        )
         await _settle_due_shadows(client, snapshot.window_slug)
     except Exception as exc:  # noqa: BLE001 — never let the harness break the loop
         log.warning("shadow.harness_error", error=str(exc))
@@ -1590,6 +1860,8 @@ async def _close_position(
     executor = _live_executor
     entry_price = float(pos["entry_price"])
     prior_pnl = float(pos["realized_pnl_usd"] or 0.0)
+    exit_fee = 0.0  # paper only (set below); live books fees in the executor
+    paper_fees: float | None = None
     if executor is not None and not settled:
         # Window roll / band re-entry must first cancel any unfilled resting
         # entry order before flattening whatever did fill.
@@ -1650,20 +1922,63 @@ async def _close_position(
         )
         pnl = prior_pnl + realized
     else:
-        pnl = float(pos["shares"]) * (exit_price - entry_price)
-        # Paper closes feed the SAME daily-loss-halt counter live closes do
-        # (issue #64). Without this, paper losses don't advance the halt and
-        # paper diverges from what live would have done next.
+        # Paper is fee-true like live (#133): the entry fee was paid when the
+        # trade opened (``fees_usd``; trades opened before fees were charged
+        # got it from the one-time catch-up), and a sale into the bid pays a
+        # taker fee on the way out too. A settlement pays no fee.
+        shares_held = float(pos["shares"])
+        entry_fee = float(pos.get("fees_usd") or 0.0)
+        exit_fee = 0.0 if settled else paper_wallet.taker_fee(exit_price, shares_held)
+        paper_fees = round(entry_fee + exit_fee, 4)
+        pnl = shares_held * (exit_price - entry_price) - entry_fee - exit_fee
+    if executor is None:
         gate = _risk_gate
-        if gate is not None:
-            await gate.record_realized_pnl(round(pnl - prior_pnl, 4), is_live=False)
+    else:
+        gate = None
     async with connect() as db:
-        await db.execute(
+        await db.execute("BEGIN IMMEDIATE")
+        if executor is None:
+            async with db.execute(
+                "SELECT state FROM paper_positions WHERE position_id = ?",
+                (pos["position_id"],),
+            ) as cur:
+                current = await cur.fetchone()
+            if current is None or current["state"] != "open":
+                await db.rollback()
+                return False
+            if await paper_wallet.has_entry_transaction(db, int(pos["position_id"])):
+                cash_after = await paper_wallet.apply_cash_flow(
+                    db,
+                    position_id=int(pos["position_id"]),
+                    window_slug=str(pos["window_slug"]),
+                    transaction_type="SETTLEMENT" if settled else "SELL",
+                    amount_usd=float(pos["shares"]) * exit_price,
+                    fee_usd=exit_fee,
+                    details={
+                        "exit_price": exit_price,
+                        "reason": reason,
+                        "realized_pnl_usd": pnl,
+                        "fee_usd": exit_fee,
+                    },
+                )
+                if cash_after is None:
+                    raise RuntimeError(
+                        f"paper wallet could not credit closed position "
+                        f"{pos['position_id']}"
+                    )
+            else:
+                log.warning(
+                    "paper_wallet.close_without_entry",
+                    position_id=pos["position_id"],
+                    window_slug=pos["window_slug"],
+                )
+        update = await db.execute(
             """
             UPDATE paper_positions
             SET state = 'closed', closed_at = ?, exit_price = ?,
-                closed_spot = ?, exit_reason = ?, realized_pnl_usd = ?
-            WHERE position_id = ?
+                closed_spot = ?, exit_reason = ?, realized_pnl_usd = ?,
+                fees_usd = COALESCE(?, fees_usd)
+            WHERE position_id = ? AND (? = 1 OR state = 'open')
             """,
             (
                 snapshot.created_at,
@@ -1671,10 +1986,20 @@ async def _close_position(
                 snapshot.spot_price,
                 reason,
                 pnl,
+                paper_fees if executor is None else None,
                 pos["position_id"],
+                1 if executor is not None else 0,
             ),
         )
+        if update.rowcount != 1:
+            await db.rollback()
+            return False
         await db.commit()
+    # Paper closes feed the SAME daily-loss-halt counter live closes do
+    # (issue #64). Without this, paper losses don't advance the halt and
+    # paper diverges from what live would have done next.
+    if gate is not None:
+        await gate.record_realized_pnl(round(pnl - prior_pnl, 4), is_live=False)
     await notify(
         "live_exit" if executor is not None else "paper_exit",
         f"{'LIVE' if executor is not None else 'Paper'} EXIT {pos['side']} ${pnl:+.2f} ({reason})",
@@ -1726,7 +2051,7 @@ def _exit_reason(snapshot: PaperSnapshot, pos: dict[str, Any], exit_price: float
     if (
         not snapshot.feed_degraded
         and snapshot.has_executable_quote
-        and abs(snapshot.edge) < _config.PAPER_ENTRY_EDGE_MIN / 2
+        and abs(snapshot.edge) < float(_knobs.cached("paper_entry_edge_min")) / 2
     ):
         return "BAND_REENTRY"
     return None
@@ -1740,6 +2065,11 @@ async def _set_detail(detail: str) -> None:
 
 def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
     side = snapshot.signal_side or "SKIP"
+    up_price = (
+        "—"
+        if snapshot.market_up_price is None
+        else f"{snapshot.market_up_price:.3f}"
+    )
     if _live_executor is not None:
         header = (
             "BTC LIVE loop running — orders are REAL. "
@@ -1750,8 +2080,9 @@ def _detail_from_snapshot(snapshot: PaperSnapshot) -> str:
     return header + (
         f"Window: {snapshot.window_slug} ({snapshot.remaining_seconds}s left)\n"
         f"Spot: ${snapshot.spot_price:,.2f} vs ref ${snapshot.reference_price:,.2f}\n"
-        f"Polymarket Up: {snapshot.market_up_price:.3f}; fair Up: {snapshot.fair_up_prob:.3f}; "
-        f"edge: {snapshot.edge:+.3f}\n"
+        f"Polymarket Up: {up_price}; fair Up: {snapshot.fair_up_prob:.3f}"
+        + (f" (learned {snapshot.decision_up_prob:.3f})" if snapshot.decision_up_prob is not None else "")
+        + f"; edge: {snapshot.edge:+.3f}\n"
         f"Signal: {side}; confidence {snapshot.confidence:.2f}; notional ${snapshot.notional_usd:.0f}\n"
         f"Gate: {_gate_preview_line(snapshot)}\n"
         f"{_feed_label(snapshot.feed_source)}"

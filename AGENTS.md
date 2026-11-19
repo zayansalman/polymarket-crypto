@@ -26,15 +26,13 @@
 This repository is a local Polymarket crypto binary-markets research and
 paper-trading lab. Two strategies are wired and run simultaneously:
 
-1. **BTC 5-minute Up/Down** (`polymarket_bot/paper.py:run_paper_loop`) — the
+1. **BTC 5/15-minute Up/Down** (`polymarket_bot/paper.py:run_paper_loop`) — the
    original line; its active *development* closed 2026-08-29 (#182), but the
    loop itself is still the default paper-trading path, started/stopped by
-   the dashboard's ▶ Start / Stop controls (see below). **No strategy is
-   loaded:** the v0 strategy (entry gates, auto-pause, param tuner,
-   calibration, model picker) was archived 2026-09-13 —
-   [docs/archive/v0-strategy.md](docs/archive/v0-strategy.md). The loop runs
-   and journals market data but takes no entries until a new strategy is
-   plugged into `paper.py:_build_snapshot`.
+   the dashboard's ▶ Start / Stop controls (see below). Paper mode has a
+   simple executable-edge strategy for BTC 5m and 15m; 15m is paper-only.
+   The archived v0 strategy's auto-pause, tuner, calibration, and model picker
+   remain absent. Live snapshots remain strategy-disabled.
 2. **Daily altcoin Up/Down scanner** (`polymarket_bot/daily/scanner.py`,
    issue #185) — scans Polymarket's daily (24h-window) Up/Down family across
    a tracked set of thinner altcoin markets (doge/sol/xrp/bnb/eth by
@@ -61,8 +59,8 @@ The primary active product behavior for the BTC loop specifically is:
 
 1. Operator opens the local dashboard.
 2. Operator presses **▶ Start**.
-3. The loop runs on BTC 5-minute Up/Down markets (paper by default) and
-   enters only once a strategy is loaded (none is today).
+3. Paper mode runs the BTC 5m or 15m executable-edge prototype and records
+   simulated positions; live snapshots remain on BTC 5m and strategy-disabled.
 4. Operator presses **Stop** to halt new entries and close open simulated
    positions.
 
@@ -76,7 +74,8 @@ all, so there is nothing to arm for it.
 
 In scope:
 
-- Discover current BTC 5-minute Up/Down Polymarket markets.
+- Discover current BTC 5-minute and 15-minute Up/Down Polymarket markets for
+  paper trading; the 15-minute market is not enabled for live trading.
 - **Research/shadow-only exploration is open by default** — any market, any
   timeframe, any venue instrument may be investigated, backtested, or shadow-run
   as long as it places no real orders. No fresh operator carve-out is needed to
@@ -120,7 +119,13 @@ Out of scope:
   5-minute BTC work closed 2026-08-29 (#182); no replacement category is chosen
   or built. Research and shadow-only work on any market/timeframe remains in
   scope by default — see Scope Fence above.
-- One open BTC paper position at a time.
+- BTC paper positions are capped by the operator's "Most trades open at once"
+  setting (`runtime.paper.max_open_positions`, default 3; 1 = one at a time),
+  which also caps hold-to-settle entries per window, with a minimum wait between
+  entries in one window (`runtime.paper.entry_spacing_seconds`). Live always
+  holds one open position. (Operator decision, 2026-11-18.)
+- Paper profit and loss is fee-true: the paper wallet pays the venue taker fee
+  on every taker fill, like the live executor (#133).
 - **Live trading is BUILT and multi-gated** (`polymarket_exec/execution/live.py:LiveExecutor`).
   It runs only when the operator **clicks LIVE in the dashboard**
   **AND** a private key **AND** a coherent wallet **AND** a clean config parse — then
@@ -130,9 +135,10 @@ Out of scope:
 - Do not read, print, log, commit, echo, or expose private keys.
 - The dashboard must stay local by default at `127.0.0.1:7860`.
 - Start means trade (paper unless every live gate is armed); Stop means stop.
-- No strategy is loaded in the trading loop (v0 archived 2026-09-13). Whatever
-  strategy is plugged in next, its entries still pass the live-path safety gates
-  (`RiskGate`: loss halt, caps, slippage, kill switch) — those stay hard.
+- The paper loop's BTC 5m/15m prototype uses edge thresholds and the existing
+  risk gate; it is a research baseline, not a profit guarantee. Live snapshots
+  remain strategy-disabled. The live-path safety gates (`RiskGate`: loss halt,
+  caps, slippage, kill switch) stay hard.
 - No silent failures. Feed, market, state, or execution-loop errors must appear
   in structured logs or dashboard state.
 - Keep modules small and boundaries clear.
@@ -164,7 +170,8 @@ This boots the **FastAPI dashboard** (uvicorn serving
 Dashboard:
 
 ```text
-http://127.0.0.1:7860
+http://127.0.0.1:7860            simple paper screen (paper-only; served without the LIVE token)
+http://127.0.0.1:7860/advanced   full operator console (all panels, settings, LIVE controls)
 ```
 
 Optional snapshot:
@@ -178,6 +185,6 @@ Optional snapshot:
 <!-- BEGIN GENERATED:summary -->
 - **Trees:** `polymarket_bot/` = live loop + signal math; `polymarket_exec/` = execution/connectors/dashboard/backtest; top-level `config.py`/`db.py`/`logging_setup.py` = foundation. Both ACTIVE, bidirectionally coupled.
 - **Entry:** `python main.py` → FastAPI `polymarket_exec/ops/dashboard/app.py`; loop starts on operator ▶ Start → `polymarket_bot/controller.py:request_start`.
-- **Tests:** 1107.
+- **Tests:** 1222.
 - **Built-but-dead (do not edit expecting runtime effect):** `polymarket_bot/chronos_signal.py`, `polymarket_exec/backtest/conditional.py`, `polymarket_exec/backtest/harness.py`, `polymarket_exec/connectors/base.py`, `polymarket_exec/connectors/binance.py`, `polymarket_exec/connectors/chainlink.py`, `polymarket_exec/connectors/polymarket.py`, `polymarket_exec/ops/controller.py`, `polymarket_exec/ops/dashboard/panels/_shared.py`, `polymarket_exec/storage/replay.py`, `polymarket_exec/strategy/signal.py`.
 <!-- END GENERATED:summary -->

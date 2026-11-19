@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn>=0.29",
     "py-clob-client-v2>=1.0",
     "websockets>=12",
+    "tzdata>=2024.1; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

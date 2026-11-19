@@ -33,6 +33,8 @@ class TestAppCreation:
     def test_app_has_routes(self):
         paths = {r.path for r in app.routes}
         assert "/" in paths
+        assert "/advanced" in paths
+        assert "/api/simple" in paths
         assert "/api/data" in paths
         assert "/api/start" in paths
         assert "/api/stop" in paths
@@ -41,35 +43,35 @@ class TestAppCreation:
 
 class TestDashboardPage:
     def test_get_root_returns_html(self, client: TestClient):
-        r = client.get("/")
+        r = client.get("/advanced")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
 
     def test_html_links_assets(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "/static/style.css" in text
         assert "/static/dashboard.js" in text
 
     def test_has_ems_panels(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         for panel in ("ribbon", "execution-grid", "DECISION ENGINE", "LIVE MARKET",
                       "PERFORMANCE / ALPHA", "TCA", "TRADE BLOTTER"):
             assert panel in text, f"missing EMS panel: {panel}"
 
     def test_has_controls(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "handleStart()" in text
         assert "handleStop()" in text
 
     def test_has_runtime_controls_card(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "CONTROLS" in text
         assert "ctl-shares" in text
         assert "setTradeShares()" in text
         assert "Polymarket minimum order" in text
 
     def test_has_secondary_panels(self, client: TestClient):
-        text = client.get("/").text
+        text = client.get("/advanced").text
         assert "ACTIVITY LOG" in text
         assert "BACKTEST" in text
 

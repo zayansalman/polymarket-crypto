@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from config import DASHBOARD_SERVER_PORT, DB_PATH
 from db import init_db, notify
@@ -43,20 +44,35 @@ def _acquire_singleton_lock() -> object:
     entries silently taking the paper path in 'live' mode. An advisory lock
     on data/bot.lock makes a second instance fail fast and loud.
     """
-    import fcntl
-
     lock_path = DB_PATH.parent / "bot.lock"
-    fh = open(lock_path, "w")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fh = os.fdopen(fd, "r+")
     try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                fh.write("\0")
+                fh.flush()
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            fh.seek(1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fh.seek(0)
     except OSError:
+        fh.close()
         print(
             f"REFUSED: another bot instance already holds {lock_path}. "
             "Only one process may run the loop (it would otherwise trade the "
             "same account from two uncoordinated loops). Stop the other first."
         )
         raise SystemExit(1)
-    fh.write(str(__import__("os").getpid()))
+    fh.write(str(os.getpid()))
+    fh.truncate()
     fh.flush()
     return fh  # keep the handle alive for the process lifetime
 

@@ -7,7 +7,12 @@ lifetime — see ``_lifespan`` — a paper-only strategy independent of the
 BTC 5m loop the rest of this module's endpoints control.
 
 Endpoints:
-    GET  /              — Main dashboard page (HTML)
+    GET  /              — Simple paper-trading screen (HTML). Rendered without
+                          the dashboard token, so it can never arm LIVE.
+    GET  /advanced      — Full operator console (HTML; formerly at /)
+    GET  /api/simple    — Read-only JSON for the simple screen
+    POST /api/simple/settings        — Save paper trading rules (validated, paper only)
+    POST /api/simple/settings/reset  — Paper entry rules back to defaults
     POST /api/start     — Start the trading bot (paper by default; LIVE when
                           BOT_MODE=live and the boot gates pass)
     POST /api/stop      — Stop the trading bot (live mode flattens first)
@@ -18,7 +23,9 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import os
 import secrets
 import sys
 from datetime import UTC, datetime
@@ -30,7 +37,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -61,6 +68,7 @@ from polymarket_exec.ops.dashboard.execution_view import (  # type: ignore[impor
     market_selector_html,
 )
 from polymarket_exec.ops.dashboard.panels import _data as _panel_data
+from polymarket_exec.ops.dashboard import simple_view as _simple_view
 
 log = get_logger("dashboard")
 
@@ -111,6 +119,34 @@ def _log_background_task_death(name: str):
     return _cb
 
 
+async def _book_past_paper_fees() -> None:
+    """One-shot: the practice wallet pays the fees its earlier trades skipped.
+
+    Runs before the paper loop can start, so no new trade lands between the
+    restated history and the first fee-paying trade. Idempotent (config
+    ``paper.fees_from``). A failure is logged and shown, never fatal: the bot
+    still charges fees on every new trade, and the next start retries.
+    """
+    from db import notify  # type: ignore[import-untyped]
+    from polymarket_bot import paper_wallet as _pw
+
+    try:
+        event = await _pw.book_past_fees()
+    except Exception as e:  # noqa: BLE001 — never block the dashboard
+        log.error("paper_wallet.fee_catch_up_failed", error=str(e))
+        await notify(
+            "paper_fee_catch_up_failed",
+            f"Couldn't charge the fees for earlier practice trades ({e}). New trades "
+            "still pay fees; the app tries again the next time it starts.",
+        )
+        return
+    if event is not None:
+        log.info("paper_wallet.fee_catch_up", **dataclasses.asdict(event))
+        await notify(
+            "paper_fee_catch_up", _pw.describe_fee_catch_up(event), dataclasses.asdict(event)
+        )
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     await init_db()
@@ -118,6 +154,10 @@ async def _lifespan(app: FastAPI):
     # halt-ON now that the bypass applies to real money. Idempotent via sentinel.
     from polymarket_exec.execution.gate import migrate_clear_stale_bypass_v76
     await migrate_clear_stale_bypass_v76()
+    if _BTC_BOT_AVAILABLE:
+        await _book_past_paper_fees()
+
+    await _paper_autostart_if_requested()
 
     # Daily altcoin scanner (#185): auto-runs in-process for the dashboard's
     # lifetime — paper-only, no live gate, so no Start/Stop control needed
@@ -138,8 +178,23 @@ async def _lifespan(app: FastAPI):
     regime_task = asyncio.create_task(_run_regime_monitor(regime_stop_event))
     regime_task.add_done_callback(_log_background_task_death("regime_monitor"))
 
+    # Restart by itself after an update, at a moment with no open trade
+    # (Windows launcher only; paper mode only). See self_restart.py.
+    from polymarket_exec.ops.dashboard import self_restart as _self_restart
+
+    async def _mode_now() -> str:
+        return await current_mode() if _BTC_BOT_AVAILABLE else BOT_MODE
+
+    restart_stop_event = asyncio.Event()
+    restart_task = asyncio.create_task(_self_restart.run_forever(restart_stop_event, _mode_now))
+    restart_task.add_done_callback(_log_background_task_death("self_restart"))
+
     yield
 
+    restart_stop_event.set()
+    restart_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await restart_task
     daily_stop_event.set()
     regime_stop_event.set()
     daily_task.cancel()
@@ -148,6 +203,22 @@ async def _lifespan(app: FastAPI):
         await daily_task
     with suppress(asyncio.CancelledError):
         await regime_task
+
+
+async def _paper_autostart_if_requested() -> None:
+    """Start paper mode only for the explicit local startup-task launch."""
+    if os.environ.get("BTC_PAPER_AUTOSTART") != "1":
+        return
+    if BOT_MODE != "paper":
+        raise RuntimeError("BTC_PAPER_AUTOSTART requires BOT_MODE=paper.")
+    if not _BTC_BOT_AVAILABLE:
+        raise RuntimeError("BTC_PAPER_AUTOSTART requires the BTC bot modules.")
+
+    await set_mode("paper")
+    status = await request_start()
+    if status.state != "running" or status.mode != "paper":
+        raise RuntimeError(f"Paper auto-start refused: {status.detail}")
+    log.info("btc.paper_autostart_started", mode=status.mode, detail=status.detail)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +264,17 @@ try:
     _STATIC_VERSION = str(int((dashboard_dir / "static" / "dashboard.js").stat().st_mtime))
 except OSError:
     _STATIC_VERSION = "1"
+try:
+    _SIMPLE_STATIC_VERSION = str(
+        int(
+            max(
+                (dashboard_dir / "static" / name).stat().st_mtime
+                for name in ("simple.js", "simple.css")
+            )
+        )
+    )
+except OSError:
+    _SIMPLE_STATIC_VERSION = "1"
 
 # ---------------------------------------------------------------------------
 # Formatting helpers (ported from original dashboard.py)
@@ -489,7 +571,7 @@ def _brief_html() -> str:
         "<p>This is a local BTC 5-minute binary pricing-model strategy lab. It is useful "
         "as a personal paper bot and as a compact example of trading-system "
         "discipline: market discovery, feed labeling, confidence-based sizing, "
-        "one-position risk control, structured event logs, and a dashboard kill "
+        "capped open-position risk control, structured event logs, and a dashboard kill "
         "switch.</p>\n"
         + (
             "<p><strong>Mode: LIVE — orders are real.</strong> Start places risk-gated "
@@ -511,7 +593,8 @@ def _scorecard_html() -> str:
         "<ul>\n"
         "<li>Scope: BTC 5-minute Up/Down markets only.</li>\n"
         "<li>Operator control: Start, Stop, Refresh, and activity feed.</li>\n"
-        "<li>Risk: one open paper position, bounded $1-$5 sizing, target/stop/time exits.</li>\n"
+        "<li>Risk: a capped number of open paper positions (Settings; live holds one), "
+        "fee-true paper P&amp;L, bounded sizing, target/stop/time exits.</li>\n"
         "<li>Feed discipline: public BTC fallback is labeled; Chainlink Streams is the intended reference.</li>\n"
         "<li>Auditability: ticks, simulated positions, exits, config state, and notifications persist to SQLite.</li>\n"
         "<li>Failure visibility: market/feed/loop errors surface in logs and dashboard state.</li>\n"
@@ -643,8 +726,382 @@ def _get_settings_data() -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
+async def simple_screen(request: Request) -> Any:
+    """Everyday paper-trading screen.
+
+    Deliberately rendered WITHOUT ``_DASHBOARD_TOKEN``: LIVE selection and a
+    LIVE Start both require that token, so nothing on this page can arm real
+    money. It only offers paper Start/Stop, the BTC 5m/15m choice, and a
+    switch back to paper if LIVE was chosen in the advanced console.
+    """
+    return templates.TemplateResponse(
+        request,
+        "simple.html",
+        {"static_version": _SIMPLE_STATIC_VERSION},
+    )
+
+
+# Settings the simple screen may edit (paper entry rules + trade size). Live
+# risk limits stay in the advanced console only.
+_SIMPLE_RULE_KNOBS: tuple[str, ...] = (
+    "paper_entry_edge_min",
+    "paper_entry_edge_max",
+    "paper_min_entry_price",
+    "paper_max_entry_price",
+    "paper_entry_min_remaining_seconds",
+    "paper_tick_seconds",
+    "paper_fee_aware",
+    "paper_learning",
+    "paper_max_open_positions",
+    "paper_entry_spacing_seconds",
+)
+_SIMPLE_SIZE_KNOBS: tuple[str, ...] = ("paper_min_trade_usd", "paper_max_trade_usd")
+
+
+async def _simple_settings() -> dict[str, Any]:
+    """Current, default and allowed values for the simple screen's Settings panel."""
+    from polymarket_exec.execution.gate import (
+        get_runtime_max_trade_usd,
+        get_runtime_trade_shares,
+    )
+    from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
+
+    names = _SIMPLE_RULE_KNOBS + _SIMPLE_SIZE_KNOBS
+    values: dict[str, Any] = {name: await _knobs.get(name) for name in names}
+    values["trade_shares"] = await get_runtime_trade_shares()
+    knobs = {name: _knobs.KNOBS[name] for name in names}
+    return {
+        "values": values,
+        "defaults": {name: knob.default for name, knob in knobs.items()},
+        "bounds": {
+            **{
+                name: [knob.min_value, knob.max_value]
+                for name, knob in knobs.items()
+                if knob.kind in ("float", "int")
+            },
+            "trade_shares": [float(DEFAULT_MIN_ORDER_SIZE), _MAX_TRADE_SHARES_CEILING],
+        },
+        "max_trade_cap_usd": await get_runtime_max_trade_usd(),
+        "fee_rate": _simple_view.TAKER_FEE_RATE,
+    }
+
+
+async def _simple_rules(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The paper strategy's entry rules, for the screen's plain-English copy."""
+    from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
+
+    settings = settings or await _simple_settings()
+    v = settings["values"]
+    max_trade = settings["max_trade_cap_usd"]
+    if max_trade is None:
+        max_trade = float(v["paper_max_trade_usd"])
+    return {
+        "edge_min": float(v["paper_entry_edge_min"]),
+        "edge_max": float(v["paper_entry_edge_max"]),
+        "price_min": float(v["paper_min_entry_price"]),
+        "price_max": float(v["paper_max_entry_price"]),
+        "min_seconds_left": int(v["paper_entry_min_remaining_seconds"]),
+        "tick_seconds": float(v["paper_tick_seconds"]),
+        "trade_min_usd": float(v["paper_min_trade_usd"]),
+        "trade_max_usd": float(max_trade),
+        "trade_shares": v["trade_shares"],
+        "min_shares": float(DEFAULT_MIN_ORDER_SIZE),
+        "fee_aware": bool(v["paper_fee_aware"]),
+        "fee_rate": _simple_view.TAKER_FEE_RATE,
+        "learning": bool(v["paper_learning"]),
+        "max_open": int(v["paper_max_open_positions"]),
+        "spacing_seconds": int(v["paper_entry_spacing_seconds"]),
+        "exit_style": await _knobs.get("exit_style"),
+    }
+
+
+def _setting_label(name: str, value: Any) -> str:
+    """'min edge 5¢' style wording for the audit feed."""
+    if name in ("paper_entry_edge_min", "paper_entry_edge_max",
+                "paper_min_entry_price", "paper_max_entry_price"):
+        shown = f"{round(float(value) * 100, 1):g}¢"
+    elif name in ("paper_min_trade_usd", "paper_max_trade_usd"):
+        shown = f"${float(value):.2f}"
+    elif name in ("paper_fee_aware", "paper_learning"):
+        shown = "on" if value else "off"
+    elif name == "trade_shares":
+        shown = "dollar range" if value is None else f"{float(value):g} shares"
+    elif name == "paper_max_open_positions":
+        shown = str(int(value))
+    else:
+        shown = f"{value:g}s" if isinstance(value, (int, float)) else str(value)
+    labels = {
+        "paper_entry_edge_min": "minimum edge",
+        "paper_entry_edge_max": "maximum edge",
+        "paper_min_entry_price": "lowest share price",
+        "paper_max_entry_price": "highest share price",
+        "paper_entry_min_remaining_seconds": "no new trades in the last",
+        "paper_tick_seconds": "check interval",
+        "paper_fee_aware": "edge must beat fees",
+        "paper_learning": "learned chances",
+        "paper_max_open_positions": "most trades open at once",
+        "paper_entry_spacing_seconds": "wait between trades in a window",
+        "paper_min_trade_usd": "smallest trade",
+        "paper_max_trade_usd": "largest trade",
+        "trade_shares": "trade size",
+    }
+    return f"{labels.get(name, name)} {shown}"
+
+
+@app.post("/api/simple/settings")
+async def api_simple_settings(request: Request) -> Any:
+    """Save paper trading rules from the simple screen's Settings panel.
+
+    Every value is validated (bounds, and min < max pairs) before ANY is
+    written, so a bad form never leaves half-applied settings. Refused while
+    real-money mode is selected: this panel only changes practice trading.
+    Changes apply on the bot's next check, without a restart.
+    """
+    from db import notify  # type: ignore[import-untyped]
+    from polymarket_exec.execution.gate import set_runtime_trade_shares
+    from polymarket_exec.execution.live import DEFAULT_MIN_ORDER_SIZE
+
+    if _BTC_BOT_AVAILABLE and await current_mode() != "paper":
+        return JSONResponse(
+            {"status": "error", "detail": "Settings here only change practice trading. "
+             "Switch back to paper mode first."},
+            status_code=409,
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    changes = (body or {}).get("changes")
+    if not isinstance(changes, dict) or not changes:
+        return JSONResponse({"status": "error", "detail": "No settings to save."}, status_code=400)
+    allowed = set(_SIMPLE_RULE_KNOBS + _SIMPLE_SIZE_KNOBS) | {"trade_shares"}
+    unknown = sorted(set(changes) - allowed)
+    if unknown:
+        return JSONResponse(
+            {"status": "error", "detail": f"Unknown setting: {', '.join(unknown)}"},
+            status_code=400,
+        )
+
+    current = (await _simple_settings())["values"]
+    clean: dict[str, Any] = {}
+    try:
+        for name, value in changes.items():
+            if name == "trade_shares":
+                if value is None:
+                    # A dollar range is blocked by the RiskGate's per-trade cap
+                    # ($3 env default) unless that cap is raised, which would
+                    # also loosen the live leg; N shares raise it to N instead
+                    # (gate.effective_max_trade_usd). The simple screen is shares-only.
+                    raise ValueError(
+                        "Trade size must be a number of shares (5 or more). A dollar "
+                        "range would be blocked by the bot's $3-per-trade safety limit."
+                    )
+                shares = float(value)
+                if not DEFAULT_MIN_ORDER_SIZE <= shares <= _MAX_TRADE_SHARES_CEILING:
+                    raise ValueError(
+                        f"Shares per trade must be between {DEFAULT_MIN_ORDER_SIZE:g} "
+                        f"(Polymarket's minimum) and {_MAX_TRADE_SHARES_CEILING:g}."
+                    )
+                clean[name] = round(shares, 2)
+            else:
+                clean[name] = _knobs.validate(name, value)
+    except (TypeError, ValueError) as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=400)
+
+    merged = {**current, **clean}
+    pairs = (
+        ("paper_entry_edge_min", "paper_entry_edge_max",
+         "The minimum edge must be smaller than the maximum edge."),
+        ("paper_min_entry_price", "paper_max_entry_price",
+         "The lowest share price must be below the highest share price."),
+    )
+    for low, high, message in pairs:
+        if float(merged[low]) >= float(merged[high]):
+            return JSONResponse({"status": "error", "detail": message}, status_code=400)
+    if merged.get("trade_shares") is None and (
+        float(merged["paper_min_trade_usd"]) > float(merged["paper_max_trade_usd"])
+    ):
+        return JSONResponse(
+            {"status": "error",
+             "detail": "The smallest trade can't be bigger than the largest trade."},
+            status_code=400,
+        )
+
+    changed = [name for name, value in clean.items() if current.get(name) != value]
+    for name in changed:
+        if name == "trade_shares":
+            await set_runtime_trade_shares(clean[name])
+        else:
+            await _knobs.set(name, clean[name])
+    if changed:
+        await notify(
+            "runtime_config",
+            "Settings changed: " + ", ".join(_setting_label(n, clean[n]) for n in changed)
+            + " (practice trading, applies on the next check)",
+            {"keys": changed},
+        )
+        log.info("simple.settings_saved", keys=changed)
+    return {"status": "ok", "changed": changed, "settings": await _simple_settings()}
+
+
+@app.post("/api/simple/settings/reset")
+async def api_simple_settings_reset() -> Any:
+    """Put the paper entry rules back to their defaults (trade size unchanged)."""
+    from db import notify  # type: ignore[import-untyped]
+
+    if _BTC_BOT_AVAILABLE and await current_mode() != "paper":
+        return JSONResponse(
+            {"status": "error", "detail": "Settings here only change practice trading. "
+             "Switch back to paper mode first."},
+            status_code=409,
+        )
+    for name in _SIMPLE_RULE_KNOBS:
+        await _knobs.reset(name)
+    await notify(
+        "runtime_config",
+        "Trading rules reset to defaults (practice trading, applies on the next check)",
+        {"keys": list(_SIMPLE_RULE_KNOBS)},
+    )
+    log.info("simple.settings_reset")
+    return {"status": "ok", "settings": await _simple_settings()}
+
+
+@app.post("/api/simple/wallet")
+async def api_simple_wallet(request: Request) -> Any:
+    """Switch the practice wallet to a new starting balance, keeping its % result.
+
+    Explicit and recorded in Recent activity, never automatic: the wallet is
+    still created once and the bot never tops it up. Practice money only.
+    """
+    from dataclasses import asdict as _asdict
+
+    from db import notify  # type: ignore[import-untyped]
+    from polymarket_bot import paper_wallet as _pw
+
+    if _BTC_BOT_AVAILABLE and await current_mode() != "paper":
+        return JSONResponse(
+            {"status": "error", "detail": "The practice balance can only change in paper mode."},
+            status_code=409,
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    try:
+        body = body if isinstance(body, dict) else {}
+        # "as_of": count the switch from when it was asked for (at most a day back).
+        event = await _pw.rescale(body.get("start_usd"), as_of=body.get("as_of"))
+    except ValueError as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=400)
+    except RuntimeError as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+    details = _asdict(event)
+    await notify("paper_wallet_rescale", _pw.describe_rescale(event), details)
+    log.info("simple.wallet_rescaled", **details)
+    return {"status": "ok", "rescale": details}
+
+
+# --- Strategy Lab: replay the recorded history under other rules (read-only) ---
+_LAB_CACHE: dict[str, Any] = {"result": None, "at": 0.0, "key": None}
+_LAB_MAX_AGE_S = 900.0
+_lab_lock = asyncio.Lock()
+
+
+async def _lab_rules() -> Any:
+    import config as _cfg
+    from polymarket_bot import strategy_lab as _lab
+
+    values = (await _simple_settings())["values"]
+    scalp = {
+        "target_return": await _knobs.get("paper_target_return"),
+        "stop_return": await _knobs.get("paper_stop_return"),
+        "time_exit_seconds": await _knobs.get("paper_time_exit_seconds"),
+    }
+    rules = _lab.rules_from_settings(values, await _knobs.get("exit_style"), scalp)
+    return dataclasses.replace(rules, min_confidence=float(_cfg.PAPER_MIN_CONFIDENCE))
+
+
+@app.get("/lab", response_class=HTMLResponse)
+async def strategy_lab_page(request: Request) -> Any:
+    """Strategy Lab page (no token: read-only, changes nothing)."""
+    return templates.TemplateResponse(
+        request, "lab.html", {"static_version": _SIMPLE_STATIC_VERSION}
+    )
+
+
+@app.get("/api/lab")
+async def api_lab(refresh: bool = False) -> Any:
+    """Replay results for the current settings, cached for 15 minutes."""
+    import time as _time
+    from dataclasses import asdict as _asdict
+
+    import config as _cfg
+    from polymarket_bot import strategy_lab as _lab
+
+    try:
+        rules = await _lab_rules()
+        key = repr(_asdict(rules))
+        async with _lab_lock:
+            fresh = (
+                _LAB_CACHE["result"] is not None
+                and _LAB_CACHE["key"] == key
+                and _time.time() - _LAB_CACHE["at"] < _LAB_MAX_AGE_S
+            )
+            if refresh or not fresh:
+                result = await asyncio.to_thread(_lab.analyze, _cfg.DB_PATH, rules)
+                _LAB_CACHE.update(result=result, at=_time.time(), key=key)
+        out = dict(_LAB_CACHE["result"])
+        out["computed_at"] = _LAB_CACHE["at"]
+        try:  # sizes are judged against the real practice balance
+            from polymarket_bot import paper_wallet as _pw
+
+            out["balance_usd"] = await _pw.balance_at_cost()
+        except Exception:  # noqa: BLE001 — the page falls back to $100
+            out["balance_usd"] = None
+        return out
+    except Exception as e:  # noqa: BLE001 — the page shows the error itself
+        log.warning("strategy_lab_failed", error=str(e))
+        return JSONResponse({"error": f"Could not analyze the history: {e}"}, status_code=503)
+
+
+@app.get("/api/simple")
+async def api_simple() -> Any:
+    """Read-only JSON for the simple screen (no side effects on trading)."""
+    try:
+        status = await _get_status_safe()
+        mode = await current_mode() if _BTC_BOT_AVAILABLE else BOT_MODE
+        try:
+            from polymarket_bot import market_selection
+
+            sel = await market_selection.get_selection()
+            selection = {
+                "asset": sel.asset,
+                "timeframe": sel.timeframe,
+                "supported": sel.loop_supported,
+            }
+        except Exception:  # noqa: BLE001 — selection is cosmetic here
+            selection = {"asset": "btc", "timeframe": "5m", "supported": True}
+        raw = await _simple_view.load_raw()
+        settings = await _simple_settings()
+        payload = _simple_view.build_payload(
+            raw,
+            now=datetime.now(UTC).timestamp(),
+            bot={"state": status.state, "mode": mode, "detail": status.detail},
+            selection=selection,
+            rules=await _simple_rules(settings),
+        )
+        payload["settings"] = settings
+        return payload
+    except Exception as e:  # noqa: BLE001 — the screen shows the error itself
+        log.warning("simple_view_failed", error=str(e))
+        return JSONResponse(
+            {"error": f"Could not read the paper ledger: {e}"}, status_code=503
+        )
+
+
+@app.get("/advanced", response_class=HTMLResponse)
 async def dashboard(request: Request) -> Any:
-    """Main dashboard page."""
+    """Full operator console (all panels, LIVE controls, settings)."""
     mode, live_armed, live_hint = await _mode_context()
     return templates.TemplateResponse(
         request,
@@ -895,7 +1352,12 @@ async def api_runtime_config(request: Request) -> dict[str, Any]:
             return {"status": "error", "detail": str(e)}
         await notify(
             "runtime_config",
-            f"Operator selected market {sel.asset.upper()} {sel.timeframe} (paper+live)",
+            (
+                f"Operator selected market {sel.asset.upper()} {sel.timeframe} "
+                "(paper only; live remains BTC 5m)"
+                if sel.timeframe == "15m"
+                else f"Operator selected market {sel.asset.upper()} {sel.timeframe} (paper+live)"
+            ),
             {"key": key, "value": {"asset": sel.asset, "timeframe": sel.timeframe}},
         )
         log.info("btc.runtime_config_set", key=key, asset=sel.asset, timeframe=sel.timeframe)

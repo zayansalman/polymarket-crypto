@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import config as _config
 from polymarket_exec.execution.live import LiveBootRefused, assert_live_boot_allowed
 from polymarket_bot import paper as _paper
+from polymarket_bot import market_selection
 from polymarket_bot.paper import (
     count_open_positions,
     force_close_open_positions,
@@ -22,7 +23,7 @@ from logging_setup import get_logger
 log = get_logger("controller")
 
 PAPER_ONLY_DETAIL = (
-    "BTC 5-minute paper mode is ready. No live orders are placed in paper mode."
+    "BTC 5m/15m paper mode is ready. No live orders are placed in paper mode."
 )
 LIVE_MODE_DETAIL = (
     "BTC 5-minute LIVE mode is configured — Start will place REAL orders on the "
@@ -266,9 +267,10 @@ async def request_start() -> BtcBotStatus:
             "current BTC 5m market and place risk-gated CLOB orders."
         )
     else:
+        selection = await market_selection.get_selection()
         detail = (
-            "BTC paper loop starting. It will discover the current BTC 5m "
-            "market and log simulated trades only."
+            f"BTC {selection.timeframe} paper loop starting. It will discover "
+            "the selected market and log simulated trades only."
         )
     await set_config("polymarket_bot.detail", detail)
     return await get_status()
